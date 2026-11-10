@@ -3,13 +3,33 @@
   "version": "0.1.0",
   "description": "Composable roles for Pi sessions: markdown fragments a human assigns, combines and changes mid-session.",
   "type": "module",
-  "keywords": ["pi-package", "pi", "roles", "multi-agent"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "roles",
+    "multi-agent"
+  ],
   "license": "MIT",
-  "files": ["src", "fragments", "README.md"],
-  "exports": { ".": "./src/index.ts" },
-  "pi": { "extensions": ["./src/extension.ts"] },
-  "dependencies": { "@pi-lattice/protocol": "0.1.0" },
-  "bundledDependencies": ["@pi-lattice/protocol"],
+  "files": [
+    "src",
+    "fragments",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "dependencies": {
+    "@pi-lattice/protocol": "0.1.0"
+  },
+  "bundledDependencies": [
+    "@pi-lattice/protocol"
+  ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
