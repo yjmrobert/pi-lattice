@@ -1,0 +1,71 @@
+/** Pure helpers over a flat list of nodes. */
+import type { NodeMeta } from "./node.ts";
+
+export function childrenOf(nodes: readonly NodeMeta[], id: string): NodeMeta[] {
+	return nodes.filter((node) => node.parentId === id).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+}
+
+/** Depth of a node; a root is 0. Stops at a missing parent or a cycle. */
+export function depthOf(nodes: readonly NodeMeta[], id: string): number {
+	const byId = new Map(nodes.map((node) => [node.id, node]));
+	let depth = 0;
+	let current = byId.get(id);
+	const seen = new Set<string>();
+	while (current?.parentId && !seen.has(current.id)) {
+		seen.add(current.id);
+		current = byId.get(current.parentId);
+		if (current) depth++;
+	}
+	return depth;
+}
+
+/** Every node in the tree rooted at `rootId`, parents before children. */
+export function treeOf(nodes: readonly NodeMeta[], rootId: string): NodeMeta[] {
+	const out: NodeMeta[] = [];
+	const visit = (id: string): void => {
+		const node = nodes.find((candidate) => candidate.id === id);
+		if (!node || out.includes(node)) return;
+		out.push(node);
+		for (const child of childrenOf(nodes, id)) visit(child.id);
+	};
+	visit(rootId);
+	return out;
+}
+
+export interface TreeLine {
+	node: NodeMeta;
+	depth: number;
+	/** Box-drawing prefix for this row. */
+	prefix: string;
+}
+
+/** Rows of a tree view, in display order. */
+export function treeLines(nodes: readonly NodeMeta[]): TreeLine[] {
+	const lines: TreeLine[] = [];
+	const ids = new Set(nodes.map((node) => node.id));
+	const roots = nodes
+		.filter((node) => node.parentId === null || !ids.has(node.parentId))
+		.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+	const visit = (node: NodeMeta, depth: number, indent: string, last: boolean): void => {
+		lines.push({ node, depth, prefix: depth === 0 ? "" : `${indent}${last ? "└─ " : "├─ "}` });
+		const children = childrenOf(nodes, node.id);
+		children.forEach((child, index) => {
+			visit(child, depth + 1, depth === 0 ? "" : `${indent}${last ? "   " : "│  "}`, index === children.length - 1);
+		});
+	};
+	for (const root of roots) visit(root, 0, "", true);
+	return lines;
+}
+
+/** A plain-text tree for tool results and logs. */
+export function formatTree(nodes: readonly NodeMeta[], options: { self?: string } = {}): string {
+	return treeLines(nodes)
+		.map(({ node, prefix }) => {
+			const parts = [`${prefix}${node.name}`, `[${node.kind}]`, node.id, node.status];
+			if (node.fragments.length > 0) parts.push(`roles=${node.fragments.join("+")}`);
+			if (node.branch) parts.push(`branch=${node.branch}`);
+			if (node.id === options.self) parts.push("(you)");
+			return parts.join("  ");
+		})
+		.join("\n");
+}
