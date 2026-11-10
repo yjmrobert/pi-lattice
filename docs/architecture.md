@@ -65,7 +65,7 @@ Status is one of `dormant`, `starting`, `idle`, `running`, `blocked`, `exited`, 
 
 ## Messaging
 
-Envelope fields: `v`, `id`, `from`, `to`, `intent`, `correlationId`, `causationId`, `seq`, `hops`, `payload`, `createdAt`, optional `sig`.
+Envelope fields ([specification](envelope-spec.md)): `v`, `id`, `from`, `fromOwner`, `to`, `intent`, `correlationId`, `causationId`, `seq`, `hops`, `payload`, `createdAt`, optional `sig`.
 
 Delivery is at-least-once with dedupe by id, ordered per sender-recipient pair. Recipients are node ids or tree-relative (`parent`, `children`, `root`). Inbound mail runs through one state machine with one approval policy. Loop and spawn limits are enforced in code. Details in [0009](decisions/0009-messaging-semantics.md).
 
@@ -109,7 +109,7 @@ Each phase ends with something usable and a stop for review.
 | Phase | Scope | Done when |
 |---|---|---|
 | 0 | Verification spikes, decisions, repo scaffold | **Done.** `npm run spike:phase0` passes 18 checks. |
-| 1 | `protocol` (envelope, events, inbound and lease machines, tests) and `a2a` with the file transport | Two local Pi sessions exchange messages and the model sees them. |
+| 1 | `protocol` (envelope, events, inbound and lease machines, tests) and `a2a` with the file transport | **Done.** Two local Pi sessions exchange messages and the model sees them. |
 | 2 | `roles` | `coordinator + planning` can be composed on a session and changed mid-session. |
 | 3 | `host` (store, supervisor, broker, socket) and `graph` | A coordinator spawns a child and both appear in the tree. |
 | 4 | Tree UI: view, attach, spawn with fragment picker, approvals, blocked dialogs | Feature, grilling and task nodes can be navigated and typed into. |

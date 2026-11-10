@@ -30,3 +30,7 @@ A model that can send and spawn can loop and fork-bomb. Limits are enforced by t
 **Versioning**
 
 `v` is a single integer. A receiver rejects a higher major version, ignores unknown fields, and passes unknown `intent` strings through (the vocabulary is open). Payloads are size-limited (64 KiB); larger content travels as a file path reference.
+
+**Mail state lives with the node, on disk**
+
+The original plan kept the inbox and outbox in the session with `appendEntry`. Because a node outlives any one session (ADR 0004), mail state is stored per node instead: one directory per state, and a state change is a rename. The session records only its node id. This also makes redelivery after a crash between approval and delivery a directory scan at startup.

@@ -16,3 +16,7 @@ Every participant has a lattice **node id** (a ULID-style string minted by whoev
 **Evidence (spike S8)**
 
 `--session-id` assigns the Pi session id, so the host can still choose it. `new_session` fired `session_shutdown(new)` then `session_start(new)` with a different session id in the same process.
+
+**Phase 1 finding**
+
+Pi builds a fresh extension instance when a session is replaced, so an id kept in the factory closure is lost on `/new`. The a2a extension reads the id recorded in the session being left (`event.previousSessionFile`) and falls back to a process-wide value for ephemeral sessions. An integration test covers `/new`, resume by session file, and a second process opening a copy of a live session.

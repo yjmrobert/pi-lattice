@@ -2,10 +2,11 @@
 
 Agent-to-agent messaging, session trees, composable roles and shared ownership for [Pi](https://pi.dev).
 
-Status: Phase 0 complete (verification spikes and design). No usable packages yet.
+Status: early. `@pi-lattice/a2a` works on its own ([try it](examples/minimal-two-agents/README.md)); the remaining phases are in progress.
 
 - [Architecture](docs/architecture.md)
 - [Decisions](docs/decisions/README.md)
+- [Envelope specification](docs/envelope-spec.md)
 
 ## Development
 
