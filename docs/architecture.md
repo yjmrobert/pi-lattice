@@ -77,7 +77,7 @@ A role is a list of fragment names. A fragment is a markdown file with frontmatt
 
 Fragments are looked up in order: project `.pi/lattice/roles/`, user `~/.pi/agent/lattice/roles/`, then the package's built-in set. Earlier locations override later ones by name. Adding a fragment is dropping a file.
 
-Each applied fragment becomes one system prompt section ([0003](decisions/0003-roles-as-prompt-sections.md)). The list is persisted with `appendEntry` and edited with `/role add|remove|show`.
+Details in [roles.md](roles.md). Each applied fragment becomes one system prompt section ([0003](decisions/0003-roles-as-prompt-sections.md)). The list is persisted with `appendEntry` and edited with `/role add|remove|show`.
 
 ## Host
 
@@ -110,7 +110,7 @@ Each phase ends with something usable and a stop for review.
 |---|---|---|
 | 0 | Verification spikes, decisions, repo scaffold | **Done.** `npm run spike:phase0` passes 18 checks. |
 | 1 | `protocol` (envelope, events, inbound and lease machines, tests) and `a2a` with the file transport | **Done.** Two local Pi sessions exchange messages and the model sees them. |
-| 2 | `roles` | `coordinator + planning` can be composed on a session and changed mid-session. |
+| 2 | `roles` | **Done.** `coordinator + planning` can be composed on a session and changed mid-session. |
 | 3 | `host` (store, supervisor, broker, socket) and `graph` | A coordinator spawns a child and both appear in the tree. |
 | 4 | Tree UI: view, attach, spawn with fragment picker, approvals, blocked dialogs | Feature, grilling and task nodes can be navigated and typed into. |
 | 5 | Lifecycle fragments, then a full feature run | A feature goes through grilling, planning, implementation and verification. |
