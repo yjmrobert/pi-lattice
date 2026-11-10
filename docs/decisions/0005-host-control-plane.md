@@ -24,3 +24,10 @@ An extension connected to a unix socket in `session_start`; a command sent over 
 **Supervision**
 
 Children are stdio subprocesses, so they exit when the host does (stdin EOF is an orderly shutdown). The tree therefore persists node records, not processes. Nodes are `dormant` until needed, and the host resumes one with `--session <file>` on attach or on inbound mail. A cap limits concurrently running children (default 8; each idle child is about 120 MB resident).
+
+**Phase 3 notes**
+
+- Each lattice extension opens its own connection (a channel: `a2a`, `graph`). The frames are in `protocol/src/wire.ts`.
+- The host rejects an envelope whose `from` or `fromOwner` does not match the authenticated connection, so a session cannot send as another node.
+- Envelopes stay queued in the journal until the recipient acknowledges having stored them. Mail for a dormant node starts it; if the running cap prevents that, the host retries whenever a session settles or exits.
+- A command that opens a dialog does not return its RPC response until the dialog is answered. Callers must not await such a prompt before answering.

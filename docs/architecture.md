@@ -111,7 +111,7 @@ Each phase ends with something usable and a stop for review.
 | 0 | Verification spikes, decisions, repo scaffold | **Done.** `npm run spike:phase0` passes 18 checks. |
 | 1 | `protocol` (envelope, events, inbound and lease machines, tests) and `a2a` with the file transport | **Done.** Two local Pi sessions exchange messages and the model sees them. |
 | 2 | `roles` | **Done.** `coordinator + planning` can be composed on a session and changed mid-session. |
-| 3 | `host` (store, supervisor, broker, socket) and `graph` | A coordinator spawns a child and both appear in the tree. |
+| 3 | `host` (store, supervisor, broker, socket) and `graph` | **Done.** A coordinator spawns a child and both appear in the tree. |
 | 4 | Tree UI: view, attach, spawn with fragment picker, approvals, blocked dialogs | Feature, grilling and task nodes can be navigated and typed into. |
 | 5 | Lifecycle fragments, then a full feature run | A feature goes through grilling, planning, implementation and verification. |
 | 6 | `collab`: transport decision, handoff, cross-owner approvals, session transfer | Two machines share a tree and a node changes owner with both confirming. |

@@ -16,3 +16,7 @@ A package with a `pi.extensions` manifest loaded with `pi -e <dir>`; its extensi
 **Not yet verified**
 
 Published tarballs. Pi's docs say other Pi packages used as dependencies must be included in the published tarball, so `protocol` will need `bundledDependencies` in each dependant. Verify with `npm pack` + `pi install` before the first publish.
+
+**Phase 3 finding: the host needs a build step before it can be published**
+
+Node refuses to strip types from files under `node_modules`. Extensions are unaffected (Pi loads them through jiti), but the host is a plain Node program: once installed from npm, its own TypeScript and the `protocol` source it imports would not run. Inside this repository everything runs from source because workspace links resolve outside `node_modules`. Before the first publish, `host` and `protocol` need a `tsc` emit to JavaScript with the `exports` map pointing at it.
