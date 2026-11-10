@@ -1,0 +1,8 @@
+{
+  "name": "@pi-lattice/spike-pkg",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "pi": { "extensions": ["./extensions/linked.ts"] },
+  "dependencies": { "@pi-lattice/protocol": "*" }
+}
