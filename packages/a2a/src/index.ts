@@ -4,3 +4,4 @@ export { claimNode, type Identity, type IdentityInput, releaseNode, resolveIdent
 export { MailStore, type StoredMail, type StoredState } from "./mailstore.ts";
 export { latticeHome, nodeDir, nodesDir } from "./paths.ts";
 export { type InboundHandler, type SelfInfo, type Transport, TransportError } from "./transport.ts";
+export { HostTransport, type HostTransportOptions } from "./host-transport.ts";

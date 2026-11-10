@@ -1,4 +1,4 @@
-import type { Envelope, PeerInfo } from "@pi-lattice/protocol";
+import type { Envelope, InboundState, PeerInfo } from "@pi-lattice/protocol";
 
 /**
  * Called for each inbound item. The value is untrusted and not yet validated.
@@ -27,6 +27,10 @@ export interface Transport {
 	peers(): Promise<PeerInfo[]>;
 	/** Stop receiving and release resources. Safe to call more than once. */
 	close(): Promise<void>;
+	/** Tell whoever watches this transport that an inbound envelope changed state. Optional. */
+	reportMail?(envelope: Envelope, state: InboundState): void;
+	/** Receive approve or reject decisions made outside the session, for example in a host UI. Optional. */
+	onDecision?(handler: (envelopeId: string, action: "approve" | "reject") => void): void;
 }
 
 /** What a transport needs to know about the node it serves. */
@@ -35,4 +39,6 @@ export interface SelfInfo {
 	name: string;
 	owner: string;
 	cwd: string;
+	sessionId?: string | undefined;
+	sessionFile?: string | undefined;
 }

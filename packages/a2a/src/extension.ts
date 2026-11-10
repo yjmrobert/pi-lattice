@@ -108,14 +108,20 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 
 	// --- inbound ---------------------------------------------------------------
 
+	/** Record a state change everywhere it is observed: disk, other extensions, the host. */
+	const mark = (state: Active, envelope: Envelope, to: "pending" | "approved" | "rejected" | "delivered"): void => {
+		state.store.put(envelope, to);
+		emitEvent(pi.events, "lattice:a2a:inbound", { envelope, state: to });
+		state.transport.reportMail?.(envelope, to);
+	};
+
 	const deliver = (state: Active, envelope: Envelope): void => {
 		pi.sendMessage(
 			{ customType: MESSAGE_TYPE, content: formatInbound(envelope), display: true, details: { envelope } },
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
-		state.store.put(envelope, "delivered");
+		mark(state, envelope, "delivered");
 		if (!cause || envelope.hops > cause.hops) cause = envelope;
-		emitEvent(pi.events, "lattice:a2a:inbound", { envelope, state: "delivered" });
 	};
 
 	const handleInbound = async (value: unknown): Promise<void> => {
@@ -137,8 +143,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 			trustedSenders: state.store.trustedSenders(),
 		});
 		if (hold) {
-			state.store.put(envelope, "pending");
-			emitEvent(pi.events, "lattice:a2a:inbound", { envelope, state: "pending" });
+			mark(state, envelope, "pending");
 			notify(`Message waiting for approval (/inbox): ${summarize(envelope, 60)}`);
 		} else {
 			deliver(state, envelope);
@@ -156,12 +161,11 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 		if (!result.ok) return `Message ${id}: ${result.error}.`;
 		if (!result.changed) return `Message ${id} is already ${mail.state}.`;
 		if (action === "reject") {
-			state.store.put(mail.envelope, "rejected");
-			emitEvent(pi.events, "lattice:a2a:inbound", { envelope: mail.envelope, state: "rejected" });
+			mark(state, mail.envelope, "rejected");
 			refreshStatus();
 			return `Rejected ${id}.`;
 		}
-		state.store.put(mail.envelope, "approved");
+		mark(state, mail.envelope, "approved");
 		deliver(state, mail.envelope);
 		refreshStatus();
 		return `Approved ${id}; delivered to the agent.`;
@@ -235,13 +239,19 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 		const owner = process.env.LATTICE_OWNER ?? userInfo().username;
 		const name = process.env.LATTICE_NODE_NAME ?? pi.getSessionName() ?? basename(ctx.cwd);
 		const store = new MailStore(nodeDir(home, identity.nodeId));
-		const transport = await selectTransport(home, { id: identity.nodeId, name, owner, cwd: ctx.cwd });
+		const transport = await selectTransport(home, {
+			id: identity.nodeId, name, owner, cwd: ctx.cwd,
+			sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(),
+		});
 		active = { nodeId: identity.nodeId, owner, name, store, transport, ctx };
 		cause = undefined;
 
 		// Finish deliveries a crash interrupted between approval and delivery.
 		for (const envelope of store.list("approved")) deliver(active, envelope);
 
+		transport.onDecision?.((envelopeId, action) => {
+			notify(decide(envelopeId, action));
+		});
 		await transport.subscribe(handleInbound);
 		refreshStatus();
 		emitEvent(pi.events, "lattice:node:ready", { nodeId: identity.nodeId, owner, name, hosted: transport.kind === "host" });

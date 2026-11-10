@@ -81,7 +81,7 @@ export class FileTransport implements Transport {
 	private register(): void {
 		writeFileAtomic(
 			join(nodeDir(this.home, this.self.id), "node.json"),
-			JSON.stringify({ ...this.self, pid: process.pid, updatedAt: new Date().toISOString() }),
+			JSON.stringify({ id: this.self.id, name: this.self.name, owner: this.self.owner, cwd: this.self.cwd, pid: process.pid, updatedAt: new Date().toISOString() }),
 		);
 	}
 
