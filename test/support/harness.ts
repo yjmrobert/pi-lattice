@@ -172,3 +172,36 @@ export function mailIn(sandbox: Sandbox, nodeId: string, state: string): string[
 		return [];
 	}
 }
+
+/** Options that make a LatticeHost run its sessions against the scripted model inside a sandbox. */
+export function hostOptionsFor(sandbox: Sandbox, overrides: Record<string, unknown> = {}): {
+	stateDir: string; owner: string; piCommand: string[]; piArgs: string[]; extensionPaths: string[]; env: Record<string, string>; socketDir: string; startTimeoutMs: number;
+} & Record<string, unknown> {
+	return {
+		stateDir: join(sandbox.root, "state"),
+		owner: "tester",
+		piCommand: [process.execPath, cliPath],
+		piArgs: ["-e", extensionPaths.faux, "--provider", "lattice-faux", "--model", "scripted", "--no-skills", "--no-context-files"],
+		extensionPaths: [extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
+		env: {
+			PI_CODING_AGENT_DIR: sandbox.agentDir,
+			PI_OFFLINE: "1",
+			PI_SKIP_VERSION_CHECK: "1",
+			PI_TELEMETRY: "0",
+			LATTICE_FAUX_SCRIPT: directorScript,
+		},
+		socketDir: join(sandbox.root, "sock"),
+		startTimeoutMs: 20_000,
+		...overrides,
+	};
+}
+
+export async function eventually<T>(probe: () => T | undefined | false | Promise<T | undefined | false>, what: string, timeoutMs = 15_000): Promise<T> {
+	const end = Date.now() + timeoutMs;
+	for (;;) {
+		const value = await probe();
+		if (value) return value;
+		if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+}
