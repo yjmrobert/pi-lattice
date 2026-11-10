@@ -1,0 +1,17 @@
+{
+  "name": "@pi-lattice/a2a",
+  "version": "0.1.0",
+  "description": "Agent-to-agent messaging between Pi sessions: send_message tool, inbox with approval, file and host transports.",
+  "type": "module",
+  "keywords": ["pi-package", "pi", "a2a", "multi-agent"],
+  "license": "MIT",
+  "files": ["src", "README.md"],
+  "exports": { ".": "./src/index.ts" },
+  "pi": { "extensions": ["./src/extension.ts"] },
+  "dependencies": { "@pi-lattice/protocol": "0.1.0" },
+  "bundledDependencies": ["@pi-lattice/protocol"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
