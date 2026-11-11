@@ -155,6 +155,10 @@ The pane before this spent two lines per session, the second repeating owner, re
 
 Each repository keeps its own tree and its own background host (`<repository>/.lattice/`). That stays. What changes is that a terminal's pane connects to every running host, found through a per-user list that each host adds itself to when it starts.
 
+The list is one small file per tree in `<lattice home>/trees/`, so hosts never write the same file. The contracts say where an entry goes and what it holds; the host writes it and the pane reads it. The pane looks every three seconds, links to hosts that have started, and drops the ones that have stopped. A tree whose host is not running is shown as one line, and opening it starts the host.
+
+The terminal's "home" is the repository of the session it has open. When a session from another repository is opened, the home changes with it: the pane, `/lattice new` and sharing then act on that repository.
+
 Pi already moves with a session: `switchSession` rebuilds its runtime in the directory the session was created in. Tried against Pi 1.5.2 in RPC mode: a Pi started in one repository switched to a session from another, and its `bash` tool then ran in the other repository. The process directory does not change, so the shell Pi was started from stays where it was.
 
 **Build order**
@@ -171,6 +175,13 @@ Later, and needing more from the host: what each session is doing right now, and
 **Costs and limits**
 
 - The inspector hides the chat while the pane has the keyboard.
+- Every open terminal is connected to every running host, so a host stops on its own only once no Pi of this user is open anywhere and nothing in its tree is working.
 - Entering a repository for the first time can raise Pi's project trust prompt.
 - Quitting Pi after moving leaves the shell in the directory Pi was started from.
 - An extension that reads the process directory, and not the directory Pi gives it, looks in the wrong repository after a move.
+
+**Evidence**
+
+- `packages/pane/test/view.test.ts` covers the drawing and the keys, which are pure.
+- `test/integration/repos.test.ts` runs real Pi in two git repositories: a terminal in one opens a session of the other, its tools then run in the other repository, a child it spawns joins the other repository's tree, and `/lattice back` returns.
+- A pseudo-terminal run of real Pi confirmed, in the interactive interface: the rail with its pinned footer and divider; a message waiting for approval listed with its text and approved with one key; a second repository folded to one line, opened with `enter`, the arrival notice, and `-` to return.

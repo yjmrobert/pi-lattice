@@ -16,7 +16,9 @@ export type PaneAction =
 	/** Approve or reject a message waiting for approval. */
 	| { do: "decide"; repo: string; nodeId: string; envelopeId: string; action: "approve" | "reject" }
 	/** Accept or decline a session someone offers. */
-	| { do: "sharing"; repo: string; action: "accept" | "cancel"; nodeId: string };
+	| { do: "sharing"; repo: string; action: "accept" | "cancel"; nodeId: string }
+	/** Start the host of a repository whose tree is asleep, so its sessions can be seen and opened. */
+	| { do: "wake"; repo: string };
 
 /** The item the cursor is on, with the repository it is from. */
 export function cursorItem(view: PaneView): { item: InboxItem; repo: string } | undefined {
@@ -38,6 +40,7 @@ const yesNo = (item: InboxItem): boolean => item.kind === "question" && item.dia
  */
 export function cursorKeys(view: PaneView): Array<readonly [key: string, does: string]> {
 	const found = cursorItem(view);
+	if (view.cursor?.startsWith("r:")) return [["⏎", "wake"]];
 	if (!found) return cursorNode(view) && cursorNode(view) !== view.current ? [["⏎", "open"], ["n", "new"], ["o", "share"]] : [["n", "new"], ["o", "share"]];
 	const { item } = found;
 	if (yesNo(item)) return [["y", "yes"], ["n", "no"]];
@@ -62,6 +65,9 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 		const entry = paneInbox(view)[Number(key) - 1];
 		return entry ? [{ do: "move", cursor: itemKey(entry.item.id) }] : [];
 	}
+	// `-` goes back to the session this terminal was in before, whichever repository it is in.
+	if (key === "-") return view.previous ? [{ do: "leave" }, { do: "command", text: "/lattice back" }] : [];
+	if (view.cursor?.startsWith("r:")) return key === "enter" ? [{ do: "wake", repo: view.cursor.slice(2) }] : [];
 	const found = cursorItem(view);
 	if (found) {
 		const { item, repo } = found;

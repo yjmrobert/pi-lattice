@@ -9,3 +9,4 @@ export * from "./node.ts";
 export * from "./client.ts";
 export * from "./wire.ts";
 export * from "./tree.ts";
+export * from "./registry.ts";

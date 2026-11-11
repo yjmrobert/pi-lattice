@@ -1,38 +1,55 @@
 /**
- * pi-lattice pane: the session tree inside Pi.
+ * pi-lattice pane: the session trees inside Pi.
  *
- * Shows a left pane listing the tree's sessions with who owns each and which repository it
- * works in, and lets the person open any of them in this terminal. The tree itself lives
- * in a background host that this extension starts on demand; opening a session takes it
- * over from the host, and leaving it hands it back.
+ * Shows a left pane listing what is waiting on the person and the sessions of every repository
+ * they have work in, and lets them open any of them in this terminal. Each repository's tree
+ * lives in its own background host, started on demand; opening a session takes it over from
+ * its host, and leaving it hands it back. See ADR 0013 and ADR 0015.
  */
 import { basename, dirname } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import { emitEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type NodeMeta, type UiState } from "@pi-lattice/protocol";
-import { connectHost, hasTree, launchHost, projectRoot, stateDirFor } from "./locate.ts";
+import { emitEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type KnownTree, type NodeMeta, type UiState } from "@pi-lattice/protocol";
 import { cursorKeys, interpretKey, type PaneAction } from "./keys.ts";
+import { connectHost, hasTree, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
 import { type InboxDetails, inboxItems, nodeKey, type Paint, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "./view.ts";
 
 const NODE_ENTRY = "lattice:node";
 const PANE_WIDTH = 34;
 const MIN_TERMINAL_WIDTH = 90;
+const SPINNER_MS = 120;
+/** How often to look for hosts of other repositories starting or stopping. */
+const SCAN_MS = 3000;
 
 type Hooked = TUI & { layoutRoot?: Component; setLayoutRoot?(component: Component | undefined): void };
 
-/**
- * State that must outlive a session switch. Pi builds a new extension instance for every
- * session, but the connection to the host, the pane and what is open here belong to the
- * terminal, so they live once per process.
- */
-interface Shared {
-	client: HostClient | undefined;
-	stateDir: string | undefined;
+/** A connection to one repository's host, and what it last reported. */
+interface Link {
+	stateDir: string;
+	client: HostClient;
 	state: UiState | undefined;
 	/** The questions and messages behind the counts in the state, fetched so they can be shown and answered in place. */
 	details: InboxDetails;
-	/** The node open in this terminal. */
+	refreshing: Promise<void> | undefined;
+}
+
+/**
+ * State that must outlive a session switch. Pi builds a new extension instance for every
+ * session, but the connections to the hosts, the pane and what is open here belong to the
+ * terminal, so they live once per process.
+ */
+interface Shared {
+	/** One per repository with a running host, by state directory. */
+	links: Map<string, Link>;
+	/** The state directory of the repository this terminal's session is in. */
+	home: string | undefined;
+	/** Trees of other repositories whose host is not running. */
+	asleep: KnownTree[];
+	/** The node open in this terminal, and the state directory of the host that owns it. */
 	current: string | undefined;
+	currentDir: string | undefined;
+	/** The node this terminal had open before the current one, for going back. */
+	previous: string | undefined;
 	/** What lets the open session speak as that node. Announced to the other extensions at each session start. */
 	assignment: HostAssignment | undefined;
 	/** What the pane's cursor is on: a key from the view's order. */
@@ -40,6 +57,8 @@ interface Shared {
 	focused: boolean;
 	/** Redraws the pane while a session is working, so its spinner turns. */
 	ticker: ReturnType<typeof setInterval> | undefined;
+	scanner: ReturnType<typeof setInterval> | undefined;
+	scanning: boolean;
 	paint: Paint;
 	tui: Hooked | undefined;
 	wrapped: boolean;
@@ -47,29 +66,44 @@ interface Shared {
 	compact: boolean;
 	pi: ExtensionAPI | undefined;
 	ctx: ExtensionContext | undefined;
-	refreshing: Promise<void> | undefined;
 }
-const KEY = Symbol.for("pi-lattice.pane");
+const KEY = Symbol.for("pi-lattice.pane.2");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
-	client: undefined, stateDir: undefined, state: undefined, details: {}, current: undefined, assignment: undefined, cursor: undefined, focused: false, ticker: undefined, paint: PLAIN,
-	tui: undefined, wrapped: false, compact: false, pi: undefined, ctx: undefined, refreshing: undefined,
+	links: new Map(), home: undefined, asleep: [], current: undefined, currentDir: undefined, previous: undefined, assignment: undefined, cursor: undefined, focused: false,
+	ticker: undefined, scanner: undefined, scanning: false, paint: PLAIN, tui: undefined, wrapped: false, compact: false, pi: undefined, ctx: undefined,
 });
 
-const SPINNER_MS = 120;
+/** The link to the repository this terminal is in, if it has a tree with a running host. */
+const homeLink = (): Link | undefined => (shared.home ? shared.links.get(shared.home) : undefined);
+/** The link whose tree a node belongs to. */
+const linkOf = (nodeId: string | undefined): Link | undefined => (nodeId ? [...shared.links.values()].find((link) => link.state?.nodes.some((node) => node.id === nodeId)) : undefined);
+/** The link that owns the node open here. Falls back to the directory recorded when it was opened, for a tree not yet fetched. */
+const currentLink = (): Link | undefined => linkOf(shared.current) ?? (shared.currentDir ? shared.links.get(shared.currentDir) : undefined);
 
 function view(): PaneView {
-	const state = shared.state;
+	const links = [...shared.links.values()].filter((link): link is Link & { state: UiState } => link.state !== undefined);
+	const repos = links
+		.map((link) => ({ key: link.stateDir, name: repoLabel(link.state, link.stateDir), state: link.state, here: link.stateDir === shared.home, inbox: inboxItems(link.state, link.details) }))
+		// This terminal's repository first, then the others by name.
+		.sort((a, b) => Number(b.here) - Number(a.here) || a.name.localeCompare(b.name));
 	const base: PaneView = {
-		repos: state && shared.stateDir ? [{ key: shared.stateDir, name: repoLabel(state, shared.stateDir), state, here: true, inbox: inboxItems(state, shared.details) }] : [],
+		repos,
+		asleep: shared.asleep.map((tree) => ({ key: tree.stateDir, name: basename(tree.root) })),
+		previous: shared.previous !== undefined && shared.previous !== shared.current,
 		current: shared.current,
 		cursor: shared.cursor,
 		focused: shared.focused,
-		hint: shared.client ? "No sessions yet. Your next\nmessage starts one here." : "No sessions in this\nproject yet.\n\n/lattice starts a tree\nfrom this session.",
+		hint: homeLink() ? "No sessions yet. Your next\nmessage starts one here." : "No sessions in this\nproject yet.\n\n/lattice starts a tree\nfrom this session.",
 		frame: Math.floor(Date.now() / SPINNER_MS),
 		height: shared.tui?.terminal.rows,
 	};
 	return { ...base, keys: cursorKeys(base) };
+}
+
+/** A repository's name: what its sessions report, else the folder its tree is kept in. */
+function repoLabel(state: UiState, stateDir: string): string {
+	return state.nodes.find((node) => node.parentId === null && node.repo)?.repo ?? state.nodes.find((node) => node.repo)?.repo ?? basename(dirname(stateDir));
 }
 
 /** Where the cursor starts: on what is waiting, if anything is; otherwise on the session open here. */
@@ -79,14 +113,9 @@ function restingCursor(): string | undefined {
 	return first ?? (shared.current ? nodeKey(shared.current) : order[0]);
 }
 
-/** A repository's name: what its sessions report, else the folder its tree is kept in. */
-function repoLabel(state: UiState, stateDir: string): string {
-	return state.nodes.find((node) => node.parentId === null && node.repo)?.repo ?? state.nodes.find((node) => node.repo)?.repo ?? basename(dirname(stateDir));
-}
-
 /** Keep the spinner turning while any session is working, and stop when none is. */
 function tick(): void {
-	const working = shared.state?.nodes.some((node) => node.status === "running" || node.status === "starting") ?? false;
+	const working = [...shared.links.values()].some((link) => link.state?.nodes.some((node) => node.status === "running" || node.status === "starting"));
 	if (working && !shared.ticker && shared.wrapped) {
 		shared.ticker = setInterval(() => shared.tui?.requestRender(), SPINNER_MS);
 		shared.ticker.unref?.();
@@ -105,7 +134,7 @@ function redraw(): void {
 		if (ctx?.mode !== "tui") return;
 		// The compact list is only for terminals where the side pane could not be installed.
 		if (!shared.wrapped) {
-			ctx.ui.setWidget("lattice", shared.client ? renderCompact(view()) : undefined);
+			ctx.ui.setWidget("lattice", shared.links.size > 0 ? renderCompact(view()) : undefined);
 			shared.compact = true;
 		} else if (shared.compact) {
 			ctx.ui.setWidget("lattice", undefined);
@@ -113,6 +142,15 @@ function redraw(): void {
 		}
 	} catch {
 		shared.ctx = undefined;
+	}
+}
+
+/** Say something to the person, if a session is there to say it in. */
+function tell(message: string, level: "info" | "warning" | "error" = "info"): void {
+	try {
+		if (shared.ctx?.hasUI) shared.ctx.ui.notify(message, level);
+	} catch {
+		shared.ctx = undefined; // the session that context belonged to has ended
 	}
 }
 
@@ -128,25 +166,6 @@ function recordedNode(ctx: ExtensionContext): string | undefined {
 	return found;
 }
 
-async function refresh(): Promise<void> {
-	const client = shared.client;
-	if (!client) return;
-	shared.refreshing ??= client
-		.ui("state", {})
-		.then(async (state) => {
-			shared.details = await fetchDetails(client, state);
-			shared.state = state;
-			// What the cursor was on may be gone (an item just answered): move to the next thing waiting, else to the session open here.
-			if (shared.cursor && !paneOrder(view()).includes(shared.cursor)) shared.cursor = shared.focused ? restingCursor() : undefined;
-		})
-		.catch(() => {})
-		.finally(() => {
-			shared.refreshing = undefined;
-			redraw();
-		});
-	await shared.refreshing;
-}
-
 /** Fetch the questions and messages that the state only counts. Whatever cannot be fetched stays a count. */
 async function fetchDetails(client: HostClient, state: UiState): Promise<InboxDetails> {
 	const asking = state.nodes.filter((node) => (state.attention[node.id]?.dialogs ?? 0) > 0);
@@ -158,20 +177,67 @@ async function fetchDetails(client: HostClient, state: UiState): Promise<InboxDe
 	return { dialogs: Object.fromEntries(dialogs), mail };
 }
 
-function adoptClient(client: HostClient, stateDir: string): void {
-	shared.client = client;
-	shared.stateDir = stateDir;
+async function refreshLink(link: Link): Promise<void> {
+	link.refreshing ??= link.client
+		.ui("state", {})
+		.then(async (state) => {
+			link.details = await fetchDetails(link.client, state);
+			link.state = state;
+		})
+		.catch(() => {})
+		.finally(() => {
+			link.refreshing = undefined;
+			// What the cursor was on may be gone (an item just answered): move to the next thing waiting, else to the session open here.
+			if (shared.cursor && !paneOrder(view()).includes(shared.cursor)) shared.cursor = shared.focused ? restingCursor() : undefined;
+			redraw();
+		});
+	await link.refreshing;
+}
+
+/** Fetch every tree again. */
+async function refresh(): Promise<void> {
+	await Promise.all([...shared.links.values()].map(refreshLink));
+}
+
+/** Start following a host. */
+function addLink(client: HostClient, stateDir: string): Link {
+	const link: Link = { stateDir, client, state: undefined, details: {}, refreshing: undefined };
+	shared.links.set(stateDir, link);
+	shared.asleep = shared.asleep.filter((tree) => tree.stateDir !== stateDir);
 	client.onFrame((frame) => {
 		if (frame.t !== "event") return;
-		if (frame.kind === "changed") void refresh();
-		else if (frame.kind === "log" && frame.message) {
-			try {
-				if (shared.ctx?.hasUI) shared.ctx.ui.notify(frame.message, "info");
-			} catch {
-				shared.ctx = undefined; // the session that context belonged to has ended
-			}
-		}
+		if (frame.kind === "changed") void refreshLink(link);
+		else if (frame.kind === "log" && frame.message) tell(stateDir === shared.home || !link.state ? frame.message : `${repoLabel(link.state, stateDir)}: ${frame.message}`);
 	});
+	return link;
+}
+
+/**
+ * Follow the hosts of this person's other repositories: link to each one that is running,
+ * drop the ones that have stopped, and note the trees whose host is asleep.
+ */
+async function scan(): Promise<void> {
+	if (shared.scanning) return;
+	shared.scanning = true;
+	try {
+		for (const [stateDir, link] of shared.links) if (link.client.isClosed) shared.links.delete(stateDir);
+		const trees = knownTrees();
+		for (const tree of trees) {
+			if (shared.links.has(tree.stateDir)) continue;
+			const client = await connectHost(tree.stateDir);
+			if (!client) continue;
+			if (shared.links.has(tree.stateDir)) client.close(); // linked meanwhile, by a session start
+			else void refreshLink(addLink(client, tree.stateDir));
+		}
+		const asleep = trees.filter((tree) => !shared.links.has(tree.stateDir) && tree.stateDir !== shared.home);
+		const changed = asleep.length !== shared.asleep.length || asleep.some((tree, index) => tree.stateDir !== shared.asleep[index]?.stateDir);
+		shared.asleep = asleep;
+		if (changed) redraw();
+	} catch {
+		// Looking is best effort; the next pass tries again.
+	} finally {
+		shared.scanning = false;
+	}
 }
 
 /** Put the pane to the left of everything Pi draws. Falls back to a compact widget when that is not possible. */
@@ -228,49 +294,57 @@ function onPaneKey(data: string): void {
 
 /** Carry out what a key press meant. Answers go straight to the host; anything needing Pi's dialogs goes through a command. */
 function perform(action: PaneAction): void {
-	const client = shared.client;
 	const settle = (request: Promise<unknown>): void => {
-		request
-			.catch((error: unknown) => {
-				try {
-					shared.ctx?.ui.notify(error instanceof Error ? error.message : String(error), "error");
-				} catch {
-					shared.ctx = undefined;
-				}
-			})
-			.finally(() => void refresh());
+		request.catch((error: unknown) => tell(error instanceof Error ? error.message : String(error), "error")).finally(() => void refresh());
 	};
 	if (action.do === "move") shared.cursor = action.cursor;
 	else if (action.do === "leave") {
 		shared.focused = false;
 		shared.cursor = undefined;
 	} else if (action.do === "command") dispatch(action.text);
-	else if (!client) return;
-	else if (action.do === "answer") settle(client.ui("answerDialog", { nodeId: action.nodeId, dialogId: action.dialogId, answer: { confirmed: action.confirmed } }));
-	else if (action.do === "decide") settle(client.ui("decideMail", { nodeId: action.nodeId, envelopeId: action.envelopeId, action: action.action }));
-	else if (action.do === "sharing") settle(client.ui("sharing", { action: action.action, args: [action.nodeId] }));
+	else if (action.do === "wake") {
+		const tree = shared.asleep.find((candidate) => candidate.stateDir === action.repo);
+		const bus = shared.pi?.events;
+		if (!tree || !bus) return;
+		settle(
+			launchHost(bus, tree.stateDir, tree.root).then((client) => {
+				if (shared.links.has(tree.stateDir)) client.close();
+				else addLink(client, tree.stateDir);
+			}),
+		);
+	} else {
+		const client = shared.links.get(action.repo)?.client;
+		if (!client) return;
+		if (action.do === "answer") settle(client.ui("answerDialog", { nodeId: action.nodeId, dialogId: action.dialogId, answer: { confirmed: action.confirmed } }));
+		else if (action.do === "decide") settle(client.ui("decideMail", { nodeId: action.nodeId, envelopeId: action.envelopeId, action: action.action }));
+		else settle(client.ui("sharing", { action: action.action, args: [action.nodeId] }));
+	}
 }
 
 export default function paneExtension(pi: ExtensionAPI): void {
 	// Inside a session the host runs headless there is no person and no pane.
 	if (process.env.LATTICE_HEADLESS) return;
 
-	const name = (id: string): string => shared.state?.nodes.find((node) => node.id === id)?.name ?? id;
-	const find = (text: string): NodeMeta | undefined => shared.state?.nodes.find((node) => node.id === text) ?? shared.state?.nodes.find((node) => node.name === text);
-	const mine = (node: NodeMeta | undefined): node is NodeMeta => node !== undefined && node.owner === shared.state?.owner;
+	const everyNode = (): NodeMeta[] => [...shared.links.values()].flatMap((link) => link.state?.nodes ?? []);
+	const name = (id: string): string => everyNode().find((node) => node.id === id)?.name ?? id;
+	/** A session by id, or by name: this repository's first, then any other's. */
+	const find = (text: string): NodeMeta | undefined =>
+		everyNode().find((node) => node.id === text) ?? homeLink()?.state?.nodes.find((node) => node.name === text) ?? everyNode().find((node) => node.name === text);
+	const mine = (node: NodeMeta | undefined): node is NodeMeta => node !== undefined && node.owner === linkOf(node.id)?.state?.owner;
 
-	/** Tell the host which node this terminal has open, taking it over or giving back the previous one. */
+	/** Tell the hosts which node this terminal has open, taking it over or giving back the previous one. */
 	const attach = async (nodeId: string | undefined, leaveWorking = false): Promise<{ sessionFile: string; wasWorking: boolean } | undefined> => {
-		const client = shared.client;
-		if (!client) return undefined;
 		if (shared.current && shared.current !== nodeId) {
-			await client.ui("detach", { nodeId: shared.current, resume: leaveWorking }).catch(() => {});
+			await currentLink()?.client.ui("detach", { nodeId: shared.current, resume: leaveWorking }).catch(() => {});
 			shared.current = undefined;
+			shared.currentDir = undefined;
 			shared.assignment = undefined;
 		}
-		if (!nodeId) return undefined;
-		const result = await client.ui("attach", { nodeId });
+		const link = linkOf(nodeId);
+		if (!nodeId || !link) return undefined;
+		const result = await link.client.ui("attach", { nodeId });
 		shared.current = nodeId;
+		shared.currentDir = link.stateDir;
 		shared.assignment = result.assignment;
 		return { sessionFile: result.sessionFile, wasWorking: result.wasWorking };
 	};
@@ -279,27 +353,42 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		shared.pi = pi;
 		shared.ctx = ctx;
 		const stateDir = stateDirFor(ctx.cwd);
+		// A session from another repository was opened here: this terminal is now in that repository.
+		const moved = shared.home !== undefined && shared.home !== stateDir;
+		shared.home = stateDir;
 		try {
-			if (!shared.client || shared.client.isClosed) {
-				shared.client = undefined;
+			const existing = shared.links.get(stateDir);
+			if (!existing || existing.client.isClosed) {
+				shared.links.delete(stateDir);
 				const client = (await connectHost(stateDir)) ?? (hasTree(stateDir) ? await launchHost(pi.events, stateDir, ctx.cwd) : undefined);
-				if (client) adoptClient(client, stateDir);
+				if (client) addLink(client, stateDir);
 			}
-			if (shared.client) {
-				await refresh();
+			await scan();
+			await refresh();
+			const home = homeLink();
+			if (home) {
 				// If this session is a node of the tree, this terminal now has it open. A session is
 				// matched by the node id recorded in it, or by its file for one that was just adopted.
 				const file = ctx.sessionManager.getSessionFile();
 				const recorded = recordedNode(ctx);
-				const node = (recorded ? find(recorded) : undefined) ?? (file ? shared.state?.nodes.find((candidate) => candidate.sessionFile === file) : undefined);
+				const node = (recorded ? home.state?.nodes.find((candidate) => candidate.id === recorded) : undefined) ?? (file ? home.state?.nodes.find((candidate) => candidate.sessionFile === file) : undefined);
 				const here = mine(node) ? node.id : undefined;
 				if (here !== shared.current) await attach(here);
-			}
+			} else if (shared.current) await attach(undefined);
 			// Tell the messaging, roles and tree extensions which node this session is, if any.
 			// They rebind whenever they hear this, so it does not matter which of us started first.
 			emitEvent(pi.events, "lattice:host:assigned", { assignment: shared.current ? (shared.assignment ?? null) : null });
+			if (moved) {
+				// Said once Pi has finished drawing the session it switched to, or the notice is drawn over.
+				const notice = `Now in ${home?.state ? repoLabel(home.state, stateDir) : basename(projectRoot(ctx.cwd))} · ${projectRoot(ctx.cwd)}`;
+				setTimeout(() => tell(notice), 150);
+			}
 		} catch (error) {
 			if (ctx.hasUI) ctx.ui.notify(`pi-lattice: ${error instanceof Error ? error.message : String(error)}`, "warning");
+		}
+		if (!shared.scanner) {
+			shared.scanner = setInterval(() => void scan(), SCAN_MS);
+			shared.scanner.unref?.();
 		}
 		if (ctx.mode === "tui") {
 			ctx.ui.setWidget("lattice-pane-anchor", (tui, theme) => {
@@ -323,27 +412,28 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	// In a project that has a tree, a new session joins it with its first message, named after
 	// that message, so every real session shows in the pane without anyone asking.
 	pi.on("before_agent_start", async (event, ctx) => {
-		const client = shared.client;
-		if (!client || shared.current || event.messageType !== "user" || process.env.LATTICE_AUTO_JOIN === "0") return;
+		const home = homeLink();
+		if (!home || shared.current || event.messageType !== "user" || process.env.LATTICE_AUTO_JOIN === "0") return;
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		if (!sessionFile) return;
 		try {
 			const title = pi.getSessionName() ?? (event.prompt.replace(/\s+/g, " ").trim().slice(0, 40) || basename(ctx.cwd));
-			const { node, assignment } = await client.ui("adopt", { sessionFile, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, name: title });
+			const { node, assignment } = await home.client.ui("adopt", { sessionFile, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, name: title });
 			shared.current = node.id;
+			shared.currentDir = home.stateDir;
 			shared.assignment = assignment;
 			emitEvent(pi.events, "lattice:host:assigned", { assignment });
-			void refresh();
+			void refreshLink(home);
 		} catch {
 			// Joining is a convenience; the session works without it.
 		}
 	});
 
 	pi.on("agent_start", async () => {
-		if (shared.current) await shared.client?.ui("status", { nodeId: shared.current, streaming: true }).catch(() => {});
+		if (shared.current) await currentLink()?.client.ui("status", { nodeId: shared.current, streaming: true }).catch(() => {});
 	});
 	pi.on("agent_settled", async () => {
-		if (shared.current) await shared.client?.ui("status", { nodeId: shared.current, streaming: false }).catch(() => {});
+		if (shared.current) await currentLink()?.client.ui("status", { nodeId: shared.current, streaming: false }).catch(() => {});
 	});
 
 	pi.on("session_shutdown", async (event) => {
@@ -352,17 +442,20 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			shared.pi = undefined;
 			shared.ctx = undefined;
 		}
-		if (event.reason !== "quit") return; // a session switch keeps the terminal's connection
-		if (shared.current) await shared.client?.ui("detach", { nodeId: shared.current }).catch(() => {});
+		if (event.reason !== "quit") return; // a session switch keeps the terminal's connections
+		if (shared.current) await currentLink()?.client.ui("detach", { nodeId: shared.current }).catch(() => {});
 		shared.current = undefined;
-		shared.client?.close();
-		shared.client = undefined;
+		shared.currentDir = undefined;
+		if (shared.scanner) clearInterval(shared.scanner);
+		shared.scanner = undefined;
+		for (const link of shared.links.values()) link.client.close();
+		shared.links.clear();
 	});
 
 	pi.registerShortcut("alt+l", {
 		description: "Focus the lattice session pane",
 		handler: async (ctx) => {
-			if (!shared.client) {
+			if (shared.links.size === 0 && shared.asleep.length === 0) {
 				ctx.ui.notify("No session tree here yet. Run /lattice to start one.", "info");
 				return;
 			}
@@ -374,9 +467,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 
 	// --- flows, built from Pi's own dialogs --------------------------------------
 
+	/** The host of the repository this terminal is in, or a word about how to get one. */
 	const need = (ctx: ExtensionCommandContext): HostClient | undefined => {
-		if (!shared.client) ctx.ui.notify("No session tree here yet. Run /lattice to start one.", "warning");
-		return shared.client;
+		const client = homeLink()?.client;
+		if (!client) ctx.ui.notify("No session tree here yet. Run /lattice to start one.", "warning");
+		return client;
 	};
 	const fail = (ctx: ExtensionCommandContext, error: unknown): void => ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 
@@ -388,17 +483,18 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		const stateDir = stateDirFor(ctx.cwd);
-		adoptClient(await launchHost(pi.events, stateDir, ctx.cwd), stateDir);
+		shared.home = stateDir;
+		const home = shared.links.get(stateDir) ?? addLink(await launchHost(pi.events, stateDir, ctx.cwd), stateDir);
 		await refresh();
 		const existing = recordedNode(ctx);
 		if (existing && mine(find(existing))) {
 			await attach(existing);
 		} else {
-			const client = shared.client as HostClient;
-			const { node, assignment } = await client.ui("adopt", {
+			const { node, assignment } = await home.client.ui("adopt", {
 				sessionFile, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, name: pi.getSessionName() ?? basename(ctx.cwd),
 			});
 			shared.current = node.id;
+			shared.currentDir = stateDir;
 			shared.assignment = assignment;
 		}
 		// The messaging, roles and tree extensions take up the node's identity as soon as they hear of it.
@@ -408,12 +504,15 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	};
 
 	const open = async (ctx: ExtensionCommandContext, text: string): Promise<void> => {
-		const client = need(ctx);
-		if (!client) return;
+		if (shared.links.size === 0) {
+			need(ctx);
+			return;
+		}
 		await refresh();
 		const node = find(text);
-		if (!node) {
-			ctx.ui.notify(`No session "${text}" in this tree.`, "warning");
+		const state = linkOf(node?.id)?.state;
+		if (!node || !state) {
+			ctx.ui.notify(`No session "${text}" in any tree here.`, "warning");
 			return;
 		}
 		if (node.id === shared.current) return;
@@ -421,8 +520,8 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			await read(ctx, node);
 			return;
 		}
-		const waiting = shared.state?.attention[node.id]?.dialogs ?? 0;
-		if (waiting > 0 && !shared.state?.foreground.includes(node.id)) {
+		const waiting = state.attention[node.id]?.dialogs ?? 0;
+		if (waiting > 0 && !state.foreground.includes(node.id)) {
 			const choice = await ctx.ui.select(`"${node.name}" is waiting on a question.`, ["Answer it here", "Open the session (the question is dropped)"]);
 			if (choice === undefined) return;
 			if (choice === "Answer it here") {
@@ -448,6 +547,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				},
 			});
 			if (switched.cancelled) await attach(previous);
+			else if (previous) shared.previous = previous;
 		} catch (error) {
 			await attach(previous).catch(() => {});
 			fail(ctx, error);
@@ -456,7 +556,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 
 	/** Show another person's session, read-only. */
 	const read = async (ctx: ExtensionCommandContext, node: NodeMeta): Promise<void> => {
-		const client = shared.client;
+		const client = linkOf(node.id)?.client;
 		if (!client) return;
 		let messages: unknown[];
 		try {
@@ -470,7 +570,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	};
 
 	const answer = async (ctx: ExtensionCommandContext, node: NodeMeta): Promise<void> => {
-		const client = shared.client;
+		const client = linkOf(node.id)?.client;
 		if (!client) return;
 		const { dialogs } = await client.ui("dialogs", { nodeId: node.id });
 		for (const dialog of dialogs) {
@@ -489,11 +589,12 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	};
 
 	const create = async (ctx: ExtensionCommandContext, parentText: string): Promise<void> => {
-		const client = need(ctx);
-		if (!client) return;
+		if (!need(ctx)) return;
 		await refresh();
 		const parent = find(parentText) ?? (shared.current ? find(shared.current) : undefined);
-		if (!mine(parent)) {
+		// The child is created by the host of the repository its parent is in.
+		const client = linkOf(parent?.id)?.client;
+		if (!mine(parent) || !client) {
 			ctx.ui.notify("Choose one of your own sessions to add a child under.", "warning");
 			return;
 		}
@@ -517,10 +618,10 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	};
 
 	const approvals = async (ctx: ExtensionCommandContext): Promise<void> => {
-		const client = need(ctx);
-		if (!client) return;
+		if (!need(ctx)) return;
 		for (;;) {
-			const { mail } = await client.ui("pendingMail", {});
+			// Messages waiting in every repository, each with the host that holds it.
+			const mail = (await Promise.all([...shared.links.values()].map(async (link) => (await link.client.ui("pendingMail", {}).catch(() => ({ mail: [] }))).mail.map((item) => ({ ...item, client: link.client }))))).flat();
 			if (mail.length === 0) {
 				ctx.ui.notify("Nothing is waiting for approval.", "info");
 				return;
@@ -532,7 +633,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			if (!item) return;
 			const action = await ctx.ui.select(`${name(item.envelope.from)} (${item.envelope.fromOwner}) → ${name(item.nodeId)}\n\n${item.envelope.payload.text}`, ["Approve", "Reject", "Decide later"]);
 			if (action !== "Approve" && action !== "Reject") return;
-			await client.ui("decideMail", { nodeId: item.nodeId, envelopeId: item.envelope.id, action: action === "Approve" ? "approve" : "reject" }).catch((error: unknown) => fail(ctx, error));
+			await item.client.ui("decideMail", { nodeId: item.nodeId, envelopeId: item.envelope.id, action: action === "Approve" ? "approve" : "reject" }).catch((error: unknown) => fail(ctx, error));
 			await new Promise((resolve) => setTimeout(resolve, 200));
 		}
 	};
@@ -550,7 +651,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			}
 			await refresh();
 		};
-		const sharing = shared.state?.sharing;
+		const sharing = homeLink()?.state?.sharing;
 		if (!sharing) {
 			const port = await ctx.ui.input("Sharing is direct between machines, with no server. Port to accept your collaborators on:", "47610");
 			if (port === undefined) return;
@@ -619,21 +720,21 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			act: async () => ctx.ui.notify(sharing.people.map((person) => `${person.name}${person.self ? " (you)" : person.online ? "  online" : "  offline"}  ${person.fingerprint}`).join("\n"), "info"),
 		});
 		options.push({ label: "Refresh from everyone online", act: () => run("refresh", []) });
-		const picked = await ctx.ui.select(`Sharing as ${shared.state?.owner ?? "you"}`, options.map((option) => option.label));
+		const picked = await ctx.ui.select(`Sharing as ${homeLink()?.state?.owner ?? "you"}`, options.map((option) => option.label));
 		await options.find((option) => option.label === picked)?.act();
 	};
 
-	const SUBCOMMANDS = ["open", "new", "answer", "approvals", "share", "sleep", "status", "stop"];
+	const SUBCOMMANDS = ["open", "back", "new", "answer", "approvals", "share", "sleep", "status", "stop"];
 
 	pi.registerCommand("lattice", {
-		description: "Session tree: /lattice [open <session> | new | answer <session> | approvals | share | sleep <session> | status | stop]",
+		description: "Session tree: /lattice [open <session> | back | new | answer <session> | approvals | share | sleep <session> | status | stop]",
 		getArgumentCompletions: (prefix) => {
 			const words = prefix.split(/\s+/);
 			if (words.length <= 1) {
 				const matches = SUBCOMMANDS.filter((sub) => sub.startsWith(words[0] ?? ""));
 				return matches.length > 0 ? matches.map((sub) => ({ value: sub, label: sub })) : null;
 			}
-			const matches = (shared.state?.nodes ?? []).filter((node) => node.name.startsWith(words[1] ?? ""));
+			const matches = everyNode().filter((node) => node.name.startsWith(words[1] ?? ""));
 			return matches.length > 0 ? matches.map((node) => ({ value: `${words[0]} ${node.id}`, label: node.name, description: `${node.owner} · ${node.kind}` })) : null;
 		},
 		handler: async (args, ctx) => {
@@ -646,7 +747,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				if (sub === "" && !shared.current) await begin(ctx);
 				else if (sub === "" || sub === "status") {
 					await refresh();
-					const state = shared.state;
+					const state = homeLink()?.state;
 					ctx.ui.notify(
 						state
 							? [`Tree of ${state.nodes.length} session${state.nodes.length === 1 ? "" : "s"}, as ${state.owner}. Open here: ${shared.current ? name(shared.current) : "none"}.`, ...renderCompact(view(), 30), "alt+l focuses the pane · /lattice new · /lattice approvals · /lattice share"].join("\n")
@@ -654,6 +755,10 @@ export default function paneExtension(pi: ExtensionAPI): void {
 						"info",
 					);
 				} else if (sub === "open") await open(ctx, arg);
+				else if (sub === "back") {
+					if (shared.previous) await open(ctx, shared.previous);
+					else ctx.ui.notify("There is no earlier session to go back to.", "info");
+				}
 				else if (sub === "new") await create(ctx, arg);
 				else if (sub === "answer") {
 					await refresh();
@@ -664,7 +769,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				else if (sub === "share") await share(ctx, arg);
 				else if (sub === "sleep") {
 					const node = find(arg);
-					if (node) await need(ctx)?.ui("sleep", { nodeId: node.id });
+					if (node) await linkOf(node.id)?.client.ui("sleep", { nodeId: node.id });
 				} else if (sub === "stop") {
 					const client = need(ctx);
 					if (!client) return;
@@ -672,11 +777,10 @@ export default function paneExtension(pi: ExtensionAPI): void {
 					emitEvent(pi.events, "lattice:host:assigned", { assignment: null });
 					await client.ui("shutdown", {}).catch(() => {});
 					client.close();
-					shared.client = undefined;
-					shared.state = undefined;
+					if (shared.home) shared.links.delete(shared.home);
 					redraw();
 					ctx.ui.notify("The lattice host is stopping. Sessions are saved and come back with /lattice.", "info");
-				} else ctx.ui.notify("Usage: /lattice [open <session> | new | answer <session> | approvals | share | sleep <session> | status | stop]", "warning");
+				} else ctx.ui.notify("Usage: /lattice [open <session> | back | new | answer <session> | approvals | share | sleep <session> | status | stop]", "warning");
 			} catch (error) {
 				fail(ctx, error);
 			}

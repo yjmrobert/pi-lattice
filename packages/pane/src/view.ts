@@ -58,6 +58,10 @@ export interface PaneRepo {
 
 export interface PaneView {
 	repos: PaneRepo[];
+	/** Repositories with a tree whose host is not running. Each is one line; opening it starts its host. */
+	asleep?: Array<{ key: string; name: string }>;
+	/** Whether there is a session to go back to with `-`. */
+	previous?: boolean;
 	/** The node open in this terminal. */
 	current: string | undefined;
 	/** What the cursor is on: a key from {@link paneOrder}. */
@@ -76,6 +80,7 @@ export interface PaneView {
 
 export const nodeKey = (id: string): string => `n:${id}`;
 export const itemKey = (id: string): string => `i:${id}`;
+export const repoKey = (key: string): string => `r:${key}`;
 
 const SPINNER = [..."⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"];
 const ITEM_ICON: Record<InboxItem["kind"], string> = { question: "?", message: "✉", pair: "⇄", offer: "⇄", release: "⇄" };
@@ -164,7 +169,11 @@ export function paneInbox(view: PaneView): Array<{ item: InboxItem; repo: PaneRe
 
 /** What the cursor can be on, in the order shown: waiting items, then every session. */
 export function paneOrder(view: PaneView): string[] {
-	return [...paneInbox(view).map(({ item }) => itemKey(item.id)), ...view.repos.flatMap((repo) => treeLines(repo.state.nodes).map((line) => nodeKey(line.node.id)))];
+	return [
+		...paneInbox(view).map(({ item }) => itemKey(item.id)),
+		...view.repos.flatMap((repo) => treeLines(repo.state.nodes).map((line) => nodeKey(line.node.id))),
+		...(view.asleep ?? []).map((repo) => repoKey(repo.key)),
+	];
 }
 
 /** The repository a session belongs to, and the session. */
@@ -278,7 +287,8 @@ function footer(view: PaneView, waiting: number, width: number, paint: Paint): S
 		const left: Seg[] = [[" "], key("alt+l"), word(waiting > 0 ? " to answer" : " sessions")];
 		return [rule, widthOf(left) + widthOf(right) + 1 <= width ? spread(left, right, width) : left];
 	}
-	return [rule, ...flow([...(view.keys ?? [["⏎", "open"], ["n", "new"], ["o", "share"]]), ["↑↓", "move"], ["esc", "back"]], width, paint)];
+	const back: Array<readonly [string, string]> = view.previous ? [["-", "previous"]] : [];
+	return [rule, ...flow([...(view.keys ?? [["⏎", "open"], ["n", "new"], ["o", "share"]]), ...back, ["↑↓", "move"], ["esc", "close"]], width, paint)];
 }
 
 /**
@@ -300,13 +310,15 @@ export function renderPane(view: PaneView, width: number, paint: Paint = PLAIN):
 	};
 
 	const inbox = paneInbox(view);
-	const several = view.repos.length > 1;
+	const asleep = view.asleep ?? [];
+	const groups = view.repos.filter((repo) => repo.state.nodes.length > 0);
+	const several = groups.length + asleep.length > 1;
 	if (inbox.length > 0) {
 		push(spread([[" NEEDS YOU", (text) => paint.warn(paint.bold(text))]], [[String(inbox.length), paint.warn], [" "]], inner));
 		inbox.forEach(({ item, repo }, index) => {
 			const key = itemKey(item.id);
 			const number = view.focused && index < 9 ? `${index + 1} ` : "";
-			const from = several && !repo.here ? repo.name : "";
+			const from = repo.here ? "" : repo.name;
 			const lead: Seg[] = [[` ${number}`, paint.bold], [ITEM_ICON[item.kind], paint.warn], [" "]];
 			const title = fit(item.title, Math.max(4, inner - widthOf(lead) - (from ? [...from].length + 2 : 1)));
 			push(from ? spread([...lead, [title, paint.bold]], [[fit(from, 14), paint.accent], [" "]], inner) : [...lead, [title, paint.bold]], key);
@@ -318,19 +330,21 @@ export function renderPane(view: PaneView, width: number, paint: Paint = PLAIN):
 		push([["─".repeat(inner), paint.dim]]);
 	}
 
-	const sessions = view.repos.reduce((sum, repo) => sum + repo.state.nodes.length, 0);
-	if (sessions === 0) {
+	// With no tree in the repository this terminal is in, say how to start one before listing the others.
+	if (!groups.some((repo) => repo.here)) {
 		for (const text of (view.hint ?? "No sessions yet.").split("\n")) push([[fit(` ${text}`, inner), paint.dim]]);
+		if (groups.length + asleep.length > 0) push([[""]]);
 	}
-	for (const repo of view.repos) {
-		if (repo.state.nodes.length === 0) continue;
+	for (const repo of groups) {
 		const counts = tally(repo);
 		// A repository this terminal is not in stays folded to one line while nothing in it is working or waiting.
-		const folded = several && !repo.here && !view.focused && counts.working === 0 && counts.waiting === 0;
+		const folded = !repo.here && !view.focused && counts.working === 0 && counts.waiting === 0;
 		push(repoHeader(repo, !several, folded, frame, inner, paint));
 		if (folded) continue;
 		for (const { node, prefix } of treeLines(repo.state.nodes)) push(sessionRow(node, prefix, repo, view, inner, paint), nodeKey(node.id), false);
 	}
+
+	for (const repo of asleep) push(spread([[` ◇ ${fit(repo.name, Math.max(4, inner - 11))}`, paint.dim]], [["asleep", paint.dim], [" "]], inner), repoKey(repo.key));
 
 	const foot = footer(view, inbox.length, inner, paint);
 	const rows = body.map(draw);

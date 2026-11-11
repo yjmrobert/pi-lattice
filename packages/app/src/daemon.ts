@@ -8,11 +8,12 @@
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { CollabSession, Identity, PeerBook, TcpTransport } from "@pi-lattice/collab";
-import type { UiState } from "@pi-lattice/protocol";
+import { encodeTree, latticeHome, TREES_DIR, treeEntryName, type UiState } from "@pi-lattice/protocol";
 import { type HostOptions, LatticeHost, type SharingPort } from "@pi-lattice/host";
 
 export interface DaemonOptions {
@@ -247,6 +248,14 @@ export async function runDaemon(options: DaemonOptions): Promise<Daemon> {
 			void stop();
 		}
 	}, options.tickMs ?? 2000);
+	// Let this person's terminals in other repositories find this tree.
+	try {
+		const trees = join(latticeHome(process.env, homedir()), TREES_DIR);
+		mkdirSync(trees, { recursive: true });
+		writeFileSync(join(trees, treeEntryName(stateDir)), encodeTree({ stateDir, root: resolve(options.cwd) }));
+	} catch (error) {
+		log("error", `Could not record this tree for other terminals: ${error instanceof Error ? error.message : String(error)}`);
+	}
 	log("info", `Host started for ${stateDir} as ${host.owner}.`);
 	return { host, done, stop };
 }

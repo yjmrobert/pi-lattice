@@ -1,9 +1,10 @@
 /** Finding and connecting to the project's background host. */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { emitEvent, type EventBus, HostClient } from "@pi-lattice/protocol";
+import { decodeTree, emitEvent, type EventBus, HostClient, type KnownTree, latticeHome, TREES_DIR } from "@pi-lattice/protocol";
 
 /** The directory that owns the tree for a working directory: the main checkout of its repository, else itself. */
 export function projectRoot(cwd: string): string {
@@ -98,4 +99,25 @@ export async function launchHost(bus: EventBus, stateDir: string, cwd: string, t
 		}
 		await new Promise((resolveWait) => setTimeout(resolveWait, 100));
 	}
+}
+
+/** Every tree this person's hosts have recorded that still exists, whether or not its host is running. */
+export function knownTrees(): KnownTree[] {
+	const dir = join(latticeHome(process.env, homedir()), TREES_DIR);
+	let names: string[];
+	try {
+		names = readdirSync(dir).filter((name) => name.endsWith(".json")).sort();
+	} catch {
+		return [];
+	}
+	const trees: KnownTree[] = [];
+	for (const name of names) {
+		try {
+			const tree = decodeTree(readFileSync(join(dir, name), "utf8"));
+			if (tree && hasTree(tree.stateDir)) trees.push(tree);
+		} catch {
+			// Unreadable entries are skipped.
+		}
+	}
+	return trees;
 }

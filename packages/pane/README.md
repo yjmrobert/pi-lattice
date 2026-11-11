@@ -30,7 +30,8 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | `a` `x` | Approve or reject the selected message; accept or decline an offered session |
 | `n` / `/lattice new` | Create a child: name, kind, roles, workspace, brief |
 | `o` / `/lattice share` | Pair with someone, offer or accept a session, confirm a release |
-| `/lattice open <name>` | Open a session by name |
+| `-` / `/lattice back` | Go back to the session you were in before, in any repository |
+| `/lattice open <name>` | Open a session by name, from any repository |
 | `/lattice answer <name>` | Answer the questions a background session is waiting on |
 | `/lattice approvals` | Review messages waiting for your approval |
 | `/lattice status` | List the whole tree |
@@ -41,6 +42,30 @@ The footer shows the keys that act on whatever the cursor is on. The item under 
 Marks: a spinner for working, `●` in the attention colour for waiting on you, dim `●` idle, `○` asleep or offline, `✓` finished, `✗` failed, `▸` open in this terminal, `?n` questions waiting on you, `✉n` messages to approve. The attention colour is used for nothing else.
 
 Each session is one line. The kind is on the right, or the owner when the session is someone else's. What is waiting on you is listed above the tree. The design, with drawings of every screen, is [ADR 0015](../../docs/decisions/0015-pane-design.md).
+
+## Several repositories
+
+Each repository keeps its own tree. The pane shows all of them: the one this terminal is in first, marked `◆`, then every other repository where you have a tree, marked `◇`. What is waiting on you is listed for all of them together, with the repository each item is from.
+
+```
+ NEEDS YOU                      1
+ ? pdf-renderer       billing-api
+   Overwrite fixtures/invoice.pdf?
+──────────────────────────────────
+ ◆ shop                        ⠹1
+▸ ⠹ checkout              feature
+  └ ● payments               task
+ ◇ billing-api              ⠹1 ●1
+  ⠹ invoice-export        feature
+  └ ● pdf-renderer        ?1 task
+ ◇ docs-site               2 idle
+```
+
+- A repository where nothing is working or waiting folds to one line. Giving the pane the keyboard opens them all.
+- `enter` on a session in another repository opens it here like any other. Pi moves to that repository: its tools, settings and project files are that repository's from then on, and a notice says where you now are. The session you left carries on in the background.
+- `-` (with the pane focused) or `/lattice back` returns to the session you were in before.
+- A repository whose background host has stopped is listed as `asleep`; `enter` on it starts the host again.
+- Quitting Pi leaves your shell in the directory you started Pi from.
 
 ## What opening a session does
 
@@ -54,6 +79,6 @@ Sessions owned by someone else open read-only, fetched from them while they are 
 
 ## Where things live
 
-The tree for a project is kept in `<repository>/.lattice/`. The background host starts on demand and stops by itself after ten minutes with nothing to do. Its log is `.lattice/daemon.log`.
+The tree for a project is kept in `<repository>/.lattice/`. Each host also records its tree in `~/.pi/agent/lattice/trees/`, which is how a terminal in one repository finds the others. The background host starts on demand and stops by itself after ten minutes with nothing to do. Its log is `.lattice/daemon.log`.
 
 How this is built, and its limits, are in [ADR 0013](../../docs/decisions/0013-pane-inside-pi.md).

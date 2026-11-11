@@ -209,7 +209,7 @@ describe("keys while the pane has the keyboard", () => {
 		expect(cursorKeys(at(itemKey("m:a:e1")))).toEqual([["a", "approve"], ["x", "reject"]]);
 		expect(cursorKeys(at(nodeKey("a")))).toEqual([["⏎", "open"], ["n", "new"], ["o", "share"]]);
 		const v = at(itemKey("q:a:d1"));
-		expect(renderPane({ ...v, keys: cursorKeys(v) }, 34).at(-1)).toBe(" y yes  n no  ↑↓ move  esc back");
+		expect(renderPane({ ...v, keys: cursorKeys(v) }, 34).at(-1)).toBe(" y yes  n no  ↑↓ move  esc close");
 	});
 
 	it("shows all of an item's text under the cursor, wrapped, and one line otherwise", () => {
