@@ -7,9 +7,10 @@ A coordinator session takes a feature through grilling, planning, implementation
 With the pi-lattice bundle installed (`pi install /path/to/pi-lattice`), open `pi` in the project you want to work on. It should be a git repository with at least one commit, so implementation children can get worktrees.
 
 ```
-/lattice
 /role set coordinator lifecycle feature
 ```
+
+(In a directory that is not a git repository, run `/lattice` first.)
 
 Then tell the session what you want:
 

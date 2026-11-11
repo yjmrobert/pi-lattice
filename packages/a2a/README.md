@@ -26,6 +26,8 @@ Inbound messages reach the model as a delimited `<lattice-message>` block that n
 - `always`: every message.
 - `never`: none.
 
+With neither set, a session in a tree uses the `approval` setting of that tree (`/lattice config approval always`), which whoever knows the tree answers over the event bus.
+
 The owner is `LATTICE_OWNER`, else the OS user name. It is a claim, not proof, until collab signatures exist.
 
 ## Limits

@@ -21,10 +21,12 @@ Then open `pi` in a project as you always do. A pane on the left lists the proje
  alt+l to answer        1 waiting
 ```
 
-- The first time in a project, run `/lattice` once to start a tree. After that the pane is populated whenever Pi opens, and each new session joins with its first message.
+- In a git repository there is nothing to set up: your first message starts the tree, and each new session joins with its first message. Elsewhere, run `/lattice` once.
 - What needs you is listed above the tree: questions a background session is stuck on, messages to approve. `alt+l` gives the pane the keyboard, and you answer them where they are (`y`/`n`, `a`/`x`).
 - With the keyboard, the chat steps aside to show the selected session in full. `enter` opens it in this terminal, with all of Pi. You can switch at any time, even mid-turn: the work you leave carries on in the background.
-- `n` creates a child session from one form. Agents can also delegate on their own. Children run in the background.
+- `n` creates a child session from one form. Agents can also delegate on their own. Children run in the background, each on the model you choose.
+- `r` renames a session, `d` archives it, `s` stops what it is doing. `?` lists every key, and `/lattice help` every command.
+- `/lattice config` sets the model, thinking level and approval policy for a repository's background sessions. `/lattice doctor` checks the setup.
 - Work in several repositories shows in one pane. Opening a session from another repository moves this terminal there; `-` goes back.
 - `/lattice share` pairs you with a collaborator, peer to peer, so you see each other's sessions and can hand one over.
 

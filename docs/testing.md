@@ -35,7 +35,7 @@ pi --list-models haiku
 
 Pi 1.5.2 ships knowing `claude-haiku-4-5`. If the list shows `claude-haiku-5-5`, use that instead in what follows.
 
-Make it the default, so that every session uses it, including the background ones you never start yourself. Edit `~/.pi/agent/settings.json` and add three keys, keeping the ones already there:
+Make it the default, so that every session uses it, including the background ones you never start yourself. Edit `~/.pi/agent/settings.json` and add three keys, keeping the ones already there. (Step 9 sets a different model for one repository's background sessions instead.)
 
 ```json
 {
@@ -88,9 +88,10 @@ Use a terminal at least 110 columns wide and 30 rows tall. Step 8 narrows it on 
 cd ~/lattice-test/shop && pi
 ```
 
-1. The pane is on the left and says the project has no sessions.
-2. Run `/lattice`. The pane shows `◆ shop` and one session, marked `▸`.
-3. Send:
+1. The pane is on the left and says your next message starts a session here.
+2. Send `Say hello in five words.` Within a second or two the pane shows `◆ shop` and one session named after the message, marked `▸`. You did not run any command.
+3. `git status` in another terminal shows nothing new: `.lattice/` ignores itself.
+4. Send:
 
    > Use spawn_session twice. First: name "payments", kind "task", brief "List the files in this directory, then send your parent a one-line summary with send_message." Second: name "cart", kind "task", brief "Write a haiku about shopping carts to cart.txt, then send your parent a one-line summary with send_message."
 
@@ -109,6 +110,7 @@ Check:
 - [ ] The chat is replaced by an inspector for the session under the cursor: state and how long, place in the tree, brief, roles, workspace, directory.
 - [ ] The cursor row has a highlighted background.
 - [ ] The footer lists the keys that work on the selected row.
+- [ ] For a child, the inspector shows `used` (tokens and cost) and `RECENT` with the last things it said and did. While one is working, the last line changes as it goes.
 
 2. Move with `↑` `↓`. The inspector follows.
 3. Press `enter` on `payments`.
@@ -125,14 +127,13 @@ Check:
 
 ## 4. Messages to approve
 
-Messages between your own sessions skip approval by default. To see the approval flow, the host has to be restarted with a different setting. Run `/lattice stop`, quit Pi (`/quit`), and start again:
+Messages between your own sessions skip approval by default. Turn approval on for this repository:
 
-```bash
-cd ~/lattice-test/shop
-LATTICE_APPROVAL=always pi -c
+```
+/lattice config approval always
 ```
 
-The pane starts the host again by itself; the host and every background session inherit the variable.
+It applies to this session at once and to background sessions started from now on. Put this terminal behind another window before sending the next prompt, to check the bell and the title.
 
 Send:
 
@@ -141,6 +142,7 @@ Send:
 Check:
 
 - [ ] A `NEEDS YOU` section appears at the top of the pane with the message, and the session it is for shows `✉1`.
+- [ ] The terminal bell rings, and the terminal's title starts with `● 1 waiting`. The title goes back once it is answered.
 - [ ] The item is in the attention colour, and nothing else in the pane is.
 - [ ] `alt+l`: the cursor starts on the item and the inspector shows the full message text.
 - [ ] `a` approves it. The item disappears, the cursor lands somewhere sensible, and the open session receives the message.
@@ -165,15 +167,15 @@ Check:
 
 1. `alt+l`, put the cursor on the top session, press `n`.
 
-- [ ] A form replaces the chat with every field visible: name, kind, roles, workspace, brief.
+- [ ] A form replaces the chat with every field visible: name, kind, model, roles, workspace, brief.
 
-2. Fill it in: name `notes`, kind `task`, choose the `worker` role (`←` `→` to move, `space` to choose), leave the workspace, brief `Write three bullet points about this repository to NOTES.md.`
+2. Fill it in: name `notes`, kind `task`, leave the model empty, choose the `worker` role (`←` `→` to move, `space` to choose), leave the workspace, brief `Write three bullet points about this repository to NOTES.md.`
 3. `tab` and `shift+tab` move between fields. `ctrl+s` creates.
 
+- [ ] While you type the name, a dim row with that name appears in the tree under its parent.
+- [ ] In the name, `←` moves the caret back and typing inserts there; `home`, `end`, `backspace` and `delete` behave as in any editor.
 - [ ] `notes` appears in the tree and starts working.
-- [ ] Open the form again and press `esc`: nothing is created and the chat returns.
-
-Known gaps, not bugs: there is no preview row in the tree while the form is open, and text can only be edited at its end.
+- [ ] Open the form again and press `esc`: nothing is created, the dim row goes, and the chat returns.
 
 ## 7. Several repositories
 
@@ -199,6 +201,7 @@ Back in the **first terminal** (shop), within a few seconds:
 Then test a sleeping repository. In the second terminal, run `/lattice stop` and quit Pi.
 
 - [ ] In the first terminal, billing-api is listed as `asleep` with a dim `○`.
+- [ ] (Slow, optional.) Without `/lattice stop`: quit the second terminal's Pi and leave the first one open. Ten minutes after billing-api's sessions go quiet it turns to `asleep` by itself, even though the first terminal is still showing it.
 - [ ] `alt+l`, cursor on it, `enter`: its host starts again and its sessions come back.
 
 ## 8. Narrow terminal
@@ -209,7 +212,46 @@ Resize the first terminal to under 90 columns.
 - [ ] `alt+l` shows the pane and inspector in place of the chat; `esc` returns.
 - [ ] Widen the terminal again: the side pane comes back with no leftover rows.
 
-## 9. Under a real workload (optional)
+## 9. Tidying, stopping and settings
+
+In `shop`:
+
+1. `alt+l`, cursor on `notes`, press `r`, type `repo notes`, `enter`.
+
+- [ ] The row is renamed.
+
+2. Give a session something long: send `Use spawn_session: name "counter", kind "task", brief "Count from 1 to 300 with bash, one number per command."` Then `alt+l`, cursor on `counter` while it is working, press `s`.
+
+- [ ] The footer of the inspector says `s again to stop`. Pressing another key withdraws it.
+- [ ] `s` `s` stops it: the spinner becomes a dim `●` and a notice says it was stopped.
+
+3. Cursor on `counter`, press `d`.
+
+- [ ] It leaves the tree, with a notice saying how to bring it back.
+- [ ] `/lattice restore` lists it; choosing it puts it back.
+- [ ] `d` on the session marked `▸` does nothing, and its footer does not offer it.
+
+4. Press `?` in the pane.
+
+- [ ] Every key is listed where the inspector was. `?` or `esc` closes it.
+
+5. Settings and health:
+
+```
+/lattice config model anthropic/claude-haiku-4-5
+/lattice config thinking low
+/lattice config
+/lattice doctor
+/lattice help
+```
+
+- [ ] `/lattice config` lists what you set, and `.lattice/config.json` holds it.
+- [ ] A child created now shows that model nowhere (it is the repository's default), but one created from the form with a model typed in shows `model` in the inspector.
+- [ ] `/lattice doctor` shows a tick for the model, credentials, repository, tree, host, settings and roles.
+- [ ] `/lattice config thinking loud` is refused with the list of levels.
+- [ ] `/lattice restart` restarts the host and leaves you in the same session.
+
+## 10. Under a real workload (optional)
 
 Follow [a feature through the full lifecycle](../examples/feature-lifecycle/README.md) in `shop`. Haiku at low thinking will follow the role fragments loosely; what matters for this test is that the pane stays readable with four or five sessions changing state, and that you can always tell which one needs you.
 

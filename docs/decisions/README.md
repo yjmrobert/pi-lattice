@@ -20,3 +20,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0013 | The tree lives inside Pi, as a pane | accepted |
 | 0014 | Package seams | accepted |
 | 0015 | The pane: a rail, an inbox, an inspector, and every repository | accepted |
+| 0016 | Working in the pane: tidying, stopping, settings, and no setup step | accepted |
