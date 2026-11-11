@@ -1,0 +1,25 @@
+name: Newest Pi
+
+# The pane sits beside Pi by using parts of Pi that are not a documented extension point
+# (ADR 0013). This runs the whole suite against the newest Pi once a week, so a release that
+# changes them is noticed here and not by someone whose pane quietly became two rows.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save @earendil-works/pi-coding-agent@latest @earendil-works/pi-ai@latest @earendil-works/pi-tui@latest
+      - run: npm ls @earendil-works/pi-coding-agent
+      - run: npm run typecheck
+      - run: npm test
