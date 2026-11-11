@@ -7,6 +7,8 @@ Status: early. `@pi-lattice/a2a` ([try it](examples/minimal-two-agents/README.md
 - [Architecture](docs/architecture.md)
 - [Decisions](docs/decisions/README.md)
 - [Envelope specification](docs/envelope-spec.md)
+- [Roles](docs/roles.md)
+- Examples: [two agents, no host](examples/minimal-two-agents/README.md), [a feature through the full lifecycle](examples/feature-lifecycle/README.md)
 
 ## Development
 
