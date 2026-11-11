@@ -5,7 +5,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -128,6 +128,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private readonly runtimes = new Map<string, Runtime>();
 	private readonly starting = new Map<string, Promise<void>>();
 	private readonly pinned = new Set<string>();
+	private remoteRouter: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined;
 	private stopped = false;
 
 	private constructor(options: HostOptions) {
@@ -230,6 +231,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	async spawnChild(parentId: string, spec: SpawnSpec): Promise<NodeMeta> {
 		const parent = this.store.getNode(parentId);
 		if (!parent) throw new Error(`No node ${parentId} in this tree.`);
+		if (parent.owner !== this.owner) throw new Error(`"${parent.name}" is owned by ${parent.owner}. Children can only be added under sessions you own.`);
 		const all = this.store.listNodes();
 		if (typeof spec.name !== "string" || spec.name.trim() === "") throw new Error("A child session needs a name.");
 		if (typeof spec.brief !== "string" || spec.brief.trim() === "") throw new Error("A child session needs a brief.");
@@ -313,6 +315,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private async startNode(id: string): Promise<void> {
 		if (this.stopped) throw new Error("The lattice host is shutting down.");
 		const node = this.must(id);
+		if (node.owner !== this.owner) {
+			throw new Error(`"${node.name}" is owned by ${node.owner} and runs on their machine. You can see it here, but not run it.`);
+		}
 		await this.makeRoom(id);
 
 		const token = randomBytes(24).toString("hex");
@@ -324,6 +329,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			"--session-dir", sessionDir,
 		];
 		if (node.sessionFile && existsSync(node.sessionFile)) args.push("--session", node.sessionFile);
+		else if (existsSync(this.adoptPath(id))) args.push("--fork", this.adoptPath(id), "--name", node.name);
 		else args.push("--name", node.name);
 
 		const proc = new PiProcess({
@@ -528,6 +534,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			if (hello.sessionId !== undefined && node?.sessionId !== hello.sessionId) patch.sessionId = hello.sessionId;
 			if (hello.sessionFile !== undefined && node?.sessionFile !== hello.sessionFile) patch.sessionFile = hello.sessionFile;
 			if (Object.keys(patch).length > 0) this.update(connection.nodeId, patch);
+			// A transferred session has now been forked into a local one; the transfer copy is no longer needed.
+			if (hello.sessionFile !== undefined && existsSync(this.adoptPath(connection.nodeId))) unlinkSync(this.adoptPath(connection.nodeId));
 		}
 		if (connection.channel === "a2a") {
 			runtime.inflight.clear();
@@ -606,9 +614,15 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			recipients = [envelope.to];
 		}
 
-		for (const recipient of recipients) this.store.journal(envelope, recipient);
+		const remote = recipients.map((id) => this.must(id)).filter((node) => node.owner !== this.owner);
+		if (remote.length > 0 && !this.remoteRouter) {
+			throw new Error(`Not sent: ${remote.map((node) => `"${node.name}"`).join(", ")} belongs to ${remote[0]?.owner}, and this tree is not being shared right now.`);
+		}
+		const local = recipients.filter((id) => !remote.some((node) => node.id === id));
+		for (const recipient of local) this.store.journal(envelope, recipient);
+		for (const node of remote) this.remoteRouter?.(envelope, node);
 		this.emit("envelope", envelope, recipients);
-		for (const recipient of recipients) {
+		for (const recipient of local) {
 			if (!this.flush(recipient)) {
 				// Dormant recipient: wake it. The mail is delivered when its session connects.
 				this.ensureRunning(recipient).catch((error: unknown) => {
@@ -617,6 +631,77 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			}
 		}
 		return { recipients };
+	}
+
+	// --- shared trees ----------------------------------------------------------
+
+	private adoptPath(id: string): string {
+		return join(this.stateDir, "adopt", `${id}.jsonl`);
+	}
+
+	/** Called with every envelope addressed to a node another person owns. Without one, such sends are refused. */
+	setRemoteRouter(router: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined): void {
+		this.remoteRouter = router;
+	}
+
+	/** Record or refresh a node that someone else owns. It appears in the tree but cannot be run here. */
+	importRemoteNode(remote: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt">): void {
+		if (remote.owner === this.owner) throw new Error("importRemoteNode is for nodes owned by someone else.");
+		const existing = this.store.getNode(remote.id);
+		if (!existing) {
+			const node: NodeMeta = { ...remote, sessionId: null, sessionFile: null, cwd: "", updatedAt: new Date().toISOString() };
+			this.store.insertNode(node);
+			this.emit("node", node);
+			return;
+		}
+		if (existing.owner === this.owner) return; // releasing a node is explicit; see releaseNode
+		const changed = (["parentId", "kind", "name", "brief", "owner", "version", "status", "workspace", "branch"] as const).some((key) => existing[key] !== remote[key]) ||
+			existing.fragments.join(",") !== remote.fragments.join(",");
+		if (changed) {
+			this.update(remote.id, {
+				parentId: remote.parentId, kind: remote.kind, name: remote.name, brief: remote.brief, fragments: remote.fragments, owner: remote.owner,
+				version: remote.version, status: remote.status, workspace: remote.workspace, branch: remote.branch,
+			});
+		}
+	}
+
+	/** Deliver an envelope that arrived from another person's host to a node owned here. */
+	deliverExternal(value: unknown, recipientId: string): void {
+		const checked = validateEnvelope(value, this.limits);
+		if (!checked.ok) throw new Error(`Rejected remote mail: ${checked.errors.join("; ")}`);
+		const recipient = this.must(recipientId);
+		if (recipient.owner !== this.owner) throw new Error(`Rejected remote mail: ${recipientId} is not owned here.`);
+		this.store.journal(checked.envelope, recipientId);
+		this.emit("envelope", checked.envelope, [recipientId]);
+		if (!this.flush(recipientId)) {
+			this.ensureRunning(recipientId).catch((error: unknown) => {
+				this.emit("log", "warn", `Mail for ${recipientId} is queued; the session could not be started: ${error instanceof Error ? error.message : String(error)}`);
+			});
+		}
+	}
+
+	/** Give up a node after a confirmed handoff: stop its session and mark it as someone else's. */
+	async releaseNode(id: string, toOwner: string, version: number): Promise<void> {
+		this.must(id);
+		await this.sleep(id);
+		this.unpin(id);
+		this.update(id, { owner: toOwner, version, status: "dormant" });
+	}
+
+	/**
+	 * Take over a node after a confirmed handoff. The transferred session file is copied and
+	 * forked into a local session the first time the node runs (ADR 0007).
+	 */
+	adoptNode(id: string, options: { cwd: string; branch: string | null; workspace: NodeMeta["workspace"]; version: number; sessionFile?: string }): NodeMeta {
+		this.must(id);
+		if (options.sessionFile && existsSync(options.sessionFile)) {
+			mkdirSync(dirname(this.adoptPath(id)), { recursive: true });
+			copyFileSync(options.sessionFile, this.adoptPath(id));
+		}
+		return this.update(id, {
+			owner: this.owner, version: options.version, cwd: resolve(options.cwd), branch: options.branch, workspace: options.workspace,
+			sessionFile: null, sessionId: null, status: "dormant",
+		});
 	}
 
 	// --- shutdown --------------------------------------------------------------
