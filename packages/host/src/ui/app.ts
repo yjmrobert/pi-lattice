@@ -8,6 +8,7 @@ import {
 	type Component, Container, Editor, HStack, matchesKey, type OverlayHandle, ProcessTerminal, ScrollView,
 	stripTerminalSequences, type Terminal, truncateToWidth, TuiAltScreen, VStack,
 } from "@earendil-works/pi-tui";
+import type { CollabSession } from "@pi-lattice/collab";
 import { type NodeMeta, treeLines, WORKSPACE_MODES, type WorkspaceMode } from "@pi-lattice/protocol";
 import { fragmentRoots, loadFragments } from "@pi-lattice/roles";
 import type { Dialog, LatticeHost } from "../host.ts";
@@ -19,8 +20,10 @@ import { TreePanel, type TreeViewState } from "./tree-panel.ts";
 
 export interface TreeAppOptions {
 	host: LatticeHost;
-	/** The node attached at start. */
-	rootId: string;
+	/** The node attached at start, if there is one yet. */
+	rootId: string | undefined;
+	/** Present when the tree is shared with other people. */
+	collab?: CollabSession;
 	/** Defaults to the process terminal. Tests pass a fake. */
 	terminal?: Terminal;
 	/** Role fragments offered when spawning. Defaults to the user's and the built-in fragments. */
@@ -75,8 +78,8 @@ export class TreeApp {
 	constructor(options: TreeAppOptions) {
 		this.options = options;
 		this.host = options.host;
-		this.current = options.rootId;
-		this.selected = options.rootId;
+		this.current = options.rootId ?? "";
+		this.selected = options.rootId ?? "";
 		this.done = new Promise<void>((resolve) => {
 			this.finish = resolve;
 		});
@@ -114,7 +117,16 @@ export class TreeApp {
 
 	start(): void {
 		this.tui.start();
-		this.attach(this.current);
+		if (this.host.node(this.current)) this.attach(this.current);
+		else {
+			const first = this.host.nodes()[0];
+			if (first) this.attach(first.id);
+			else {
+				const empty = new Transcript(this.tui, process.cwd());
+				empty.placeholder(this.options.collab ? "No sessions yet. Press ctrl+o to see who has joined and trust their key." : "No sessions yet.");
+				this.holder.addChild(empty.container);
+			}
+		}
 	}
 
 	stop(): void {
@@ -139,12 +151,20 @@ export class TreeApp {
 		});
 		on("mail", () => this.render());
 		on("envelope", () => this.render());
-		on("session", (nodeId: string, event: RpcRecord) => {
-			if (this.transcripts.get(nodeId)?.handle(event) && nodeId === this.current) this.render();
+		on("session", (nodeId: string, event: RpcRecord, seq: number) => {
+			if (this.transcripts.get(nodeId)?.handle(event, seq) && nodeId === this.current) this.render();
 		});
 		on("log", (level: string, message: string) => {
 			if (level !== "info") this.flash(message);
 		});
+		const collab = this.options.collab;
+		if (collab) {
+			const changed = (): void => this.render();
+			const log = (_level: string, message: string): void => this.flash(message);
+			collab.on("changed", changed);
+			collab.on("log", log);
+			this.unsubscribe.push(() => collab.off("changed", changed), () => collab.off("log", log));
+		}
 	}
 
 	private render(): void {
@@ -187,6 +207,15 @@ export class TreeApp {
 		}
 		const pending = this.host.pendingMail().length;
 		if (pending > 0) lines.push(yellow(` ${pending} message${pending === 1 ? "" : "s"} waiting for approval (ctrl+a)`));
+		const collab = this.options.collab;
+		if (collab) {
+			const strangers = collab.people().filter((person) => !person.self && person.trust !== "trusted");
+			if (strangers.length > 0) lines.push(yellow(` ${strangers.map((person) => person.name).join(", ")} joined; their sessions stay hidden until you trust their key (ctrl+o)`));
+			for (const handoff of collab.handoffs()) {
+				if (handoff.role === "recipient" && handoff.state === "offered") lines.push(yellow(` ${handoff.from} offers you "${handoff.nodeName}" (ctrl+o)`));
+				if (handoff.role === "owner" && handoff.state === "accepted") lines.push(yellow(` ${handoff.to} accepted "${handoff.nodeName}"; confirm the release (ctrl+o)`));
+			}
+		}
 		if (this.flashText) lines.push(dim(` ${this.flashText}`));
 		return lines;
 	}
@@ -198,7 +227,7 @@ export class TreeApp {
 			: "";
 		const keys = this.treeFocused
 			? "↑↓ move · enter open · n new child · s sleep · a approvals · esc back"
-			: "ctrl+t tree · ctrl+n new child · ctrl+a approvals · ctrl+c stop/quit";
+			: `ctrl+t tree · ctrl+n new child · ctrl+a approvals${this.options.collab ? " · ctrl+o sharing" : ""} · ctrl+c stop/quit`;
 		return ` ${where}  ${dim(keys)}`;
 	}
 
@@ -234,7 +263,10 @@ export class TreeApp {
 		const transcript = this.transcript(id);
 		this.holder.clear();
 		this.holder.addChild(transcript.container);
-		if (this.host.isRunning(id)) {
+		const owner = this.host.node(id)?.owner;
+		if (owner !== undefined && owner !== this.host.owner) {
+			transcript.placeholder(`This session is owned by ${owner} and runs on their machine. You can see it in the tree, but its conversation stays with them.`);
+		} else if (this.host.isRunning(id)) {
 			if (!transcript.loaded) void this.loadTranscript(id);
 		} else if (!transcript.loaded) {
 			transcript.placeholder("This session is asleep. Send it a message to wake it.");
@@ -246,10 +278,14 @@ export class TreeApp {
 	private async loadTranscript(id: string): Promise<void> {
 		if (this.loading.has(id)) return;
 		this.loading.add(id);
+		const transcript = this.transcript(id);
 		try {
-			const { messages } = await this.host.rpc<{ messages: RpcRecord[] }>(id, { type: "get_messages" });
-			this.transcript(id).load(messages);
+			// Hold live events while the snapshot is in flight, then apply exactly those that came after it.
+			transcript.beginLoad();
+			const { data, mark } = await this.host.rpcMarked<{ messages: RpcRecord[] }>(id, { type: "get_messages" });
+			transcript.load(data.messages, mark);
 		} catch {
+			transcript.abandonLoad();
 			// The session went away while loading; the next status change retries.
 		} finally {
 			this.loading.delete(id);
@@ -264,6 +300,12 @@ export class TreeApp {
 			if (!live) transcript.loaded = false;
 			else if (!transcript.loaded && node.id === this.current && this.host.isRunning(node.id)) void this.loadTranscript(node.id);
 		}
+		if (!this.host.node(this.current)) {
+			// The first session has appeared (for example after trusting a collaborator): open it.
+			this.attach(node.id);
+			return;
+		}
+		if (node.id === this.current && node.owner !== this.host.owner) this.attach(node.id); // just handed off: show it as theirs
 		if (!this.host.node(this.selected)) this.selected = this.current;
 		this.render();
 	}
@@ -272,12 +314,15 @@ export class TreeApp {
 		const message = text.trim();
 		this.editor.setText("");
 		if (message === "") return;
+		if (!this.host.node(this.current)) {
+			this.flash("There is no session to talk to yet.");
+			return;
+		}
 		this.editor.addToHistory(message);
 		const id = this.current;
-		const wasLoaded = this.transcript(id).loaded;
 		this.host.prompt(id, message, "steer").then(
 			() => {
-				if (!wasLoaded) void this.loadTranscript(id);
+				if (!this.transcript(id).loaded) void this.loadTranscript(id);
 			},
 			(error: unknown) => this.flash(error instanceof Error ? error.message : String(error)),
 		);
@@ -433,6 +478,69 @@ export class TreeApp {
 		}
 	}
 
+	/** Everything about sharing in one place: trust people, and move nodes between owners. */
+	async sharingFlow(): Promise<void> {
+		const collab = this.options.collab;
+		if (!collab) {
+			this.flash("This tree is not shared. Start pi-lattice with --share <git url>.");
+			return;
+		}
+		const choices: Choice[] = [];
+		for (const handoff of collab.handoffs()) {
+			const node = `"${handoff.nodeName}"`;
+			if (handoff.role === "recipient" && handoff.state === "offered") {
+				choices.push({ value: `accept ${handoff.nodeId}`, label: `Accept ${node} from ${handoff.from}`, description: "you take it over once they confirm" });
+				choices.push({ value: `cancel ${handoff.nodeId}`, label: `Decline ${node}` });
+			} else if (handoff.role === "owner" && handoff.state === "accepted") {
+				choices.push({ value: `confirm ${handoff.nodeId}`, label: `Confirm release of ${node} to ${handoff.to}`, description: "this is the step that gives it up" });
+				choices.push({ value: `cancel ${handoff.nodeId}`, label: `Cancel the handoff of ${node}` });
+			} else {
+				choices.push({ value: `cancel ${handoff.nodeId}`, label: `Cancel the handoff of ${node}`, description: handoff.role === "owner" ? `waiting for ${handoff.to} to accept` : `waiting for ${handoff.from} to confirm` });
+			}
+		}
+		for (const person of collab.people()) {
+			if (!person.self && person.trust !== "trusted") {
+				choices.push({ value: `trust ${person.name}`, label: `Trust ${person.name}`, description: person.trust === "changed" ? "their key has CHANGED" : "new collaborator" });
+			}
+		}
+		const target = this.host.node(this.treeFocused ? this.selected : this.current);
+		if (target && target.owner === this.host.owner) choices.push({ value: `offer ${target.id}`, label: `Offer "${target.name}" to someone` });
+		choices.push({ value: "sync", label: "Synchronise now" });
+
+		const picked = await this.askSelect("Sharing", `You are ${this.host.owner}.`, choices);
+		if (picked === undefined) return;
+		const [action, arg = ""] = picked.split(" ");
+		if (action === "sync") await collab.sync();
+		else if (action === "accept") await collab.accept(arg);
+		else if (action === "cancel") await collab.cancel(arg);
+		else if (action === "trust") {
+			const person = collab.people().find((candidate) => candidate.name === arg);
+			if (!person) return;
+			const sure = await this.askSelect(
+				`Trust ${person.name}?`,
+				`Key fingerprint:\n\n  ${person.fingerprint}\n\nCompare it with ${person.name} over a channel you already trust (in person, a call). Once trusted, their sessions appear in your tree and their agents can send your agents mail, which still waits for your approval.${person.trust === "changed" ? "\n\nThis key is DIFFERENT from the one you trusted before. Only continue if they told you they replaced it." : ""}`,
+				[{ value: "no", label: "Not yet" }, { value: "yes", label: "The fingerprint matches; trust this key" }],
+			);
+			if (sure === "yes") await collab.trustPerson(person.name);
+		} else if (action === "confirm") {
+			const node = this.host.node(arg);
+			const sure = await this.askSelect(
+				`Release "${node?.name ?? arg}"?`,
+				"This stops the session here and sends its whole conversation, including any file contents and command output in it, through the shared repository, together with its branch if it has one. After this you can no longer run it.",
+				[{ value: "no", label: "Not now" }, { value: "yes", label: "Release it" }],
+			);
+			if (sure === "yes") await collab.confirm(arg);
+		} else if (action === "offer") {
+			const trusted = collab.people().filter((person) => !person.self && person.trust === "trusted");
+			if (trusted.length === 0) {
+				this.flash("There is nobody you trust to offer it to yet.");
+				return;
+			}
+			const to = await this.askSelect("Offer to whom?", "They must accept, and you must then confirm, before ownership moves.", trusted.map((person) => ({ value: person.name, label: person.name })));
+			if (to !== undefined) await collab.offer(arg, to);
+		}
+	}
+
 	// --- keys ------------------------------------------------------------------
 
 	/** Run a user-initiated flow in the background; a failure becomes a notice, never a crash. */
@@ -491,6 +599,10 @@ export class TreeApp {
 			this.run(this.approvalsFlow());
 			return consumed;
 		}
+		if (matchesKey(data, "ctrl+o")) {
+			this.run(this.sharingFlow());
+			return consumed;
+		}
 		if (matchesKey(data, "alt+up") || matchesKey(data, "alt+down")) {
 			this.selected = this.current;
 			this.moveSelection(matchesKey(data, "alt+up") ? -1 : 1);
@@ -510,6 +622,7 @@ export class TreeApp {
 			this.render();
 		} else if (data === "n") this.run(this.spawnFlow(this.selected));
 		else if (data === "a") this.run(this.approvalsFlow());
+		else if (data === "o") this.run(this.sharingFlow());
 		else if (data === "s") void this.host.sleep(this.selected).catch(() => {});
 		return consumed;
 	}

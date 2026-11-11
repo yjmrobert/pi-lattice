@@ -25,14 +25,15 @@ export interface ExitInfo {
 	error?: string;
 }
 
-type Pending = { resolve: (data: unknown) => void; reject: (error: Error) => void };
+type Pending = { resolve: (data: unknown) => void; reject: (error: Error) => void; marked: boolean };
 
-/** Events: `event` (RpcRecord) for every session event and UI request; `exit` (ExitInfo) once. */
+/** Events: `event` (RpcRecord, sequence number) for every session event and UI request; `exit` (ExitInfo) once. */
 export class PiProcess extends EventEmitter {
 	private readonly options: PiProcessOptions;
 	private child: ChildProcess | undefined;
 	private readonly pending = new Map<string, Pending>();
 	private counter = 0;
+	private events = 0;
 	private stderr = "";
 	private exitInfo: ExitInfo | undefined;
 	private stopping = false;
@@ -76,12 +77,13 @@ export class PiProcess extends EventEmitter {
 			const entry = this.pending.get(record.id);
 			if (entry) {
 				this.pending.delete(record.id);
-				if (record.success) entry.resolve(record.data);
-				else entry.reject(new Error(String(record.error ?? "command failed")));
+				if (!record.success) entry.reject(new Error(String(record.error ?? "command failed")));
+				else entry.resolve(entry.marked ? { data: record.data, mark: this.events } : record.data);
 				return;
 			}
 		}
-		this.emit("event", record);
+		this.events++;
+		this.emit("event", record, this.events);
 	}
 
 	private finish(info: ExitInfo): void {
@@ -110,14 +112,27 @@ export class PiProcess extends EventEmitter {
 		return this.stderr;
 	}
 
-	/** Send an RPC command and resolve with its `data`. Rejects when Pi reports failure or exits. */
-	request<T = unknown>(command: RpcRecord): Promise<T> {
+	private send<T>(command: RpcRecord, marked: boolean): Promise<T> {
 		if (this.exitInfo || !this.child?.stdin?.writable) return Promise.reject(new Error("Pi process is not running"));
 		const id = `h${++this.counter}`;
 		return new Promise<T>((resolve, reject) => {
-			this.pending.set(id, { resolve: resolve as (data: unknown) => void, reject });
+			this.pending.set(id, { resolve: resolve as (data: unknown) => void, reject, marked });
 			this.child?.stdin?.write(`${JSON.stringify({ ...command, id })}\n`);
 		});
+	}
+
+	/** Send an RPC command and resolve with its `data`. Rejects when Pi reports failure or exits. */
+	request<T = unknown>(command: RpcRecord): Promise<T> {
+		return this.send<T>(command, false);
+	}
+
+	/**
+	 * Like {@link request}, and also reports how many events had been emitted when the
+	 * response arrived. Events are numbered from 1 in stream order, so a caller holding a
+	 * snapshot can tell exactly which events came after it.
+	 */
+	requestMarked<T = unknown>(command: RpcRecord): Promise<{ data: T; mark: number }> {
+		return this.send<{ data: T; mark: number }>(command, true);
 	}
 
 	/** Answer an extension dialog. */

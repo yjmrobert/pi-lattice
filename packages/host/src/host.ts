@@ -83,8 +83,8 @@ export interface HostEvents {
 	mail: [nodeId: string, envelope: Envelope, state: InboundState];
 	/** The set of dialogs blocking a node changed. */
 	dialog: [nodeId: string];
-	/** A raw session event or UI request from a node's Pi process. */
-	session: [nodeId: string, event: RpcRecord];
+	/** A raw session event or UI request from a node's Pi process, numbered in stream order per process. */
+	session: [nodeId: string, event: RpcRecord, seq: number];
 	log: [level: "info" | "warn" | "error", message: string];
 }
 
@@ -364,7 +364,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		this.runtimes.set(id, runtime);
 		this.update(id, { status: "starting" });
 
-		proc.on("event", (event: RpcRecord) => this.onSessionEvent(id, runtime, event));
+		proc.on("event", (event: RpcRecord, seq: number) => this.onSessionEvent(id, runtime, event, seq));
 		proc.on("exit", (info: ExitInfo) => this.onExit(id, runtime, info));
 		proc.start();
 
@@ -412,7 +412,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (this.store.getNode(id)?.status !== status) this.update(id, { status });
 	}
 
-	private onSessionEvent(id: string, runtime: Runtime, event: RpcRecord): void {
+	private onSessionEvent(id: string, runtime: Runtime, event: RpcRecord, seq: number): void {
 		runtime.lastActive = Date.now();
 		if (event.type === "agent_start") {
 			runtime.streaming = true;
@@ -431,7 +431,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			this.refresh(id, runtime);
 			this.emit("dialog", id);
 		}
-		this.emit("session", id, event);
+		this.emit("session", id, event, seq);
 	}
 
 	private onExit(id: string, runtime: Runtime, info: ExitInfo): void {
@@ -498,6 +498,17 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const runtime = this.runtimes.get(id);
 		if (!runtime) throw new Error(`Session ${id} is not running.`);
 		return runtime.proc.request<T>(command);
+	}
+
+	/**
+	 * Like {@link rpc}, also reporting the sequence number of the last `session` event emitted
+	 * before the response. Use it to combine a snapshot (such as `get_messages`) with the
+	 * live event stream without losing or repeating anything.
+	 */
+	async rpcMarked<T = unknown>(id: string, command: RpcRecord): Promise<{ data: T; mark: number }> {
+		const runtime = this.runtimes.get(id);
+		if (!runtime) throw new Error(`Session ${id} is not running.`);
+		return runtime.proc.requestMarked<T>(command);
 	}
 
 	/** Answer a dialog a node is blocked on. Nothing answers dialogs automatically. */

@@ -17,6 +17,8 @@ export class Transcript {
 	readonly container = new Container();
 	/** True once history has been loaded from the session. */
 	loaded = false;
+	/** Live events held back while a history snapshot is in flight. */
+	private held: Array<{ event: RpcRecord; seq: number }> | undefined;
 	private readonly tui: TUI;
 	private readonly cwd: string;
 	private readonly markdown: MarkdownTheme;
@@ -31,6 +33,7 @@ export class Transcript {
 
 	/** Replace the content with a placeholder line, for nodes whose session is not running. */
 	placeholder(text: string): void {
+		this.held = undefined;
 		this.reset();
 		this.container.addChild(new Text(dim(text), 1, 1));
 	}
@@ -42,11 +45,33 @@ export class Transcript {
 		this.loaded = false;
 	}
 
-	/** Rebuild from a session's full message list. */
-	load(messages: readonly RpcRecord[]): void {
+	/**
+	 * Call before requesting a history snapshot. Until {@link load}, live events are held
+	 * back instead of being applied to content that is about to be replaced.
+	 */
+	beginLoad(): void {
+		this.loaded = false;
+		this.held = [];
+	}
+
+	/** Give up on a load that failed. */
+	abandonLoad(): void {
+		this.held = undefined;
+	}
+
+	/**
+	 * Rebuild from a session's full message list, then apply the held events that came after
+	 * it. `mark` is the sequence number of the last event the snapshot already reflects.
+	 */
+	load(messages: readonly RpcRecord[], mark = Number.POSITIVE_INFINITY): void {
+		const held = this.held ?? [];
+		this.held = undefined;
 		this.reset();
 		for (const message of messages) this.addMessage(message);
 		this.loaded = true;
+		for (const { event, seq } of held) {
+			if (seq > mark) this.handle(event, seq);
+		}
 	}
 
 	/** A line from the host or an extension, shown inline but not part of the conversation. */
@@ -103,8 +128,11 @@ export class Transcript {
 	}
 
 	/** Apply one live session event. Returns true when the transcript changed. */
-	handle(event: RpcRecord): boolean {
-		if (!this.loaded) return false;
+	handle(event: RpcRecord, seq: number): boolean {
+		if (!this.loaded) {
+			this.held?.push({ event, seq });
+			return false;
+		}
 		const message = event.message as RpcRecord | undefined;
 		switch (event.type) {
 			case "message_start":
