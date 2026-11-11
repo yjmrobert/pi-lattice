@@ -66,6 +66,8 @@ export interface PaneView {
 	focused: boolean;
 	/** Text shown when there is no tree yet. */
 	hint?: string;
+	/** The keys that act on what the cursor is on, shown in the footer while the pane has the keyboard. */
+	keys?: ReadonlyArray<readonly [key: string, does: string]>;
 	/** Which frame of the working spinner to draw. */
 	frame?: number;
 	/** Rows available. When given, the footer is pinned to the bottom and a long list scrolls with the cursor. */
@@ -86,6 +88,27 @@ function fit(text: string, width: number): string {
 	const chars = [...text];
 	if (chars.length <= width) return text;
 	return width <= 1 ? chars.slice(0, Math.max(0, width)).join("") : `${chars.slice(0, width - 1).join("")}…`;
+}
+
+/** Break plain text into rows of at most `width` columns, at spaces where it can. */
+export function wrap(text: string, width: number): string[] {
+	const rows: string[] = [];
+	let row = "";
+	for (const word of text.split(" ")) {
+		let rest = word;
+		while ([...rest].length > width) {
+			if (row) rows.push(row);
+			row = "";
+			rows.push([...rest].slice(0, width).join(""));
+			rest = [...rest].slice(width).join("");
+		}
+		if (row && [...row].length + 1 + [...rest].length > width) {
+			rows.push(row);
+			row = rest;
+		} else row = row ? `${row} ${rest}` : rest;
+	}
+	if (row) rows.push(row);
+	return rows;
 }
 
 /** A run of text with one style. Widths are counted on the plain text. */
@@ -255,7 +278,7 @@ function footer(view: PaneView, waiting: number, width: number, paint: Paint): S
 		const left: Seg[] = [[" "], key("alt+l"), word(waiting > 0 ? " to answer" : " sessions")];
 		return [rule, widthOf(left) + widthOf(right) + 1 <= width ? spread(left, right, width) : left];
 	}
-	return [rule, ...flow([["↑↓", "move"], ["⏎", "open"], ["n", "new"], ["a", "approve"], ["o", "share"], ["esc", "back"]], width, paint)];
+	return [rule, ...flow([...(view.keys ?? [["⏎", "open"], ["n", "new"], ["o", "share"]]), ["↑↓", "move"], ["esc", "back"]], width, paint)];
 }
 
 /**
@@ -287,7 +310,10 @@ export function renderPane(view: PaneView, width: number, paint: Paint = PLAIN):
 			const lead: Seg[] = [[` ${number}`, paint.bold], [ITEM_ICON[item.kind], paint.warn], [" "]];
 			const title = fit(item.title, Math.max(4, inner - widthOf(lead) - (from ? [...from].length + 2 : 1)));
 			push(from ? spread([...lead, [title, paint.bold]], [[fit(from, 14), paint.accent], [" "]], inner) : [...lead, [title, paint.bold]], key);
-			push([[fit(`   ${" ".repeat(number.length)}${item.text}`, inner), paint.dim]], key);
+			const indent = `   ${" ".repeat(number.length)}`;
+			// Under the cursor an item shows all of what it says, so it can be answered where it is.
+			if (view.focused && key === view.cursor) for (const text of wrap(item.text, inner - indent.length - 1).slice(0, 6)) push([[`${indent}${text}`]], key);
+			else push([[fit(`${indent}${item.text}`, inner), paint.dim]], key);
 		});
 		push([["─".repeat(inner), paint.dim]]);
 	}

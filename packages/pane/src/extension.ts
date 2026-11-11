@@ -11,7 +11,8 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { emitEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type NodeMeta, type UiState } from "@pi-lattice/protocol";
 import { connectHost, hasTree, launchHost, projectRoot, stateDirFor } from "./locate.ts";
-import { findNode, type InboxItem, inboxItems, itemKey, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, renderCompact, renderPane } from "./view.ts";
+import { cursorKeys, interpretKey, type PaneAction } from "./keys.ts";
+import { type InboxDetails, inboxItems, nodeKey, type Paint, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "./view.ts";
 
 const NODE_ENTRY = "lattice:node";
 const PANE_WIDTH = 34;
@@ -28,6 +29,8 @@ interface Shared {
 	client: HostClient | undefined;
 	stateDir: string | undefined;
 	state: UiState | undefined;
+	/** The questions and messages behind the counts in the state, fetched so they can be shown and answered in place. */
+	details: InboxDetails;
 	/** The node open in this terminal. */
 	current: string | undefined;
 	/** What lets the open session speak as that node. Announced to the other extensions at each session start. */
@@ -49,7 +52,7 @@ interface Shared {
 const KEY = Symbol.for("pi-lattice.pane");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
-	client: undefined, stateDir: undefined, state: undefined, current: undefined, assignment: undefined, cursor: undefined, focused: false, ticker: undefined, paint: PLAIN,
+	client: undefined, stateDir: undefined, state: undefined, details: {}, current: undefined, assignment: undefined, cursor: undefined, focused: false, ticker: undefined, paint: PLAIN,
 	tui: undefined, wrapped: false, compact: false, pi: undefined, ctx: undefined, refreshing: undefined,
 });
 
@@ -57,8 +60,8 @@ const SPINNER_MS = 120;
 
 function view(): PaneView {
 	const state = shared.state;
-	return {
-		repos: state && shared.stateDir ? [{ key: shared.stateDir, name: repoLabel(state, shared.stateDir), state, here: true, inbox: inboxItems(state) }] : [],
+	const base: PaneView = {
+		repos: state && shared.stateDir ? [{ key: shared.stateDir, name: repoLabel(state, shared.stateDir), state, here: true, inbox: inboxItems(state, shared.details) }] : [],
 		current: shared.current,
 		cursor: shared.cursor,
 		focused: shared.focused,
@@ -66,6 +69,14 @@ function view(): PaneView {
 		frame: Math.floor(Date.now() / SPINNER_MS),
 		height: shared.tui?.terminal.rows,
 	};
+	return { ...base, keys: cursorKeys(base) };
+}
+
+/** Where the cursor starts: on what is waiting, if anything is; otherwise on the session open here. */
+function restingCursor(): string | undefined {
+	const order = paneOrder(view());
+	const first = order[0]?.startsWith("i:") ? order[0] : undefined;
+	return first ?? (shared.current ? nodeKey(shared.current) : order[0]);
 }
 
 /** A repository's name: what its sessions report, else the folder its tree is kept in. */
@@ -122,9 +133,11 @@ async function refresh(): Promise<void> {
 	if (!client) return;
 	shared.refreshing ??= client
 		.ui("state", {})
-		.then((state) => {
+		.then(async (state) => {
+			shared.details = await fetchDetails(client, state);
 			shared.state = state;
-			if (shared.cursor && !paneOrder(view()).includes(shared.cursor)) shared.cursor = undefined;
+			// What the cursor was on may be gone (an item just answered): move to the next thing waiting, else to the session open here.
+			if (shared.cursor && !paneOrder(view()).includes(shared.cursor)) shared.cursor = shared.focused ? restingCursor() : undefined;
 		})
 		.catch(() => {})
 		.finally(() => {
@@ -132,6 +145,17 @@ async function refresh(): Promise<void> {
 			redraw();
 		});
 	await shared.refreshing;
+}
+
+/** Fetch the questions and messages that the state only counts. Whatever cannot be fetched stays a count. */
+async function fetchDetails(client: HostClient, state: UiState): Promise<InboxDetails> {
+	const asking = state.nodes.filter((node) => (state.attention[node.id]?.dialogs ?? 0) > 0);
+	const pending = Object.values(state.attention).some((entry) => entry.pending > 0);
+	const [dialogs, mail] = await Promise.all([
+		Promise.all(asking.map(async (node) => [node.id, await client.ui("dialogs", { nodeId: node.id }).then((result) => result.dialogs).catch(() => [])] as const)),
+		pending ? client.ui("pendingMail", {}).then((result) => result.mail).catch(() => []) : Promise.resolve([]),
+	]);
+	return { dialogs: Object.fromEntries(dialogs), mail };
 }
 
 function adoptClient(client: HostClient, stateDir: string): void {
@@ -197,44 +221,34 @@ function dispatch(command: string): void {
 }
 
 function onPaneKey(data: string): void {
-	const current = view();
-	const order = paneOrder(current);
-	const at = Math.max(0, order.indexOf(shared.cursor ?? ""));
-	const move = (delta: number): void => {
-		shared.cursor = order[Math.min(order.length - 1, Math.max(0, at + delta))];
-	};
-	const leave = (): void => {
-		shared.focused = false;
-		shared.cursor = undefined;
-	};
-	const item = paneInbox(current).find((entry) => itemKey(entry.item.id) === shared.cursor)?.item;
-	// The session the cursor is on, or the one a waiting item is about.
-	const target = item ? item.nodeId : shared.cursor?.startsWith("n:") ? shared.cursor.slice(2) : shared.current;
-	if (matchesKey(data, "up") || data === "k") move(-1);
-	else if (matchesKey(data, "down") || data === "j") move(1);
-	else if (matchesKey(data, "escape") || matchesKey(data, "alt+l")) leave();
-	else if (matchesKey(data, "enter")) {
-		leave();
-		if (item) dispatch(itemCommand(item));
-		else if (target && target !== shared.current) dispatch(`/lattice open ${target}`);
-	} else if (data === "n") {
-		leave();
-		dispatch(`/lattice new ${target ?? ""}`.trim());
-	} else if (data === "a") {
-		leave();
-		dispatch("/lattice approvals");
-	} else if (data === "o") {
-		leave();
-		dispatch(`/lattice share ${target ?? ""}`.trim());
-	}
+	const key = matchesKey(data, "up") ? "up" : matchesKey(data, "down") ? "down" : matchesKey(data, "enter") ? "enter" : matchesKey(data, "escape") || matchesKey(data, "alt+l") ? "escape" : data;
+	for (const action of interpretKey(view(), key)) perform(action);
 	redraw();
 }
 
-/** The command that deals with a waiting item. */
-function itemCommand(item: InboxItem): string {
-	if (item.kind === "question") return `/lattice open ${item.nodeId ?? ""}`.trim();
-	if (item.kind === "message") return "/lattice approvals";
-	return `/lattice share ${item.nodeId ?? ""}`.trim();
+/** Carry out what a key press meant. Answers go straight to the host; anything needing Pi's dialogs goes through a command. */
+function perform(action: PaneAction): void {
+	const client = shared.client;
+	const settle = (request: Promise<unknown>): void => {
+		request
+			.catch((error: unknown) => {
+				try {
+					shared.ctx?.ui.notify(error instanceof Error ? error.message : String(error), "error");
+				} catch {
+					shared.ctx = undefined;
+				}
+			})
+			.finally(() => void refresh());
+	};
+	if (action.do === "move") shared.cursor = action.cursor;
+	else if (action.do === "leave") {
+		shared.focused = false;
+		shared.cursor = undefined;
+	} else if (action.do === "command") dispatch(action.text);
+	else if (!client) return;
+	else if (action.do === "answer") settle(client.ui("answerDialog", { nodeId: action.nodeId, dialogId: action.dialogId, answer: { confirmed: action.confirmed } }));
+	else if (action.do === "decide") settle(client.ui("decideMail", { nodeId: action.nodeId, envelopeId: action.envelopeId, action: action.action }));
+	else if (action.do === "sharing") settle(client.ui("sharing", { action: action.action, args: [action.nodeId] }));
 }
 
 export default function paneExtension(pi: ExtensionAPI): void {
@@ -353,10 +367,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			shared.focused = !shared.focused;
-			// Start on what is waiting, if anything is; otherwise on the session open here.
-			const order = paneOrder(view());
-			const first = order[0]?.startsWith("i:") ? order[0] : undefined;
-			shared.cursor = shared.focused ? (first ?? (shared.current ? nodeKey(shared.current) : order[0])) : undefined;
+			shared.cursor = shared.focused ? restingCursor() : undefined;
 			redraw();
 		},
 	});
@@ -612,10 +623,10 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		await options.find((option) => option.label === picked)?.act();
 	};
 
-	const SUBCOMMANDS = ["open", "new", "approvals", "share", "sleep", "status", "stop"];
+	const SUBCOMMANDS = ["open", "new", "answer", "approvals", "share", "sleep", "status", "stop"];
 
 	pi.registerCommand("lattice", {
-		description: "Session tree: /lattice [open <session> | new | approvals | share | sleep <session> | status | stop]",
+		description: "Session tree: /lattice [open <session> | new | answer <session> | approvals | share | sleep <session> | status | stop]",
 		getArgumentCompletions: (prefix) => {
 			const words = prefix.split(/\s+/);
 			if (words.length <= 1) {
@@ -644,6 +655,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 					);
 				} else if (sub === "open") await open(ctx, arg);
 				else if (sub === "new") await create(ctx, arg);
+				else if (sub === "answer") {
+					await refresh();
+					const node = find(arg);
+					if (node) await answer(ctx, node);
+				}
 				else if (sub === "approvals") await approvals(ctx);
 				else if (sub === "share") await share(ctx, arg);
 				else if (sub === "sleep") {
@@ -660,7 +676,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 					shared.state = undefined;
 					redraw();
 					ctx.ui.notify("The lattice host is stopping. Sessions are saved and come back with /lattice.", "info");
-				} else ctx.ui.notify("Usage: /lattice [open <session> | new | approvals | share | sleep <session> | status | stop]", "warning");
+				} else ctx.ui.notify("Usage: /lattice [open <session> | new | answer <session> | approvals | share | sleep <session> | status | stop]", "warning");
 			} catch (error) {
 				fail(ctx, error);
 			}

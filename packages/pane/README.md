@@ -23,13 +23,20 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | Key or command | Does |
 |---|---|
 | `alt+l` | Give the pane the keyboard, and back |
-| `↑` `↓`, `enter` | Move, then open the selected session here |
+| `↑` `↓` | Move through what is waiting on you, then the sessions |
+| `1`–`9` | Jump to a waiting item |
+| `enter` | Open the selected session here; on a question, answer it with Pi's prompt |
+| `y` `n` | Answer the selected yes/no question, where it is |
+| `a` `x` | Approve or reject the selected message; accept or decline an offered session |
 | `n` / `/lattice new` | Create a child: name, kind, roles, workspace, brief |
-| `a` / `/lattice approvals` | Review messages waiting for your approval |
 | `o` / `/lattice share` | Pair with someone, offer or accept a session, confirm a release |
 | `/lattice open <name>` | Open a session by name |
+| `/lattice answer <name>` | Answer the questions a background session is waiting on |
+| `/lattice approvals` | Review messages waiting for your approval |
 | `/lattice status` | List the whole tree |
 | `/lattice stop` | Stop the background host |
+
+The footer shows the keys that act on whatever the cursor is on. The item under the cursor shows all of its text.
 
 Marks: a spinner for working, `●` in the attention colour for waiting on you, dim `●` idle, `○` asleep or offline, `✓` finished, `✗` failed, `▸` open in this terminal, `?n` questions waiting on you, `✉n` messages to approve. The attention colour is used for nothing else.
 

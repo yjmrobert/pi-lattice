@@ -1,6 +1,6 @@
 import type { NodeMeta, UiState } from "@pi-lattice/protocol";
 import { describe, expect, it } from "vitest";
-import { inboxItems, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
+import { cursorKeys, inboxItems, interpretKey, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
 
 const node = (id: string, parentId: string | null, over: Partial<NodeMeta> = {}): NodeMeta => ({
 	id, parentId, rootId: "r", kind: "task", name: id, brief: "", fragments: [], owner: "yan", version: 1, status: "idle",
@@ -165,5 +165,62 @@ describe("pane helpers", () => {
 	it("falls back to one line per session, marking the one open here", () => {
 		expect(renderCompact(view())).toEqual(["▸ ● checkout  you · shop", "  ├─ ⠋ grilling  you · shop", "  └─ ● impl  @sam · shop"]);
 		expect(renderCompact(view(), 2)).toEqual(["▸ ● checkout  you · shop", "  … 2 more (/lattice)"]);
+	});
+});
+
+describe("keys while the pane has the keyboard", () => {
+	const envelope = { id: "e1", from: "b", fromOwner: "sam", payload: { text: "Totals endpoint is live at /cart/totals, with the schema attached." } } as never;
+	const waiting = state({ attention: { a: { dialogs: 2, pending: 1 } } });
+	const details = { dialogs: { a: [{ id: "d1", method: "confirm" as const, title: "Run stripe listen in this shell?" }, { id: "d2", method: "input" as const, title: "Which port?" }] }, mail: [{ nodeId: "a", envelope }] };
+	const at = (cursor: string | undefined): PaneView => ({ repos: [repo(waiting, { inbox: inboxItems(waiting, details) })], current: "r", cursor, focused: true });
+
+	it("moves through items then sessions, and jumps to an item by its number", () => {
+		expect(interpretKey(at(itemKey("q:a:d1")), "down")).toEqual([{ do: "move", cursor: itemKey("q:a:d2") }]);
+		expect(interpretKey(at(itemKey("m:a:e1")), "down")).toEqual([{ do: "move", cursor: nodeKey("r") }]);
+		expect(interpretKey(at(nodeKey("r")), "3")).toEqual([{ do: "move", cursor: itemKey("m:a:e1") }]);
+		expect(interpretKey(at(nodeKey("r")), "9")).toEqual([]);
+	});
+
+	it("answers a yes/no question with one key, where it is", () => {
+		expect(interpretKey(at(itemKey("q:a:d1")), "y")).toEqual([{ do: "answer", repo: "/shop/.lattice", nodeId: "a", dialogId: "d1", confirmed: true }]);
+		expect(interpretKey(at(itemKey("q:a:d1")), "n")).toEqual([{ do: "answer", repo: "/shop/.lattice", nodeId: "a", dialogId: "d1", confirmed: false }]);
+	});
+
+	it("sends any other question to Pi's own prompt", () => {
+		expect(interpretKey(at(itemKey("q:a:d2")), "enter")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice answer a" }]);
+		expect(interpretKey(at(itemKey("q:a:d2")), "y")).toEqual([]);
+	});
+
+	it("approves or rejects a message where it is", () => {
+		expect(interpretKey(at(itemKey("m:a:e1")), "a")).toEqual([{ do: "decide", repo: "/shop/.lattice", nodeId: "a", envelopeId: "e1", action: "approve" }]);
+		expect(interpretKey(at(itemKey("m:a:e1")), "x")).toEqual([{ do: "decide", repo: "/shop/.lattice", nodeId: "a", envelopeId: "e1", action: "reject" }]);
+	});
+
+	it("opens, creates under and shares the session the cursor is on", () => {
+		expect(interpretKey(at(nodeKey("a")), "enter")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice open a" }]);
+		expect(interpretKey(at(nodeKey("r")), "enter")).toEqual([{ do: "leave" }]);
+		expect(interpretKey(at(nodeKey("a")), "n")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice new a" }]);
+		expect(interpretKey(at(nodeKey("a")), "escape")).toEqual([{ do: "leave" }]);
+	});
+
+	it("shows in the footer exactly the keys that act on what the cursor is on", () => {
+		expect(cursorKeys(at(itemKey("q:a:d1")))).toEqual([["y", "yes"], ["n", "no"]]);
+		expect(cursorKeys(at(itemKey("q:a:d2")))).toEqual([["⏎", "answer"]]);
+		expect(cursorKeys(at(itemKey("m:a:e1")))).toEqual([["a", "approve"], ["x", "reject"]]);
+		expect(cursorKeys(at(nodeKey("a")))).toEqual([["⏎", "open"], ["n", "new"], ["o", "share"]]);
+		const v = at(itemKey("q:a:d1"));
+		expect(renderPane({ ...v, keys: cursorKeys(v) }, 34).at(-1)).toBe(" y yes  n no  ↑↓ move  esc back");
+	});
+
+	it("shows all of an item's text under the cursor, wrapped, and one line otherwise", () => {
+		const lines = renderPane(at(itemKey("m:a:e1")), 34);
+		const from = lines.findIndex((line) => line.includes("✉"));
+		expect(lines.slice(from, from + 4)).toEqual([
+			" 3 ✉ impl → grilling             ",
+			"     Totals endpoint is live at  ",
+			"     /cart/totals, with the      ",
+			"     schema attached.            ",
+		]);
+		expect(renderPane(at(nodeKey("r")), 34)[from + 1]).toBe("     Totals endpoint is live at …");
 	});
 });
