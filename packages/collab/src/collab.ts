@@ -1,8 +1,11 @@
 /**
- * Sharing a session tree between people, peer to peer. Each person runs their own host,
- * and the hosts talk directly over an authenticated, encrypted channel. There is no
- * server and no shared storage: a peer's sessions are fetched from that peer while they
- * are online, and shown as last seen when they are not.
+ * Sharing a session tree between the people of a network, peer to peer. Each person runs
+ * their own host, and the hosts find each other and talk directly over an authenticated,
+ * encrypted channel. There is no server and no shared storage: a teammate's sessions are
+ * fetched from them while they are online, and shown as last seen when they are not.
+ *
+ * Nobody pairs with anybody. Being in the network is holding its secret, which a host
+ * proves on every connection; the first key seen under a name is pinned from then on.
  *
  * Each node's ownership log has exactly one writer, its current owner. Everyone else asks
  * the owner to append (for example, the recipient's acceptance of an offer), and verifies
@@ -14,10 +17,12 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, u
 import { networkInterfaces } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { type Envelope, isId, type LeaseEvent, newHandoffId, type NodeMeta, validateEnvelope } from "@pi-lattice/protocol";
-import { HandshakeError, openChannel, type SecureChannel } from "./channel.ts";
+import { type ChannelOptions, openChannel, type SecureChannel } from "./channel.ts";
 import { fingerprint, type Identity, type Signed } from "./identity.ts";
 import { appendEvent, type Folded, foldRecord, type KeyLookup, type NodeRecord, parseRecord, toSharedMeta } from "./ledger.ts";
-import { formatInvite, parseInvite, type PeerBook } from "./peers.ts";
+import type { Discovery } from "./discovery.ts";
+import { formatJoinCode, type Network, networkKey, sharedPort } from "./network.ts";
+import type { PeerBook } from "./peers.ts";
 import { type PeerTransport, splitAddress } from "./transport.ts";
 
 /** The part of a lattice host that sharing needs. `LatticeHost` satisfies it. */
@@ -33,6 +38,8 @@ export interface HostPort {
 	deliverExternal(envelope: unknown, recipientId: string): void;
 	releaseNode(id: string, toOwner: string, version: number): Promise<void>;
 	adoptNode(id: string, options: { cwd: string; branch: string | null; workspace: NodeMeta["workspace"]; version: number; sessionFile?: string }): NodeMeta;
+	/** Whether a person has the node open in a terminal right now. Such a node is not sent away under them. */
+	inUse?(id: string): boolean;
 	on(event: "node", listener: (node: NodeMeta) => void): unknown;
 	off(event: "node", listener: (node: NodeMeta) => void): unknown;
 }
@@ -40,9 +47,15 @@ export interface HostPort {
 export interface CollabOptions {
 	host: HostPort;
 	identity: Identity;
-	/** The people this human has paired with. */
+	/** The network this person is in. Its secret is what lets other hosts connect. */
+	network: Network;
+	/** The people of the network seen so far, with their pinned keys. */
 	peers: PeerBook;
 	transport: PeerTransport;
+	/** What this host is working on, usually a repository. Hosts connect only when it is the same. */
+	scope?: string;
+	/** Finds teammates on the local network. Without it, only known machines and seeds are tried. */
+	discovery?: Discovery;
 	/** Private working directory: ownership logs, queued mail, transfers in flight. */
 	dir: string;
 	/** The local checkout of the project, where adopted nodes work. */
@@ -57,17 +70,27 @@ export interface CollabOptions {
 	now?: () => number;
 }
 
-export type PersonTrust = "trusted" | "unknown" | "changed";
+/** `changed`: someone used this name with a key other than the pinned one. */
+export type PersonTrust = "trusted" | "changed";
 
 export interface PersonView {
 	name: string;
 	publicKey: string;
 	fingerprint: string;
-	/** `unknown`: knocked, not paired. `changed`: someone used this name with a different key. */
 	trust: PersonTrust;
+	/** Connected to this host right now: they are working on the same thing. */
 	online: boolean;
-	address?: string;
 	self: boolean;
+}
+
+/** Someone asking to take a session over. `owner`: they ask this person. `asker`: this person asked. */
+export interface RequestView {
+	nodeId: string;
+	nodeName: string;
+	from: string;
+	to: string;
+	role: "owner" | "asker";
+	at: number;
 }
 
 export interface HandoffView {
@@ -91,6 +114,19 @@ interface OutboxItem {
 	envelope: Envelope;
 	recipient: string;
 	toOwner: string;
+}
+interface RosterEntry {
+	name: string;
+	publicKey: string;
+	hosts: string[];
+	/** The port their host for this work listens on, when known. */
+	port?: number;
+}
+interface Ask {
+	nodeId: string;
+	/** Who asks (kept by the owner) or who was asked (kept by the asker). */
+	who: string;
+	at: number;
 }
 interface Transfer {
 	nodeId: string;
@@ -128,7 +164,12 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private readonly now: () => number;
 	private readonly channels = new Map<string, { channel: SecureChannel; initiator: string }>();
 	private readonly dialing = new Set<string>();
-	private readonly strangers = new Map<string, string>(); // name -> key they knocked with
+	private readonly strangers = new Map<string, string>(); // name -> a key other than the pinned one
+	private readonly addresses = new Map<string, string>(); // name -> `host:port` they were last heard at
+	private readonly seedPeer = new Map<string, string>(); // seed -> who answered there
+	private readonly failures = new Map<string, { count: number; retryAt: number }>();
+	private readonly key: Buffer;
+	private settling = false;
 	private readonly waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; peer: string }>();
 	private readonly timers = new Map<string, NodeJS.Timeout>();
 	private requestId = 0;
@@ -147,35 +188,34 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		this.identity = options.identity;
 		this.book = options.peers;
 		this.now = options.now ?? Date.now;
+		this.key = networkKey(options.network);
 		if (this.identity.name !== this.host.owner) throw new Error(`The sharing identity "${this.identity.name}" must match the host owner "${this.host.owner}".`);
-		for (const name of ["ledger", "outbox", "transfers", "incoming"]) mkdirSync(join(options.dir, name), { recursive: true });
+		for (const name of ["ledger", "outbox", "transfers", "incoming", "requests", "asked"]) mkdirSync(join(options.dir, name), { recursive: true });
 	}
 
 	// --- lifecycle -------------------------------------------------------------
 
-	/** Start listening, publish this host's nodes, and reach out to paired peers. */
+	/** Start listening, publish this host's nodes, and reach out to the rest of the network. */
 	async start(): Promise<void> {
-		this.bound = await this.options.transport.listen((stream) => {
-			openChannel(stream, {
-				identity: this.identity,
-				initiator: false,
-				keyOf: (name) => this.book.keyOf(name),
-				onStranger: (name, key) => this.knocked(name, key),
-				onChangedKey: (name, key) => this.knocked(name, key),
-			}).then(
-				(channel) => this.adopted(channel, channel.peer),
-				() => {}, // refused: strangers are surfaced through knocked()
+		this.bound = await this.options.transport.listen((stream, from) => {
+			openChannel(stream, { ...this.channelOptions(), initiator: false }).then(
+				(channel) => this.adopted(channel, channel.peer, from),
+				() => {}, // refused: not in the network, or a changed key, which knocked() reports
 			);
 		});
 		this.host.setRemoteRouter((envelope, recipient) => this.queueOutbound(envelope, recipient));
 		this.host.on("node", this.onNode);
 		await this.publishOwn();
+		await this.options.discovery?.start(this.port(), (name, address) => this.heard(name, address)).catch(() => {});
 		const redialMs = this.options.redialMs ?? 5000;
 		if (redialMs > 0) {
-			this.redial = setInterval(() => this.dialAll(), redialMs);
+			this.redial = setInterval(() => {
+				this.reach();
+				void this.settle();
+			}, redialMs);
 			this.redial.unref();
 		}
-		this.dialAll();
+		this.reach();
 	}
 
 	async stop(): Promise<void> {
@@ -184,6 +224,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		for (const timer of this.timers.values()) clearTimeout(timer);
 		this.host.off("node", this.onNode);
 		this.host.setRemoteRouter(undefined);
+		await this.options.discovery?.stop().catch(() => {});
 		for (const { channel } of this.channels.values()) channel.close();
 		await this.options.transport.close();
 		await this.chain.catch(() => {});
@@ -210,41 +251,64 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 
 	// --- people and connections ------------------------------------------------
 
+	private channelOptions(): Omit<ChannelOptions, "initiator"> {
+		return {
+			identity: this.identity,
+			keyOf: (name) => this.book.keyOf(name),
+			network: this.key,
+			...(this.options.scope !== undefined ? { scope: this.options.scope } : {}),
+			onMember: (name, key) => this.joined(name, key),
+			onChangedKey: (name, key) => this.knocked(name, key),
+		};
+	}
+
+	/** Someone new showed they are in the network. Their key is pinned from here on. */
+	private joined(name: string, key: string): void {
+		if (name === this.identity.name || !this.book.learn(name, key)) return;
+		this.emit("log", "info", `${name} joined ${this.options.network.name}.`);
+		this.emit("changed");
+	}
+
 	private knocked(name: string, key: string): void {
 		if (this.strangers.get(name) === key) return;
 		this.strangers.set(name, key);
-		this.emit("log", "info", this.book.get(name) ? `Someone tried to connect as ${name} with a different key.` : `${name} wants to connect. Pair with them to allow it.`);
+		this.emit("log", "warn", `Someone tried to connect as ${name} with a different key from the one you know them by.`);
 		this.emit("changed");
 	}
 
-	/** This host's invite: pass it to a collaborator over a channel you trust. */
-	invite(): string {
+	/** The port this host accepts teammates on. */
+	private port(): number {
 		if (!this.bound) throw new Error("Sharing has not started.");
-		const { port } = splitAddress(this.bound);
-		return formatInvite({ name: this.identity.name, publicKey: this.identity.publicKey, address: `${this.options.advertise ?? guessHost()}:${port}` });
+		return splitAddress(this.bound).port;
 	}
 
-	/** Pair with the person who sent an invite, and try to reach them. */
-	async addInvite(invite: string): Promise<string> {
-		const peer = parseInvite(invite);
-		if (peer.name === this.identity.name) throw new Error("That is your own invite.");
-		this.book.pin(peer.name, peer.publicKey, peer.address);
-		this.strangers.delete(peer.name);
-		this.emit("changed");
-		await this.dial(peer.name);
-		return peer.name;
+	/** The machines teammates can reach this host at. */
+	hosts(): string[] {
+		return this.options.advertise !== undefined ? [this.options.advertise] : localHosts();
 	}
 
-	/** Pair with someone who knocked, or accept a changed key. Call only after the human checked the fingerprint. */
+	/** The code a teammate joins with: the network, and where this host is right now. */
+	joinCode(): string {
+		const port = this.port();
+		return formatJoinCode(this.options.network, this.hosts().map((host) => (port === this.wellKnownPort() ? host : `${host}:${port}`)));
+	}
+
+	/** The port every member's host for this work listens on, unless it was taken. */
+	private wellKnownPort(): number {
+		return sharedPort(this.key, this.options.scope ?? "");
+	}
+
+	/** Accept the key someone now uses in place of the pinned one. Call only after the human checked the fingerprint. */
 	async trustPerson(name: string): Promise<void> {
 		const key = this.strangers.get(name);
 		if (!key) {
 			if (this.book.get(name)) return;
-			throw new Error(`Nobody called "${name}" has tried to connect.`);
+			throw new Error(`Nobody called "${name}" has tried to connect with a new key.`);
 		}
 		this.channels.get(name)?.channel.close();
 		this.book.pin(name, key);
 		this.strangers.delete(name);
+		this.failures.delete(name);
 		this.emit("changed");
 		await this.dial(name);
 	}
@@ -259,37 +323,85 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			name: this.identity.name, publicKey: this.identity.publicKey, fingerprint: this.identity.fingerprint, trust: "trusted", online: true, self: true,
 		});
 		for (const peer of this.book.list()) {
+			if (peer.name === this.identity.name) continue;
+			const changed = this.strangers.get(peer.name);
 			view.set(peer.name, {
-				name: peer.name, publicKey: peer.publicKey, fingerprint: fingerprint(peer.publicKey), trust: "trusted", online: this.channels.has(peer.name), self: false,
-				...(peer.address !== undefined ? { address: peer.address } : {}),
+				name: peer.name, publicKey: changed ?? peer.publicKey, fingerprint: fingerprint(changed ?? peer.publicKey), trust: changed ? "changed" : "trusted", online: this.channels.has(peer.name), self: false,
 			});
-		}
-		for (const [name, key] of this.strangers) {
-			const known = view.get(name);
-			if (known?.self) continue;
-			view.set(name, { name, publicKey: key, fingerprint: fingerprint(key), trust: known ? "changed" : "unknown", online: false, self: false, ...(known?.address !== undefined ? { address: known.address } : {}) });
 		}
 		return [...view.values()].sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name));
 	}
 
-	private dialAll(): void {
-		for (const peer of this.book.list()) void this.dial(peer.name);
+	/** A beacon, or a teammate, says where someone is. Worth trying at once. */
+	private heard(name: string, address: string): void {
+		if (name === this.identity.name || this.stopped) return;
+		if (this.addresses.get(name) !== address) {
+			this.addresses.set(name, address);
+			this.failures.delete(name);
+		}
+		if (this.channels.has(name)) return;
+		if (this.book.get(name)) void this.dial(name);
+		else void this.dialAddress(address);
 	}
 
-	/** Try to connect to a paired person. Resolves true when a channel to them is open. */
+	/** Try everyone in the network, and every machine the join code named, now. */
+	reach(): void {
+		if (this.stopped) return;
+		for (const peer of this.book.list()) void this.dial(peer.name);
+		const known = new Set(this.book.list().flatMap((peer) => peer.hosts ?? []));
+		for (const seed of this.options.network.seeds) {
+			const answered = this.seedPeer.get(seed);
+			// A seed is only for the first contact: once its machine belongs to someone known, they are dialled by name.
+			if ((answered !== undefined && this.book.get(answered)) || known.has(seed)) continue;
+			void this.dialAddress(seed.includes(":") ? seed : `${seed}:${this.wellKnownPort()}`).then((name) => {
+				if (name) this.seedPeer.set(seed, name);
+			});
+		}
+	}
+
+	/** Where a person might be: where they were last heard, then every machine they are known at. */
+	private candidates(name: string): string[] {
+		const out: string[] = [];
+		const heard = this.addresses.get(name);
+		if (heard) out.push(heard);
+		for (const host of this.book.get(name)?.hosts ?? []) out.push(`${host}:${this.wellKnownPort()}`);
+		return out.filter((address, index) => out.indexOf(address) === index);
+	}
+
+	/** Open a channel to whoever answers at an address. Resolves with their name, or undefined. */
+	private async dialAddress(address: string, expect?: string): Promise<string | undefined> {
+		if (this.stopped || this.dialing.has(address)) return undefined;
+		this.dialing.add(address);
+		try {
+			const stream = await this.options.transport.connect(address);
+			const channel = await openChannel(stream, { ...this.channelOptions(), initiator: true, ...(expect !== undefined ? { expect } : {}) });
+			this.addresses.set(channel.peer, address);
+			this.adopted(channel, this.identity.name, splitAddress(address).host);
+			return channel.peer;
+		} catch {
+			return undefined; // not there, not them, or not in the network; a changed key is reported by knocked()
+		} finally {
+			this.dialing.delete(address);
+		}
+	}
+
+	/** Try to connect to someone in the network. Resolves true when a channel to them is open. */
 	async dial(name: string): Promise<boolean> {
-		if (this.stopped) return false;
+		if (this.stopped || name === this.identity.name) return false;
 		if (this.channels.has(name)) return true;
-		const peer = this.book.get(name);
-		if (!peer?.address || this.dialing.has(name)) return false;
+		const failed = this.failures.get(name);
+		if (failed && this.now() < failed.retryAt) return false;
+		if (this.dialing.has(name)) return false;
 		this.dialing.add(name);
 		try {
-			const stream = await this.options.transport.connect(peer.address);
-			const channel = await openChannel(stream, { identity: this.identity, initiator: true, expect: name, keyOf: (who) => this.book.keyOf(who) });
-			this.adopted(channel, this.identity.name);
-			return true;
-		} catch (error) {
-			if (error instanceof HandshakeError && !/not someone you have paired with/.test(error.message)) this.emit("log", "warn", `Could not connect to ${name}: ${error.message}`);
+			for (const address of this.candidates(name)) {
+				if (this.channels.has(name)) return true;
+				if ((await this.dialAddress(address, name)) === name) return true;
+			}
+			if (this.channels.has(name)) return true;
+			// Someone who is away is tried less and less often, up to once a minute.
+			const count = (failed?.count ?? 0) + 1;
+			this.failures.set(name, { count, retryAt: this.now() + Math.min(60_000, 5000 * 2 ** (count - 1)) });
 			return false;
 		} finally {
 			this.dialing.delete(name);
@@ -297,12 +409,14 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	}
 
 	/** Register an authenticated channel. When both sides dialled at once, both keep the same one. */
-	private adopted(channel: SecureChannel, initiator: string): void {
+	private adopted(channel: SecureChannel, initiator: string, from?: string): void {
 		if (this.stopped) {
 			channel.close();
 			return;
 		}
 		const peer = channel.peer;
+		this.failures.delete(peer);
+		if (from !== undefined) this.book.sawAt(peer, [from], true);
 		const existing = this.channels.get(peer);
 		if (existing) {
 			if (existing.initiator <= initiator) {
@@ -322,7 +436,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			this.emit("changed");
 		});
 		this.emit("changed");
-		void this.greet(peer);
+		void this.greet(peer, from);
 	}
 
 	private failWaiting(peer: string): void {
@@ -335,14 +449,46 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	}
 
 	/** Everything owed to a peer the moment they are reachable. */
-	private async greet(peer: string): Promise<void> {
+	private async greet(peer: string, from?: string): Promise<void> {
 		try {
+			await this.meet(peer, from);
 			await this.fetchTree(peer);
 			await this.flushOutbox(peer);
 			await this.sendTransfers(peer);
+			await this.settle();
 		} catch (error) {
 			this.emit("log", "warn", `Talking to ${peer}: ${error instanceof Error ? error.message : String(error)}`);
 		}
+	}
+
+	/** Who this host knows, and where: what a teammate is told so that knowing one member leads to all of them. */
+	private roster(): RosterEntry[] {
+		const out: RosterEntry[] = [{ name: this.identity.name, publicKey: this.identity.publicKey, hosts: this.hosts(), port: this.port() }];
+		for (const peer of this.book.list()) {
+			if (peer.name === this.identity.name) continue;
+			const heard = this.addresses.get(peer.name);
+			out.push({ name: peer.name, publicKey: peer.publicKey, hosts: peer.hosts ?? [], ...(heard ? { port: splitAddress(heard).port } : {}) });
+		}
+		return out;
+	}
+
+	/** Learn the rest of the network from someone in it. Keys already pinned are never replaced this way. */
+	private async meet(peer: string, from?: string): Promise<void> {
+		const { people } = await this.request<{ people: RosterEntry[] }>(peer, "roster", {});
+		for (const entry of Array.isArray(people) ? people : []) {
+			if (!entry || typeof entry.name !== "string" || typeof entry.publicKey !== "string" || entry.name === this.identity.name) continue;
+			const hosts = Array.isArray(entry.hosts) ? entry.hosts.filter((host): host is string => typeof host === "string") : [];
+			if (entry.name !== peer) this.joined(entry.name, entry.publicKey);
+			if (this.book.keyOf(entry.name) !== entry.publicKey) continue;
+			this.book.sawAt(entry.name, hosts);
+			const port = typeof entry.port === "number" && Number.isInteger(entry.port) && entry.port > 0 && entry.port < 65536 ? entry.port : undefined;
+			const host = entry.name === peer ? from : hosts[0];
+			if (port === undefined || host === undefined) continue;
+			// Where the peer itself listens is worth keeping even though they are connected: others will ask.
+			if (entry.name === peer) this.addresses.set(peer, `${host}:${port}`);
+			else if (!this.channels.has(entry.name)) this.heard(entry.name, `${host}:${port}`);
+		}
+		this.reach();
 	}
 
 	// --- requests --------------------------------------------------------------
@@ -383,6 +529,8 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private async serve(peer: string, op: string, params: unknown): Promise<unknown> {
 		const p = (params ?? {}) as Record<string, unknown>;
 		switch (op) {
+			case "roster":
+				return { people: this.roster() };
 			case "tree":
 				return { records: this.ownRecords() };
 			case "messages": {
@@ -393,8 +541,18 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			case "mail":
 				return this.receiveMail(peer, p.envelope, p.recipient);
 			case "accept":
-			case "cancel":
-				return this.exclusive(async () => this.appendFromPeer(peer, p.nodeId, p.event as Signed<LeaseEvent>, op));
+			case "cancel": {
+				const answer = await this.exclusive(async () => this.appendFromPeer(peer, p.nodeId, p.event as Signed<LeaseEvent>, op));
+				// Offering was the owner's yes. Once the other person says yes too, the session goes.
+				if (op === "accept") this.debounce("settle", () => this.settle(), 0);
+				return answer;
+			}
+			case "ask":
+				return this.asked(peer, p.nodeId);
+			case "unask":
+				return this.dropRequest(p.nodeId, peer);
+			case "declined":
+				return this.wasDeclined(peer, p.nodeId);
 			case "transfer":
 				return this.exclusive(() => this.receiveTransfer(peer, p as unknown as Transfer));
 			default:
@@ -526,6 +684,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			if (parsed && this.consider(parsed)) changed = true;
 		}
 		if (changed) this.emit("changed");
+		this.debounce("settle", () => this.settle(), 0);
 	}
 
 	/** Ask every connected peer for their current tree. */
@@ -636,14 +795,19 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		return { record: this.appendOwn(nodeId, event) };
 	}
 
-	/** Step 1, by the owner: offer a node to a paired person. */
+	/**
+	 * By the owner: offer a node to someone in the network. This is the owner's whole part.
+	 * When they accept, the session is released to them without asking the owner again, so
+	 * whoever calls this must already have told the human what a release sends.
+	 */
 	offer(nodeId: string, to: string): Promise<void> {
 		return this.exclusive(async () => {
+			this.forget("requests", nodeId, to);
 			await this.publishOwn();
 			const node = this.host.node(nodeId);
 			if (!node) throw new Error(`No node ${nodeId} in this tree.`);
 			if (node.owner !== this.identity.name) throw new Error(`"${node.name}" is owned by ${node.owner}; only its owner can offer it.`);
-			if (!this.book.get(to)) throw new Error(`You have not paired with anyone called "${to}".`);
+			if (!this.book.get(to)) throw new Error(`Nobody called "${to}" is in ${this.options.network.name}.`);
 			const now = this.now();
 			this.appendOwn(nodeId, this.identity.sign<LeaseEvent>({
 				type: "offer", id: newHandoffId(now), by: this.identity.name, to, expectedVersion: node.version, expiresAt: now + (this.options.offerTtlMs ?? 24 * 3600_000), now,
@@ -651,7 +815,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		});
 	}
 
-	/** Step 2, by the recipient: accept. The owner records it; ownership has not moved yet. */
+	/** By the recipient: accept. The owner records it, then releases the session. */
 	accept(nodeId: string): Promise<void> {
 		return this.exclusive(async () => {
 			const handoff = this.openHandoff(nodeId);
@@ -681,10 +845,11 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	}
 
 	/**
-	 * Step 3, by the owner: confirm the release. This is the commit point. The session is
-	 * stopped, the signed confirmation is recorded, and the conversation and branch are sent
-	 * straight to the new owner. If the connection drops first, the package is kept and sent
-	 * again when they are next reachable; it is deleted only on their signed receipt.
+	 * By the owner's host, once the recipient has accepted: release. This is the commit point.
+	 * The session is stopped, the signed confirmation is recorded, and the conversation and
+	 * branch are sent straight to the new owner. If the connection drops first, the package is
+	 * kept and sent again when they are next reachable; it is deleted only on their signed
+	 * receipt. It runs by itself (see `settle`); calling it is only needed to hurry it along.
 	 */
 	confirm(nodeId: string): Promise<void> {
 		return this.exclusive(async () => {
@@ -692,6 +857,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			if (handoff.role !== "owner") throw new Error("Only the current owner confirms a release.");
 			if (handoff.state !== "accepted") throw new Error(`${handoff.to} has not accepted yet.`);
 			if (!this.channels.has(handoff.to)) throw new Error(`${handoff.to} is offline. A handoff needs both of you online.`);
+			if (this.host.inUse?.(nodeId)) throw new Error("That session is open in a terminal. Leave it and it will be sent.");
 			await this.host.sleep(nodeId);
 			const node = this.host.node(nodeId);
 			if (!node) throw new Error(`No node ${nodeId} in this tree.`);
@@ -705,6 +871,148 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			await this.sendTransfers(handoff.to);
 		});
 	}
+
+	/**
+	 * Carry every handoff as far as it can go without a person. A session this person asked
+	 * for is accepted the moment its owner offers it, and a session whose recipient accepted
+	 * is released, unless its owner has it open in a terminal, in which case it waits for
+	 * them to leave it. Called whenever something changed and on a timer, so it is safe to
+	 * miss a beat.
+	 */
+	async settle(): Promise<void> {
+		if (this.settling || this.stopped) return;
+		this.settling = true;
+		try {
+			for (const handoff of this.handoffs()) {
+				try {
+					if (handoff.role === "recipient" && handoff.state === "offered" && this.channels.has(handoff.from) && this.readAsk("asked", handoff.nodeId)) {
+						await this.accept(handoff.nodeId);
+					} else if (handoff.role === "owner" && handoff.state === "accepted" && this.channels.has(handoff.to) && !this.host.inUse?.(handoff.nodeId)) {
+						await this.confirm(handoff.nodeId);
+					}
+				} catch (error) {
+					this.emit("log", "warn", `Handing over "${handoff.nodeName}": ${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
+		} finally {
+			this.settling = false;
+		}
+	}
+
+	// --- asking for a session ----------------------------------------------------
+
+	private askPath(kind: "requests" | "asked", nodeId: string, who = ""): string {
+		return join(this.options.dir, kind, kind === "requests" ? `${nodeId}--${who}.json` : `${nodeId}.json`);
+	}
+
+	private readAsk(kind: "requests" | "asked", nodeId: string, who = ""): Ask | undefined {
+		try {
+			const ask = JSON.parse(readFileSync(this.askPath(kind, nodeId, who), "utf8")) as Ask;
+			return typeof ask.nodeId === "string" && typeof ask.who === "string" && typeof ask.at === "number" ? ask : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private forget(kind: "requests" | "asked", nodeId: string, who = ""): void {
+		if (isId(nodeId)) rmSync(this.askPath(kind, nodeId, who), { force: true });
+	}
+
+	/** Open requests: those made to this person, and those this person made. Stale ones are dropped on the way. */
+	requests(): RequestView[] {
+		const me = this.identity.name;
+		const ttl = this.options.offerTtlMs ?? 24 * 3600_000;
+		const out: RequestView[] = [];
+		for (const kind of ["requests", "asked"] as const) {
+			for (const file of readdirSync(join(this.options.dir, kind))) {
+				let ask: Ask | undefined;
+				try {
+					ask = JSON.parse(readFileSync(join(this.options.dir, kind, file), "utf8")) as Ask;
+				} catch {
+					ask = undefined;
+				}
+				const node = ask ? this.host.node(ask.nodeId) : undefined;
+				// A request is moot once it is old, or the session is no longer with the person who was asked.
+				const live = ask && node && this.now() - ask.at < ttl && (kind === "requests" ? node.owner === me && this.book.get(ask.who) !== undefined : node.owner === ask.who);
+				if (!ask || !node || !live) {
+					rmSync(join(this.options.dir, kind, file), { force: true });
+					continue;
+				}
+				out.push(kind === "requests"
+					? { nodeId: node.id, nodeName: node.name, from: ask.who, to: me, role: "owner", at: ask.at }
+					: { nodeId: node.id, nodeName: node.name, from: me, to: ask.who, role: "asker", at: ask.at });
+			}
+		}
+		return out.sort((a, b) => a.at - b.at);
+	}
+
+	/** Ask a teammate for one of their sessions. It becomes this person's as soon as they approve. */
+	async ask(nodeId: string): Promise<void> {
+		const node = this.host.node(nodeId);
+		if (!node) throw new Error(`No node ${nodeId} in this tree.`);
+		if (node.owner === this.identity.name) throw new Error(`"${node.name}" is already yours.`);
+		if (!this.channels.has(node.owner)) throw new Error(`${node.owner} is offline. Ask when they are back.`);
+		// Recorded first: their approval may come back before the request returns.
+		writeFileSync(this.askPath("asked", nodeId), JSON.stringify({ nodeId, who: node.owner, at: this.now() } satisfies Ask));
+		try {
+			await this.request(node.owner, "ask", { nodeId });
+		} catch (error) {
+			this.forget("asked", nodeId);
+			throw error;
+		}
+		this.emit("changed");
+		await this.settle(); // they may have offered it already
+	}
+
+	/** Take back a request this person made. */
+	async withdraw(nodeId: string): Promise<void> {
+		const ask = this.readAsk("asked", nodeId);
+		this.forget("asked", nodeId);
+		this.emit("changed");
+		if (ask && this.channels.has(ask.who)) await this.request(ask.who, "unask", { nodeId }).catch(() => {});
+	}
+
+	/** By the owner: say yes to someone who asked. The session is theirs as soon as their host hears. */
+	async approve(nodeId: string, from: string): Promise<void> {
+		if (!this.readAsk("requests", nodeId, from)) throw new Error(`${from} is not asking for that session.`);
+		await this.offer(nodeId, from);
+	}
+
+	/** By the owner: say no to someone who asked. */
+	async decline(nodeId: string, from: string): Promise<void> {
+		this.forget("requests", nodeId, from);
+		this.emit("changed");
+		if (this.channels.has(from)) await this.request(from, "declined", { nodeId }).catch(() => {});
+	}
+
+	/** A teammate asks for a session owned here. */
+	private asked(peer: string, nodeId: unknown): Record<string, never> {
+		const node = typeof nodeId === "string" && isId(nodeId) ? this.host.node(nodeId) : undefined;
+		if (!node || node.owner !== this.identity.name) throw new Error("That session is not here.");
+		const known = this.readAsk("requests", node.id, peer) !== undefined;
+		writeFileSync(this.askPath("requests", node.id, peer), JSON.stringify({ nodeId: node.id, who: peer, at: this.now() } satisfies Ask));
+		if (!known) this.emit("log", "info", `${peer} asks to take over "${node.name}".`);
+		this.emit("changed");
+		return {};
+	}
+
+	private dropRequest(nodeId: unknown, peer: string): Record<string, never> {
+		if (typeof nodeId === "string") this.forget("requests", nodeId, peer);
+		this.emit("changed");
+		return {};
+	}
+
+	private wasDeclined(peer: string, nodeId: unknown): Record<string, never> {
+		const ask = typeof nodeId === "string" ? this.readAsk("asked", nodeId) : undefined;
+		if (ask?.who === peer) {
+			this.forget("asked", ask.nodeId);
+			this.emit("log", "info", `${peer} declined to hand over "${this.host.node(ask.nodeId)?.name ?? "the session"}".`);
+			this.emit("changed");
+		}
+		return {};
+	}
+
+	// --- release -----------------------------------------------------------------
 
 	/** Sessions released to someone who has not yet confirmed receiving them. */
 	pendingTransfers(): Array<{ nodeId: string; to: string }> {
@@ -787,6 +1095,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			rmSync(sessionPath, { force: true });
 			rmSync(bundlePath, { force: true });
 		}
+		this.forget("asked", id);
 		this.emit("log", "info", `You now own "${record.meta.body.name}".`);
 		this.debounce("publish", () => this.publishOwn());
 		this.emit("changed");
@@ -809,12 +1118,13 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	}
 }
 
-/** A reachable address for this machine: the first non-internal IPv4, else loopback. */
-function guessHost(): string {
+/** The addresses other machines can reach this one at: every non-internal IPv4, else loopback. */
+export function localHosts(): string[] {
+	const out: string[] = [];
 	for (const addresses of Object.values(networkInterfaces())) {
 		for (const address of addresses ?? []) {
-			if (address.family === "IPv4" && !address.internal) return address.address;
+			if (address.family === "IPv4" && !address.internal) out.push(address.address);
 		}
 	}
-	return "127.0.0.1";
+	return out.length > 0 ? out : ["127.0.0.1"];
 }

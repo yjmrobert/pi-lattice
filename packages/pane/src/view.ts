@@ -25,7 +25,7 @@ export const PLAIN: Paint = { dim: same, bold: same, accent: same, ok: same, war
 export interface InboxItem {
 	/** Stable key; the cursor refers to it. */
 	id: string;
-	kind: "question" | "message" | "pair" | "offer" | "release";
+	kind: "question" | "message" | "pair" | "offer" | "request" | "release";
 	/** The session it concerns, when it concerns one. */
 	nodeId?: string;
 	title: string;
@@ -35,7 +35,7 @@ export interface InboxItem {
 	dialog?: DialogInfo;
 	/** The message itself, when it has been fetched. */
 	envelope?: Envelope;
-	/** The person a pairing request is from. */
+	/** The person it is about: whose key changed, or who asks for a session. */
 	person?: string;
 }
 
@@ -95,7 +95,7 @@ export const itemKey = (id: string): string => `i:${id}`;
 export const repoKey = (key: string): string => `r:${key}`;
 
 export const SPINNER = [..."⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"];
-const ITEM_ICON: Record<InboxItem["kind"], string> = { question: "?", message: "✉", pair: "⇄", offer: "⇄", release: "⇄" };
+const ITEM_ICON: Record<InboxItem["kind"], string> = { question: "?", message: "✉", pair: "⇄", offer: "⇄", request: "⇄", release: "⇄" };
 
 const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -164,12 +164,20 @@ export function inboxItems(state: UiState, details: InboxDetails = {}): InboxIte
 		}
 	}
 	for (const person of state.sharing?.people ?? []) {
-		if (person.trust === "unknown") items.push({ id: `p:${person.name}`, kind: "pair", title: person.name, text: "wants to pair", person: person.name });
 		if (person.trust === "changed") items.push({ id: `p:${person.name}`, kind: "pair", title: person.name, text: "key changed", person: person.name });
 	}
+	for (const request of state.sharing?.requests ?? []) {
+		if (request.role === "owner") items.push({ id: `t:${request.nodeId}:${request.from}`, kind: "request", nodeId: request.nodeId, title: request.from, text: `asks for ${request.nodeName}`, person: request.from });
+	}
 	for (const handoff of state.sharing?.handoffs ?? []) {
-		if (handoff.role === "recipient" && handoff.state === "offered") items.push({ id: `o:${handoff.nodeId}`, kind: "offer", nodeId: handoff.nodeId, title: handoff.from, text: `offers ${handoff.nodeName}` });
-		if (handoff.role === "owner" && handoff.state === "accepted") items.push({ id: `r:${handoff.nodeId}`, kind: "release", nodeId: handoff.nodeId, title: handoff.nodeName, text: `confirm release to ${handoff.to}` });
+		if (handoff.role === "recipient" && handoff.state === "offered") {
+			// One they asked for is on its way without another word from them.
+			if (!state.sharing?.requests.some((request) => request.role === "asker" && request.nodeId === handoff.nodeId)) items.push({ id: `o:${handoff.nodeId}`, kind: "offer", nodeId: handoff.nodeId, title: handoff.from, text: `offers ${handoff.nodeName}` });
+		}
+		// Accepted, and still here: it is open in a terminal, or they went away before it could be sent.
+		if (handoff.role === "owner" && handoff.state === "accepted") {
+			items.push({ id: `r:${handoff.nodeId}`, kind: "release", nodeId: handoff.nodeId, title: handoff.nodeName, text: state.foreground.includes(handoff.nodeId) ? `${handoff.to} accepted: leave it to send` : `${handoff.to} accepted: sending` });
+		}
 	}
 	return items;
 }
@@ -242,7 +250,9 @@ function sessionRow(node: NodeMeta, prefix: string, repo: PaneRepo, view: PaneVi
 	const here = node.id === view.current;
 	const sending = state.sharing?.pendingTransfers.find((transfer) => transfer.nodeId === node.id);
 	// A finished session with finished work under it says how much is folded away, in place of its kind.
-	const tag = sending ? `→ ${sending.to}…` : folded > 0 ? `+${folded} done` : node.owner === state.owner ? node.kind : `@${node.owner}${away ? " offline" : ""}`;
+	const offered = state.sharing?.handoffs.find((handoff) => handoff.nodeId === node.id && handoff.role === "owner");
+	const asked = state.sharing?.requests.some((request) => request.nodeId === node.id && request.role === "asker");
+	const tag = sending ? `→ ${sending.to}…` : offered ? `→ ${offered.to}?` : folded > 0 ? `+${folded} done` : node.owner === state.owner ? node.kind : `@${node.owner}${away ? " offline" : asked ? " asked" : ""}`;
 	const lead: Seg[] = [[here ? "▸" : " ", paint.accent], [` ${guides(prefix)}`, paint.dim], statusMark(node, (attention?.dialogs ?? 0) > 0, away, view.frame ?? 0, paint), [" "]];
 	const room = width - 1 - widthOf(lead);
 	const marksWidth = marks ? [...marks].length + 1 : 0;

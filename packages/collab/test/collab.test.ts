@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEnvelope, type Envelope, type NodeMeta, newNodeId } from "@pi-lattice/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CollabSession, formatInvite, type HostPort, Identity, parseInvite, PeerBook, TcpTransport } from "../src/index.ts";
+import { CollabSession, createNetwork, decodeBeacon, encodeBeacon, formatJoinCode, type HostPort, Identity, LanDiscovery, networkKey, parseJoinCode, PeerBook, sharedPort, TcpTransport } from "../src/index.ts";
 
 /** An in-memory stand-in for a lattice host. */
 class FakeHost extends EventEmitter implements HostPort {
@@ -15,6 +15,9 @@ class FakeHost extends EventEmitter implements HostPort {
 	readonly conversations = new Map<string, unknown[]>();
 	router: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined;
 	failNextAdoption = false;
+	/** Sessions a person has open in a terminal. */
+	readonly open = new Set<string>();
+	inUse = (id: string) => this.open.has(id);
 	constructor(owner: string) {
 		super();
 		this.owner = owner;
@@ -87,12 +90,14 @@ interface Seat {
 	logs: string[];
 	dir: string;
 }
-const seat = (name: string, keyDir?: string): Seat => {
+const TEAM = createNetwork("team");
+/** A person's host. `code` is the join code they were given; without one they are the first in the network. */
+const seat = (name: string, code?: string, keyDir?: string): Seat => {
 	const host = new FakeHost(name);
 	const dir = join(root, keyDir ?? name);
 	mkdirSync(join(dir, "project"), { recursive: true });
 	const collab = new CollabSession({
-		host, identity: Identity.loadOrCreate(join(dir, "keys"), name), peers: new PeerBook(join(dir, "peers.json")),
+		host, identity: Identity.loadOrCreate(join(dir, "keys"), name), peers: new PeerBook(join(dir, "people.json")), network: code ? parseJoinCode(code) : TEAM,
 		transport: new TcpTransport({ host: "127.0.0.1", port: 0 }), dir: join(dir, "collab"), projectDir: join(dir, "project"),
 		advertise: "127.0.0.1", redialMs: 0, offerTtlMs: 60_000, requestTimeoutMs: 5000, now: () => clock,
 	});
@@ -101,58 +106,146 @@ const seat = (name: string, keyDir?: string): Seat => {
 	collab.on("log", (_level, message) => logs.push(message));
 	return { host, collab, logs, dir };
 };
-/** Two people, paired by exchanging invites and connected; yan has a root with one child. */
+/** Two people in one network, connected; yan has a root with one child. */
 const pair = async () => {
 	const yan = seat("yan");
-	const sam = seat("sam");
 	const top = yan.host.add("checkout");
 	const kid = yan.host.add("impl", top.id);
 	await yan.collab.start();
+	const code = yan.collab.joinCode();
+	const sam = seat("sam", code);
 	await sam.collab.start();
-	await sam.collab.addInvite(yan.collab.invite());
-	await yan.collab.addInvite(sam.collab.invite());
 	await until(() => yan.collab.isOnline("sam") && sam.collab.isOnline("yan"), "both to be online");
 	await until(() => sam.host.node(kid.id), "sam to see yan's nodes");
-	return { yan, sam, top, kid };
+	return { yan, sam, top, kid, code };
 };
 const handOver = async (from: Seat, to: Seat, nodeId: string) => {
 	await from.collab.offer(nodeId, to.host.owner);
 	await until(() => to.collab.handoffs().some((h) => h.nodeId === nodeId && h.state === "offered"), "the offer to arrive");
 	await to.collab.accept(nodeId);
-	await from.collab.confirm(nodeId);
 	await until(() => to.host.node(nodeId)?.owner === to.host.owner, "the new owner to take over");
+	await until(() => from.host.node(nodeId)?.owner === to.host.owner, "the old owner to let go");
 };
 
-describe("invites", () => {
-	it("round-trip a name, address and key, and reject anything else", () => {
-		const identity = Identity.loadOrCreate(join(root, "k"), "yan");
-		const invite = formatInvite({ name: "yan", address: "10.0.0.5:47610", publicKey: identity.publicKey });
-		expect(invite).toMatch(/^yan@10\.0\.0\.5:47610#[A-Za-z0-9_-]{43}$/); // short enough to stay on one line
-		expect(parseInvite(` ${invite}\n`)).toEqual({ name: "yan", address: "10.0.0.5:47610", publicKey: identity.publicKey });
-		for (const bad of ["", "yan", "yan@host#key", "../x@h:1#k", "yan@h:1#"]) expect(() => parseInvite(bad)).toThrow(/not an invite/);
+describe("join codes", () => {
+	it("round-trip a network and where to find it, and reject anything else", () => {
+		const network = createNetwork("acme-web");
+		const code = formatJoinCode(network, ["10.0.0.5", "laptop.local:47123"]);
+		expect(code).toMatch(/^acme-web\.[A-Za-z0-9_-]{43}@10\.0\.0\.5,laptop\.local:47123$/);
+		expect(parseJoinCode(` ${code}\n`)).toEqual({ ...network, seeds: ["10.0.0.5", "laptop.local:47123"] });
+		expect(parseJoinCode(formatJoinCode(network))).toEqual(network);
+		for (const bad of ["", "acme", "acme.short", "../x.k", `a b.${network.secret}`]) expect(() => parseJoinCode(bad)).toThrow(/not a join code/);
+		expect(() => createNetwork("no spaces")).toThrow(/cannot be used as a network name/);
+	});
+
+	it("give every member the same port for the same work, and another for other work", () => {
+		const key = networkKey(TEAM);
+		expect(sharedPort(key, "repo-a")).toBe(sharedPort(networkKey(parseJoinCode(formatJoinCode(TEAM))), "repo-a"));
+		expect(sharedPort(key, "repo-a")).not.toBe(sharedPort(key, "repo-b"));
+		expect(sharedPort(key, "repo-a")).toBeGreaterThanOrEqual(47000);
+		expect(sharedPort(key, "repo-a")).toBeLessThan(49000);
 	});
 });
 
-describe("pairing", () => {
-	it("lets nobody in until the human pairs with them, and shows who knocked", async () => {
-		const yan = seat("yan");
-		const sam = seat("sam");
-		yan.host.add("checkout");
-		await yan.collab.start();
-		await sam.collab.start();
+describe("beacons", () => {
+	it("are read only by members of the network, working on the same thing", () => {
+		const key = networkKey(TEAM);
+		const beacon = encodeBeacon(key, "repo-a", { name: "yan", port: 47123 });
+		expect(decodeBeacon(key, "repo-a", beacon)).toEqual({ name: "yan", port: 47123 });
+		expect(decodeBeacon(key, "repo-b", beacon)).toBeUndefined();
+		expect(decodeBeacon(networkKey(createNetwork("other")), "repo-a", beacon)).toBeUndefined();
+		expect(beacon.toString()).not.toContain("repo-a"); // the LAN does not learn what is being worked on
+		const forged = Buffer.from(beacon.toString().replace("47123", "47124"));
+		expect(decodeBeacon(key, "repo-a", forged)).toBeUndefined();
+		expect(decodeBeacon(key, "repo-a", Buffer.from("not json"))).toBeUndefined();
+	});
+});
 
-		await sam.collab.addInvite(yan.collab.invite()); // sam knows yan; yan does not know sam yet
-		await until(() => yan.collab.people().some((p) => p.name === "sam"), "yan to see the knock");
-		expect(yan.collab.people().find((p) => p.name === "sam")).toMatchObject({ trust: "unknown", online: false });
+describe("finding teammates on the local network", () => {
+	it("connects two hosts that were never told where the other is", async (context) => {
+		const key = networkKey(TEAM);
+		const udpPort = 47000 + Math.floor(Math.random() * 900);
+		const found = (name: string) => {
+			const dir = join(root, name);
+			const collab = new CollabSession({
+				host: new FakeHost(name), identity: Identity.loadOrCreate(join(dir, "keys"), name), peers: new PeerBook(join(dir, "people.json")), network: TEAM,
+				transport: new TcpTransport({ port: 0 }), dir: join(dir, "collab"), projectDir: dir, redialMs: 0, scope: "repo-a",
+				discovery: new LanDiscovery({ key, scope: "repo-a", name, udpPort, intervalMs: 100 }),
+			});
+			sessions.push(collab);
+			return collab;
+		};
+		const yan = found("yan");
+		const sam = found("sam");
+		await yan.start();
+		await sam.start();
+		// Multicast is not available everywhere tests run (some containers, some CI); where it is not, there is nothing to check.
+		const met = await until(() => yan.isOnline("sam") && sam.isOnline("yan"), "the hosts to hear each other", 3000).then(() => true, () => false);
+		if (!met) context.skip();
+		expect(yan.people().map((p) => [p.name, p.online])).toEqual([["yan", true], ["sam", true]]);
+	});
+});
+
+describe("a network", () => {
+	it("lets in whoever has the join code, with nothing for anyone to approve, and says who joined", async () => {
+		const { yan, sam } = await pair();
+		expect(sam.host.nodes().map((n) => [n.name, n.owner]).sort()).toEqual([["checkout", "yan"], ["impl", "yan"]]);
+		expect(yan.collab.people().map((p) => [p.name, p.trust, p.online])).toEqual([["yan", "trusted", true], ["sam", "trusted", true]]);
 		expect(yan.collab.people().find((p) => p.name === "sam")?.fingerprint).toBe(sam.collab.people().find((p) => p.self)?.fingerprint);
-		expect(sam.collab.isOnline("yan")).toBe(false);
-		expect(sam.host.nodes()).toEqual([]);
+		expect(yan.logs).toContain("sam joined team.");
+		expect(sam.logs).toContain("yan joined team.");
+	});
 
-		await yan.collab.trustPerson("sam");
-		expect(await sam.collab.dial("yan")).toBe(true);
-		await until(() => sam.host.nodes().length === 1, "yan's node to appear for sam");
-		expect(sam.host.nodes().map((n) => [n.name, n.owner])).toEqual([["checkout", "yan"]]);
-		expect(yan.collab.people().find((p) => p.name === "sam")).toMatchObject({ trust: "trusted", online: true });
+	it("keeps out someone without the network's secret, and tells them nothing", async () => {
+		const { yan, code } = await pair();
+		const outsider = seat("kim", formatJoinCode(createNetwork("team"), parseJoinCode(code).seeds));
+		await outsider.collab.start();
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		expect(outsider.collab.isOnline("yan")).toBe(false);
+		expect(outsider.host.nodes()).toEqual([]);
+		expect(yan.collab.people().map((p) => p.name)).toEqual(["yan", "sam"]);
+	});
+
+	it("introduces everyone to everyone: knowing one member is enough", async () => {
+		const { yan, sam, kid, code } = await pair();
+		const kim = seat("kim", code); // kim was only told where yan is
+		const hers = kim.host.add("kim's work");
+		await kim.collab.start();
+		await until(() => kim.collab.isOnline("sam") && sam.collab.isOnline("kim"), "kim and sam to find each other through yan");
+		await until(() => sam.host.node(hers.id) && kim.host.node(kid.id), "trees to be exchanged");
+		expect(yan.collab.people().map((p) => p.name)).toEqual(["yan", "kim", "sam"]);
+		expect(sam.logs).toContain("kim joined team.");
+	});
+
+	it("connects hosts only when they are working on the same thing", async () => {
+		const scoped = (name: string, scope: string, code?: string) => {
+			const dir = join(root, `${name}-${scope}`);
+			const collab = new CollabSession({
+				host: new FakeHost(name), identity: Identity.loadOrCreate(join(root, name, "keys"), name), peers: new PeerBook(join(root, name, "people.json")), network: code ? parseJoinCode(code) : TEAM,
+				transport: new TcpTransport({ host: "127.0.0.1", port: 0 }), dir: join(dir, "collab"), projectDir: dir, advertise: "127.0.0.1", redialMs: 0, scope,
+			});
+			sessions.push(collab);
+			return collab;
+		};
+		const yan = scoped("yan", "repo-a");
+		await yan.start();
+		const elsewhere = scoped("sam", "repo-b", yan.joinCode());
+		await elsewhere.start();
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		expect(elsewhere.isOnline("yan")).toBe(false);
+		const here = scoped("sam", "repo-a", yan.joinCode());
+		await here.start();
+		await until(() => here.isOnline("yan") && yan.isOnline("sam"), "the hosts for the same repository to connect");
+	});
+
+	it("shares one list of people between all of a person's hosts", async () => {
+		const { sam } = await pair();
+		const other = new PeerBook(join(sam.dir, "people.json")); // sam's host for another repository
+		expect(other.list().map((p) => p.name)).toEqual(["yan"]);
+		expect(other.learn("kim", "a-key")).toBe(true);
+		expect(other.learn("kim", "another-key")).toBe(false); // the first key seen stays
+		await until(() => sam.collab.people().some((p) => p.name === "kim"), "sam's first host to see who the second one met");
+		expect(other.keyOf("kim")).toBe("a-key");
 	});
 
 	it("shares nodes without local paths", async () => {
@@ -168,56 +261,57 @@ describe("pairing", () => {
 	});
 
 	it("shows a peer as offline when they leave, keeps their nodes as last seen, and reconnects", async () => {
-		const { yan, sam, kid } = await pair();
+		const { yan, sam, kid, code } = await pair();
 		await sam.collab.stop();
 		await until(() => !yan.collab.isOnline("sam"), "yan to notice sam left");
 		expect(yan.collab.people().find((p) => p.name === "sam")?.online).toBe(false);
 
-		const back = seat("sam"); // same key and peer book, new process
+		const back = seat("sam", code); // same key and people, new process
 		await back.collab.start();
 		await until(() => back.collab.isOnline("yan"), "sam to reconnect");
 		await until(() => back.host.node(kid.id), "the tree to be fetched again");
 		expect(yan.collab.isOnline("sam")).toBe(true);
 	});
 
-	it("refuses someone using a paired name with a different key, and says so", async () => {
-		const { yan, sam } = await pair();
+	it("refuses someone using a known name with a different key, even with the secret, until the human accepts it", async () => {
+		const { yan, sam, code } = await pair();
 		await sam.collab.stop();
 		await until(() => !yan.collab.isOnline("sam"));
-		const impostor = seat("sam", "impostor");
+		const impostor = seat("sam", code, "impostor");
 		await impostor.collab.start();
-		await impostor.collab.addInvite(yan.collab.invite());
 		await until(() => yan.collab.people().find((p) => p.name === "sam")?.trust === "changed", "the changed key to be flagged");
 		expect(yan.collab.isOnline("sam")).toBe(false);
 		expect(impostor.host.nodes()).toEqual([]);
 		expect(yan.logs.join("\n")).toContain("with a different key");
+
+		await yan.collab.trustPerson("sam"); // sam really did get a new machine
+		impostor.collab.reach();
+		await until(() => impostor.collab.isOnline("yan"), "sam's new machine to get in");
+		expect(yan.collab.people().find((p) => p.name === "sam")).toMatchObject({ trust: "trusted", online: true });
 	});
 });
 
 describe("handoff", () => {
-	it("moves a node only after offer, accept and confirm", async () => {
+	it("moves a node once its owner offers it and the other person accepts", async () => {
 		const { yan, sam, kid } = await pair();
 		await yan.collab.offer(kid.id, "sam");
 		await until(() => sam.collab.handoffs().length === 1, "sam to see the offer");
 		expect(sam.collab.handoffs()).toMatchObject([{ nodeId: kid.id, from: "yan", to: "sam", state: "offered", role: "recipient" }]);
+		expect(yan.host.node(kid.id)?.owner).toBe("yan"); // offered, not yet gone
 		await expect(yan.collab.confirm(kid.id)).rejects.toThrow(/has not accepted yet/);
 
 		await sam.collab.accept(kid.id);
-		expect(sam.host.node(kid.id)?.owner).toBe("yan"); // accepted, not yet released
-		expect(yan.collab.handoffs()[0]?.state).toBe("accepted");
-
-		await yan.collab.confirm(kid.id);
+		await until(() => sam.host.node(kid.id)?.owner === "sam", "sam to take over");
 		expect(yan.host.node(kid.id)).toMatchObject({ owner: "sam", version: 2 });
 		expect(yan.host.slept).toContain(kid.id);
-		await until(() => sam.host.node(kid.id)?.owner === "sam", "sam to take over");
 		expect(sam.host.node(kid.id)).toMatchObject({ version: 2, cwd: join(root, "sam", "project") });
-		expect(yan.collab.pendingTransfers()).toEqual([]);
+		await until(() => yan.collab.pendingTransfers().length === 0);
 		expect([yan.collab.handoffs(), sam.collab.handoffs()]).toEqual([[], []]);
 	});
 
-	it("refuses to offer to someone unpaired, and to offer what is not yours", async () => {
+	it("refuses to offer to someone outside the network, and to offer what is not yours", async () => {
 		const { yan, sam, kid } = await pair();
-		await expect(yan.collab.offer(kid.id, "kim")).rejects.toThrow(/not paired with anyone called "kim"/);
+		await expect(yan.collab.offer(kid.id, "kim")).rejects.toThrow(/Nobody called "kim" is in team/);
 		await expect(sam.collab.offer(kid.id, "yan")).rejects.toThrow(/only its owner can offer it/);
 	});
 
@@ -225,9 +319,8 @@ describe("handoff", () => {
 		const { yan, sam, kid } = await pair();
 		await yan.collab.offer(kid.id, "sam");
 		await until(() => sam.collab.handoffs().length === 1);
-		await sam.collab.accept(kid.id);
 		await sam.collab.cancel(kid.id);
-		await expect(yan.collab.confirm(kid.id)).rejects.toThrow(/no open handoff/);
+		expect(yan.collab.handoffs()).toEqual([]);
 
 		await yan.collab.offer(kid.id, "sam");
 		await until(() => sam.collab.handoffs().length === 1);
@@ -245,7 +338,7 @@ describe("handoff", () => {
 		await expect(sam.collab.accept(kid.id)).rejects.toThrow(/no open handoff/);
 	});
 
-	it("needs both people online for accept and for confirm", async () => {
+	it("needs the owner online to accept", async () => {
 		const { yan, sam, kid } = await pair();
 		await yan.collab.offer(kid.id, "sam");
 		await until(() => sam.collab.handoffs().length === 1);
@@ -254,18 +347,33 @@ describe("handoff", () => {
 		await expect(sam.collab.accept(kid.id)).rejects.toThrow(/yan is offline/);
 	});
 
+	it("does not send a session away while its owner has it open, and sends it when they leave", async () => {
+		const { yan, sam, kid } = await pair();
+		yan.host.open.add(kid.id);
+		await yan.collab.offer(kid.id, "sam");
+		await until(() => sam.collab.handoffs().length === 1);
+		await sam.collab.accept(kid.id);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(yan.collab.handoffs()).toMatchObject([{ state: "accepted", role: "owner" }]);
+		expect(yan.host.node(kid.id)?.owner).toBe("yan");
+		await expect(yan.collab.confirm(kid.id)).rejects.toThrow(/open in a terminal/);
+
+		yan.host.open.delete(kid.id);
+		await yan.collab.settle(); // what the timer does
+		await until(() => sam.host.node(kid.id)?.owner === "sam", "the session to go once it is left");
+	});
+
 	it("keeps a released session until the new owner confirms receiving it, and sends it again", async () => {
 		const { yan, sam, kid } = await pair();
 		await yan.collab.offer(kid.id, "sam");
 		await until(() => sam.collab.handoffs().length === 1);
-		await sam.collab.accept(kid.id);
 		sam.host.failNextAdoption = true; // the first delivery fails on sam's side
-		await yan.collab.confirm(kid.id);
+		await sam.collab.accept(kid.id);
+		await until(() => yan.host.node(kid.id)?.owner === "sam", "the release to be committed");
+		await until(() => yan.logs.join("\n").includes("has not reached them yet"), "the failed delivery to be noticed");
 
-		expect(yan.host.node(kid.id)?.owner).toBe("sam"); // the release is committed
-		expect(yan.collab.pendingTransfers()).toEqual([{ nodeId: kid.id, to: "sam" }]); // but the package is kept
+		expect(yan.collab.pendingTransfers()).toEqual([{ nodeId: kid.id, to: "sam" }]); // the package is kept
 		expect(sam.host.node(kid.id)?.owner).toBe("yan");
-		expect(yan.logs.join("\n")).toContain("has not reached them yet");
 
 		await yan.collab.refresh(); // any later contact retries
 		await until(() => sam.host.node(kid.id)?.owner === "sam", "the retry to land");
@@ -275,7 +383,6 @@ describe("handoff", () => {
 	it("can hand a node back", async () => {
 		const { yan, sam, kid } = await pair();
 		await handOver(yan, sam, kid.id);
-		await until(() => yan.host.node(kid.id)?.owner === "sam");
 		await handOver(sam, yan, kid.id);
 		expect(yan.host.node(kid.id)).toMatchObject({ owner: "yan", version: 3 });
 		await until(() => sam.host.node(kid.id)?.version === 3);
@@ -289,6 +396,75 @@ describe("handoff", () => {
 		// Even if the local view is rolled back to "mine", the signed log disagrees and wins.
 		yan.host.set({ ...(yan.host.node(kid.id) as NodeMeta), owner: "yan", version: 1 });
 		await until(() => yan.host.node(kid.id)?.owner === "sam", "the stale view to be corrected");
+	});
+});
+
+describe("asking for a session", () => {
+	it("moves it as soon as its owner approves, with nothing more for the asker to do", async () => {
+		const { yan, sam, kid } = await pair();
+		await sam.collab.ask(kid.id);
+		expect(sam.collab.requests()).toMatchObject([{ nodeId: kid.id, from: "sam", to: "yan", role: "asker" }]);
+		expect(yan.collab.requests()).toMatchObject([{ nodeId: kid.id, nodeName: "impl", from: "sam", to: "yan", role: "owner" }]);
+		expect(yan.logs).toContain('sam asks to take over "impl".');
+		expect(yan.host.node(kid.id)?.owner).toBe("yan"); // asking moves nothing
+
+		await yan.collab.approve(kid.id, "sam");
+		await until(() => sam.host.node(kid.id)?.owner === "sam", "the session to become sam's");
+		await until(() => yan.host.node(kid.id)?.owner === "sam");
+		expect(sam.host.node(kid.id)).toMatchObject({ version: 2 });
+		expect([yan.collab.requests(), sam.collab.requests()]).toEqual([[], []]);
+	});
+
+	it("leaves everything as it was when the owner declines, and tells the asker", async () => {
+		const { yan, sam, kid } = await pair();
+		await sam.collab.ask(kid.id);
+		await yan.collab.decline(kid.id, "sam");
+		await until(() => sam.collab.requests().length === 0, "sam to hear the no");
+		expect(sam.logs).toContain('yan declined to hand over "impl".');
+		expect(yan.collab.requests()).toEqual([]);
+		expect(yan.host.node(kid.id)).toMatchObject({ owner: "yan", version: 1 });
+		// A later offer is an ordinary offer: sam is asked, not assumed.
+		await yan.collab.offer(kid.id, "sam");
+		await until(() => sam.collab.handoffs().length === 1);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(sam.host.node(kid.id)?.owner).toBe("yan");
+	});
+
+	it("can be withdrawn, and cannot be approved after that", async () => {
+		const { yan, sam, kid } = await pair();
+		await sam.collab.ask(kid.id);
+		await sam.collab.withdraw(kid.id);
+		expect([yan.collab.requests(), sam.collab.requests()]).toEqual([[], []]);
+		await expect(yan.collab.approve(kid.id, "sam")).rejects.toThrow(/sam is not asking/);
+	});
+
+	it("is refused for your own session, and while its owner is away", async () => {
+		const { yan, sam, kid } = await pair();
+		await expect(yan.collab.ask(kid.id)).rejects.toThrow(/already yours/);
+		await yan.collab.stop();
+		await until(() => !sam.collab.isOnline("yan"));
+		await expect(sam.collab.ask(kid.id)).rejects.toThrow(/yan is offline/);
+		expect(sam.collab.requests()).toEqual([]);
+	});
+
+	it("is granted when the asker comes back, if the owner approved while they were away", async () => {
+		const { yan, sam, kid, code } = await pair();
+		await sam.collab.ask(kid.id);
+		await sam.collab.stop();
+		await until(() => !yan.collab.isOnline("sam"));
+		await yan.collab.approve(kid.id, "sam");
+		expect(yan.host.node(kid.id)?.owner).toBe("yan");
+
+		const back = seat("sam", code);
+		await back.collab.start();
+		await until(() => back.host.node(kid.id)?.owner === "sam", "the session to arrive once sam is back");
+	});
+
+	it("expires like an offer does", async () => {
+		const { yan, sam, kid } = await pair();
+		await sam.collab.ask(kid.id);
+		clock += 61_000;
+		expect([yan.collab.requests(), sam.collab.requests()]).toEqual([[], []]);
 	});
 });
 
@@ -316,7 +492,7 @@ describe("mail between owners", () => {
 		yan.host.router?.(mail(top, kid, "while you were out"), yan.host.node(kid.id) as NodeMeta);
 		expect(yan.logs.join("\n")).toContain("sam is offline; the message");
 
-		const back = seat("sam");
+		const back = seat("sam", yan.collab.joinCode());
 		back.host.set({ ...(sam.host.node(kid.id) as NodeMeta) });
 		await back.collab.start();
 		await until(() => back.host.delivered.length === 1, "the queued message to arrive");
@@ -362,7 +538,7 @@ describe("setup", () => {
 		expect(
 			() =>
 				new CollabSession({
-					host: new FakeHost("yan"), identity: Identity.loadOrCreate(join(dir, "keys"), "sam"), peers: new PeerBook(join(dir, "peers.json")),
+					host: new FakeHost("yan"), identity: Identity.loadOrCreate(join(dir, "keys"), "sam"), peers: new PeerBook(join(dir, "people.json")), network: TEAM,
 					transport: new TcpTransport({ host: "127.0.0.1" }), dir: join(dir, "collab"), projectDir: dir,
 				}),
 		).toThrow(/must match the host owner/);

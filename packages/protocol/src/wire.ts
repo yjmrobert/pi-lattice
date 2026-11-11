@@ -45,9 +45,20 @@ export interface DialogInfo {
 export interface SharingPerson {
 	name: string;
 	fingerprint: string;
-	trust: "trusted" | "unknown" | "changed";
+	/** `changed`: someone used this name with a key other than the one they are known by. */
+	trust: "trusted" | "changed";
+	/** Their host for this repository is connected right now. */
 	online: boolean;
 	self: boolean;
+}
+
+/** Someone asking to take a session over. `owner`: they ask you. `asker`: you asked. */
+export interface SharingRequest {
+	nodeId: string;
+	nodeName: string;
+	from: string;
+	to: string;
+	role: "owner" | "asker";
 }
 
 export interface SharingHandoff {
@@ -69,8 +80,8 @@ export interface UiState {
 	foreground: string[];
 	/** Per node running in the background: the last thing its agent did, and when. */
 	activity?: Record<string, { text: string; at: number }>;
-	/** Present when the tree is shared peer to peer. */
-	sharing: null | { people: SharingPerson[]; handoffs: SharingHandoff[]; pendingTransfers: Array<{ nodeId: string; to: string }> };
+	/** Present when this person is in a network: the tree is shared with its other members, peer to peer. */
+	sharing: null | { network: string; people: SharingPerson[]; handoffs: SharingHandoff[]; requests: SharingRequest[]; pendingTransfers: Array<{ nodeId: string; to: string }> };
 }
 
 /** The control API a person's Pi uses to drive the host. Carried by the `ui` request. */
@@ -98,7 +109,12 @@ export interface UiApi {
 	sleep: { params: { nodeId: string }; result: Record<string, never> };
 	/** A node's conversation, for reading. Fetched from its owner when it is someone else's. */
 	messages: { params: { nodeId: string }; result: { messages: unknown[] } };
-	/** Sharing actions: invite, add, trust, offer, accept, confirm, cancel, refresh. Returns text to show. */
+	/**
+	 * Network and handoff actions. Returns text to show.
+	 * The network: `create <name>`, `join <code>`, `leave`, `code`, `trust <person>`, `refresh`.
+	 * Handing over: `offer <node> <person>`, `accept <node>`, `cancel <node>`, `confirm <node>`.
+	 * Asking: `ask <node>`, `withdraw <node>`, `approve <node> <person>`, `decline <node> <person>`.
+	 */
 	sharing: { params: { action: string; args: string[] }; result: { text: string } };
 	shutdown: { params: Record<string, never>; result: Record<string, never> };
 	rename: { params: { nodeId: string; name: string }; result: { node: NodeMeta } };

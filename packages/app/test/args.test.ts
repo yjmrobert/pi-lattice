@@ -13,8 +13,8 @@ describe("parseArgs", () => {
 	});
 
 	it("reads sharing options", () => {
-		expect(parseArgs(["--listen", "47610", "--peer", "a@h:1#k", "--peer", "b@h:2#k", "--advertise", "10.0.0.5", "--as", "yan"], "/proj")).toMatchObject({
-			listen: "47610", peers: ["a@h:1#k", "b@h:2#k"], advertise: "10.0.0.5", as: "yan",
+		expect(parseArgs(["--join", "team.secret@10.0.0.9", "--advertise", "10.0.0.5", "--as", "yan"], "/proj")).toMatchObject({
+			join: "team.secret@10.0.0.9", advertise: "10.0.0.5", as: "yan",
 		});
 	});
 

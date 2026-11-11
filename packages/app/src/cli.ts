@@ -21,10 +21,9 @@ async function main(): Promise<number> {
 	const daemon = await runDaemon({
 		stateDir: options.stateDir ? resolve(options.stateDir) : join(cwd, ".lattice"),
 		cwd,
-		peers: options.peers,
 		...(options.piArgs.length > 0 ? { piArgs: options.piArgs } : {}),
 		...(options.as !== undefined ? { owner: options.as } : {}),
-		...(options.listen !== undefined ? { listen: options.listen } : {}),
+		...(options.join !== undefined ? { join: options.join } : {}),
 		...(options.advertise !== undefined ? { advertise: options.advertise } : {}),
 		// With the line interface a person is present for as long as the process runs.
 		idleExitMs: options.command === "daemon" ? (options.idleExit ?? 600) * 1000 : 0,
@@ -38,8 +37,8 @@ async function main(): Promise<number> {
 		}
 		const host = daemon.host;
 		let root = host.nodes().find((node) => node.parentId === null);
-		// Joining someone else's shared tree creates nothing: their sessions appear once paired.
-		const joining = options.peers.length > 0 && options.name === undefined;
+		// Joining a network creates nothing: the teammates' sessions appear once their hosts are found.
+		const joining = options.join !== undefined && options.name === undefined;
 		if (!root && !joining) {
 			root = await host.createRoot({
 				name: options.name ?? basename(cwd),

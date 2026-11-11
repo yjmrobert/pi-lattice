@@ -1282,6 +1282,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 	}
 
+	/** Whether a person has the node open in a terminal. */
+	inUse(id: string): boolean {
+		return this.runtimes.get(id)?.foreground !== undefined;
+	}
+
 	/** Give up a node after a confirmed handoff: stop its session and mark it as someone else's. */
 	async releaseNode(id: string, toOwner: string, version: number): Promise<void> {
 		this.must(id);

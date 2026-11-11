@@ -612,7 +612,7 @@ function perform(action: PaneAction): void {
 		if (!client) return;
 		if (action.do === "answer") settle(client.ui("answerDialog", { nodeId: action.nodeId, dialogId: action.dialogId, answer: { confirmed: action.confirmed } }));
 		else if (action.do === "decide") settle(client.ui("decideMail", { nodeId: action.nodeId, envelopeId: action.envelopeId, action: action.action }));
-		else if (action.do === "sharing") settle(client.ui("sharing", { action: action.action, args: [action.nodeId] }));
+		else if (action.do === "sharing") settle(client.ui("sharing", { action: action.action, args: action.args }));
 	}
 }
 
@@ -985,90 +985,155 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	const share = async (ctx: ExtensionCommandContext, targetText: string): Promise<void> => {
+	/** Run a network or handoff action on a repository's host and say what it answers. */
+	const sharing = async (ctx: ExtensionCommandContext, client: HostClient, action: string, args: string[]): Promise<boolean> => {
+		let done = true;
+		try {
+			const { text } = await client.ui("sharing", { action, args });
+			if (text) ctx.ui.notify(text, "info");
+		} catch (error) {
+			fail(ctx, error);
+			done = false;
+		}
+		await refresh();
+		return done;
+	};
+
+	/** What handing a session to someone does, said before the one step that cannot be taken back. */
+	const WHAT_GOES = "It stops here, and its whole conversation, including any file contents and command output in it, goes directly to them, with its branch if it has one. After that you can read it but not run it.";
+	const NO_NETWORK = "You are not in a network yet. /lattice network creates one, or joins a teammate's.";
+
+	/** The network: create or join one; then who is in it, the join code, and anything being handed over. */
+	const network = async (ctx: ExtensionCommandContext): Promise<void> => {
 		const client = need(ctx);
 		if (!client) return;
 		await refresh();
-		const run = async (action: string, args: string[]): Promise<void> => {
-			try {
-				const { text } = await client.ui("sharing", { action, args });
-				if (text) ctx.ui.notify(text, "info");
-			} catch (error) {
-				fail(ctx, error);
+		const run = (action: string, args: string[]): Promise<boolean> => sharing(ctx, client, action, args);
+		const state = homeLink()?.state?.sharing;
+		if (!state) {
+			const create = "Create a network";
+			const join = "Join with a teammate's code";
+			const picked = await ctx.ui.select(
+				"A network is you and your teammates. Everyone in it sees everyone's sessions in the repositories they share, can read them, and can hand them to each other. You set it up once; every repository uses it.",
+				[create, join],
+			);
+			if (picked === create) {
+				const name = await ctx.ui.input("A name for the network (letters, digits, dashes)", "team");
+				if (name?.trim()) await run("create", [name.trim()]);
+			} else if (picked === join) {
+				const code = await ctx.ui.input("Paste the join code your teammate gave you", "name.secret@host");
+				if (code?.trim()) await run("join", [code.trim()]);
 			}
-			await refresh();
-		};
-		const sharing = homeLink()?.state?.sharing;
-		if (!sharing) {
-			const port = await ctx.ui.input("Sharing is direct between machines, with no server. Port to accept your collaborators on:", "47610");
-			if (port === undefined) return;
-			await run("start", [port.trim() || "47610"]);
 			return;
 		}
-		const options: Array<{ label: string; act: () => Promise<void> }> = [];
-		for (const handoff of sharing.handoffs) {
+		const options: Array<{ label: string; act: () => Promise<unknown> }> = [];
+		for (const request of state.requests) {
+			const node = `"${request.nodeName}"`;
+			if (request.role === "owner") {
+				options.push({ label: `Hand ${node} to ${request.from}, who asks for it`, act: () => approve(ctx, `${request.nodeId} ${request.from}`) });
+				options.push({ label: `Keep ${node}`, act: () => run("decline", [request.nodeId, request.from]) });
+			} else options.push({ label: `Stop asking ${request.to} for ${node}`, act: () => run("withdraw", [request.nodeId]) });
+		}
+		for (const handoff of state.handoffs) {
 			const node = `"${handoff.nodeName}"`;
 			if (handoff.role === "recipient" && handoff.state === "offered") {
 				options.push({ label: `Accept ${node} from ${handoff.from}`, act: () => run("accept", [handoff.nodeId]) });
 				options.push({ label: `Decline ${node}`, act: () => run("cancel", [handoff.nodeId]) });
 			} else if (handoff.role === "owner" && handoff.state === "accepted") {
-				options.push({
-					label: `Confirm release of ${node} to ${handoff.to}`,
-					act: async () => {
-						const sure = await ctx.ui.confirm(
-							`Release ${node} to ${handoff.to}?`,
-							"This stops the session here and sends its whole conversation, including any file contents and command output in it, directly to them, with its branch if it has one. After this you can no longer run it.",
-						);
-						if (!sure) return;
-						if (handoff.nodeId === shared.current) {
-							await attach(undefined);
-							emitEvent(pi.events, "lattice:host:assigned", { assignment: null });
-						}
-						await run("confirm", [handoff.nodeId]);
-					},
-				});
-				options.push({ label: `Cancel the handoff of ${node}`, act: () => run("cancel", [handoff.nodeId]) });
-			} else options.push({ label: `Cancel the handoff of ${node}`, act: () => run("cancel", [handoff.nodeId]) });
+				options.push({ label: `Send ${node} to ${handoff.to} now`, act: () => release(ctx, handoff.nodeId) });
+				options.push({ label: `Cancel handing ${node} to ${handoff.to}`, act: () => run("cancel", [handoff.nodeId]) });
+			} else options.push({ label: `Take back the offer of ${node} to ${handoff.to}`, act: () => run("cancel", [handoff.nodeId]) });
 		}
-		for (const person of sharing.people) {
-			if (person.trust === "trusted") continue;
+		for (const person of state.people) {
+			if (person.trust !== "changed") continue;
 			options.push({
-				label: person.trust === "changed" ? `Accept ${person.name}'s new key` : `Pair with ${person.name}`,
+				label: `Accept ${person.name}'s new key`,
 				act: async () => {
 					const sure = await ctx.ui.confirm(
-						`Pair with ${person.name}?`,
-						`Key fingerprint: ${person.fingerprint}\n\nCompare it with ${person.name} over a channel you already trust. Once paired, their sessions appear in your pane and their agents can send your agents mail, which still waits for your approval.${person.trust === "changed" ? "\n\nThis key is DIFFERENT from the one you paired with before." : ""}`,
+						`Is this really ${person.name}?`,
+						`Someone connected as ${person.name} with a key that is DIFFERENT from the one you know them by. That is expected if they have a new machine or reinstalled, and otherwise it is someone else using their name.\n\nNew key fingerprint: ${person.fingerprint}\n\nCompare it with ${person.name} over a channel you already trust.`,
 					);
 					if (sure) await run("trust", [person.name]);
 				},
 			});
 		}
-		const target = find(targetText) ?? (shared.current ? find(shared.current) : undefined);
-		const paired = sharing.people.filter((person) => !person.self && person.trust === "trusted");
-		if (mine(target) && paired.length > 0) {
-			options.push({
-				label: `Offer "${target.name}" to someone`,
-				act: async () => {
-					const to = await ctx.ui.select("Offer to whom? They must accept, then you confirm; both of you need to be online.", paired.map((person) => `${person.name} (${person.online ? "online" : "offline"})`));
-					if (to !== undefined) await run("offer", [target.id, to.split(" ")[0] ?? ""]);
-				},
-			});
-		}
-		options.push({ label: "Show my invite", act: () => run("invite", []) });
+		const others = state.people.filter((person) => !person.self);
+		options.push({ label: "Show the join code", act: () => run("code", []) });
 		options.push({
-			label: "Pair using someone's invite",
+			label: `Who is in ${state.network}`,
+			act: async () => ctx.ui.notify(
+				[...state.people.map((person) => `${person.name}${person.self ? " (you)" : person.trust === "changed" ? "  key changed" : person.online ? "  here" : "  not in this repository right now"}`), ...(others.length === 0 ? ["Nobody else yet. Give a teammate the join code."] : [])].join("\n"),
+				"info",
+			),
+		});
+		options.push({ label: "Look for teammates again", act: () => run("refresh", []) });
+		options.push({
+			label: `Leave ${state.network}`,
 			act: async () => {
-				const invite = await ctx.ui.input("Paste the invite they gave you", "name@host:port#key");
-				if (invite) await run("add", [invite.trim()]);
+				if (await ctx.ui.confirm(`Leave ${state.network}?`, "Your sessions are no longer shown to your teammates, and theirs stay here as last seen. This applies to every repository. You can join again with the code.")) await run("leave", []);
 			},
 		});
-		options.push({
-			label: "Who is here",
-			act: async () => ctx.ui.notify(sharing.people.map((person) => `${person.name}${person.self ? " (you)" : person.online ? "  online" : "  offline"}  ${person.fingerprint}`).join("\n"), "info"),
-		});
-		options.push({ label: "Refresh from everyone online", act: () => run("refresh", []) });
-		const picked = await ctx.ui.select(`Sharing as ${homeLink()?.state?.owner ?? "you"}`, options.map((option) => option.label));
+		const here = others.filter((person) => person.online).length;
+		const picked = await ctx.ui.select(`${state.network} · ${others.length === 0 ? "only you so far" : `${others.length + 1} people, ${here} here with you`}`, options.map((option) => option.label));
 		await options.find((option) => option.label === picked)?.act();
+	};
+
+	/** Offer one of this person's sessions to a teammate. It is theirs as soon as they accept. */
+	const offer = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
+		await refresh();
+		const [first = "", to = ""] = arg.split(/\s+/).filter(Boolean);
+		const node = named(ctx, first);
+		const link = node ? linkOf(node.id) : undefined;
+		if (!node || !link) return;
+		if (node.owner !== link.state?.owner) return ctx.ui.notify(`"${node.name}" belongs to ${node.owner}. To get it, ask for it: /lattice take ${node.name}.`, "warning");
+		const state = link.state?.sharing;
+		if (!state) return ctx.ui.notify(NO_NETWORK, "info");
+		const others = state.people.filter((person) => !person.self && person.trust === "trusted");
+		if (others.length === 0) return ctx.ui.notify(`Nobody else is in ${state.network} yet. /lattice network shows the code to give a teammate.`, "info");
+		const labels = others.map((person) => `${person.name}${person.online ? "" : " (away: they see it when they are back)"}`);
+		const picked = to || (await ctx.ui.select(`Offer "${node.name}" to whom? It is theirs as soon as they accept; you are not asked again.\n\n${WHAT_GOES}`, labels))?.split(" ")[0];
+		if (!picked) return;
+		if ((await sharing(ctx, link.client, "offer", [node.id, picked])) && node.id === shared.current) ctx.ui.notify(`"${node.name}" is open here. Once ${picked} accepts, it is sent when you leave it.`, "info");
+	};
+
+	/** Ask a teammate for one of their sessions. */
+	const take = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
+		await refresh();
+		const node = named(ctx, arg);
+		const link = node ? linkOf(node.id) : undefined;
+		if (!node || !link) return;
+		if (node.owner === link.state?.owner) return ctx.ui.notify(`"${node.name}" is already yours.`, "info");
+		if (!link.state?.sharing) return ctx.ui.notify(NO_NETWORK, "info");
+		await sharing(ctx, link.client, "ask", [node.id]);
+	};
+
+	/** Say yes to a teammate who asked for a session. This is the step that sends it. */
+	const approve = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
+		await refresh();
+		const [first = "", from = ""] = arg.split(/\s+/).filter(Boolean);
+		const node = named(ctx, first);
+		const link = node ? linkOf(node.id) : undefined;
+		if (!node || !link) return;
+		const asking = link.state?.sharing?.requests.filter((request) => request.role === "owner" && request.nodeId === node.id).map((request) => request.from) ?? [];
+		const who = from || asking[0];
+		if (!who || !asking.includes(who)) return ctx.ui.notify(`${who || "Nobody"} is ${who ? "not " : ""}asking for "${node.name}".`, "info");
+		if (!(await ctx.ui.confirm(`Hand "${node.name}" to ${who}?`, WHAT_GOES))) return;
+		if (await sharing(ctx, link.client, "approve", [node.id, who])) await release(ctx, node.id, true);
+	};
+
+	/** Send a session its new owner has accepted, leaving it first if it is the one open here. */
+	const release = async (ctx: ExtensionCommandContext, nodeId: string, quiet = false): Promise<void> => {
+		const link = linkOf(nodeId);
+		if (!link) return;
+		if (nodeId === shared.current) {
+			await attach(undefined);
+			emitEvent(pi.events, "lattice:host:assigned", { assignment: null });
+		}
+		await refresh();
+		// The host sends it by itself once the other person has accepted; this only saves the wait.
+		const ready = linkOf(nodeId)?.state?.sharing?.handoffs.some((handoff) => handoff.nodeId === nodeId && handoff.role === "owner" && handoff.state === "accepted");
+		if (ready) await sharing(ctx, link.client, "confirm", [nodeId]);
+		else if (!quiet) ctx.ui.notify("Nothing to send: nobody has accepted that session.", "info");
 	};
 
 	/** The session a command names, or a word about there being none. */
@@ -1331,7 +1396,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		const state = homeLink()?.state;
 		ctx.ui.notify(
 			state
-				? [`Tree of ${state.nodes.length} session${state.nodes.length === 1 ? "" : "s"}, as ${state.owner}. Open here: ${shared.current ? name(shared.current) : "none"}.`, ...renderCompact(view(), 30), "alt+l focuses the pane · /lattice new · /lattice approvals · /lattice share"].join("\n")
+				? [`Tree of ${state.nodes.length} session${state.nodes.length === 1 ? "" : "s"}, as ${state.owner}. Open here: ${shared.current ? name(shared.current) : "none"}.`, ...renderCompact(view(), 30), "alt+l focuses the pane · /lattice new · /lattice approvals · /lattice network"].join("\n")
 				: "No session tree here yet. Run /lattice to start one.",
 			"info",
 		);
@@ -1387,7 +1452,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			},
 		},
 		{ name: "approvals", does: "review messages waiting for approval", run: (ctx) => approvals(ctx) },
-		{ name: "share", does: "pair with someone, offer or accept a session", run: (ctx, arg) => share(ctx, arg) },
+		{ name: "network", does: "create or join a network of teammates; who is in it, the join code, what is being handed over", run: (ctx) => network(ctx) },
+		{ name: "offer", usage: "offer <session> [person]", does: "offer one of your sessions to a teammate", run: (ctx, arg) => offer(ctx, arg) },
+		{ name: "take", usage: "take <session>", does: "ask a teammate for one of their sessions", run: (ctx, arg) => take(ctx, arg) },
+		{ name: "approve", usage: "approve <session> [person]", does: "hand a session to the teammate who asked for it", run: (ctx, arg) => approve(ctx, arg) },
+		{ name: "release", usage: "release <session>", does: "send a session its new owner accepted, without waiting", run: async (ctx, arg) => void (await refresh(), named(ctx, arg) && (await release(ctx, (named(ctx, arg) as NodeMeta).id))) },
 		{ name: "status", does: "list the tree", run: (ctx) => status(ctx) },
 		{ name: "config", usage: "config [user] [setting] [value]", does: "open the settings, or show or change one, for this repository or for all of yours", run: (ctx, arg) => configure(ctx, arg) },
 		{ name: "prompt", does: "show what this session is told beyond what you type, and where each part comes from", run: (ctx) => prompt(ctx) },

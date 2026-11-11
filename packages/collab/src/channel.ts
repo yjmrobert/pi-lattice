@@ -7,10 +7,14 @@
  *   2. responder -> initiator   hello: the same, plus a signature over both hellos
  *   3. initiator -> responder   a signature over both hellos (first encrypted frame)
  *
- * Each side checks the other's signature against the key it has pinned for that name, so
- * a connection only succeeds between people who have deliberately paired. Frame keys come
- * from the ephemeral exchange, so recorded traffic cannot be decrypted later with an
- * identity key. Frames are length-prefixed ChaCha20-Poly1305 with a per-direction counter.
+ * Each side checks the other's signature against the key it has pinned for that name. Frame
+ * keys come from the ephemeral exchange, so recorded traffic cannot be decrypted later with
+ * an identity key. Frames are length-prefixed ChaCha20-Poly1305 with a per-direction counter.
+ *
+ * Inside a network, steps 2 and 3 also carry a keyed hash of the handshake under the
+ * network's secret. That is what lets a member in: someone whose name is not pinned yet is
+ * pinned once they prove they hold the secret, and nobody without it connects at all. A
+ * pinned name that turns up with a different key is still refused, secret or not.
  *
  * This is a standard construction built from Node's primitives. It has tests, but it has
  * not had an independent security review.
@@ -20,6 +24,7 @@ import { EventEmitter } from "node:events";
 import type { Duplex } from "node:stream";
 import { canonicalJson } from "./canonical.ts";
 import { type Identity, isPersonName, verifyBytes } from "./identity.ts";
+import { checkMemberProof, memberProof, networkTag } from "./network.ts";
 
 const VERSION = 1;
 const CONTEXT = "pi-lattice-peer-v1";
@@ -32,6 +37,10 @@ interface Hello {
 	key: string;
 	e: string;
 	n: string;
+	/** The network's public label, when the sender is in one. */
+	net?: string;
+	/** What the sender is working on. Two hosts connect only when it is the same thing. */
+	scope?: string;
 }
 
 export interface ChannelOptions {
@@ -42,7 +51,13 @@ export interface ChannelOptions {
 	keyOf(name: string): string | undefined;
 	/** The name the initiator expects to reach. A different name fails the handshake. */
 	expect?: string;
-	/** Told about an authenticated-looking peer whose key is not pinned, so a human can decide. */
+	/** The network's secret. With it, the other side must prove they hold it too, and that is enough to let a new name in. */
+	network?: Buffer;
+	/** What this host is working on, such as a repository. The other side must say the same. */
+	scope?: string;
+	/** Told when someone new proved they are in the network, so their key can be pinned. */
+	onMember?(name: string, publicKey: string): void;
+	/** Told about an authenticated-looking peer whose key is not pinned and who is not let in. */
 	onStranger?(name: string, publicKey: string): void;
 	/** Told when someone uses a paired name with a key other than the pinned one. */
 	onChangedKey?(name: string, publicKey: string): void;
@@ -173,7 +188,11 @@ function parseHello(line: string): Hello {
 	if (!isPersonName(value.name) || typeof value.key !== "string" || typeof value.e !== "string" || typeof value.n !== "string") {
 		throw new HandshakeError("The other side sent a malformed greeting.");
 	}
-	return { v: VERSION, name: value.name, key: value.key, e: value.e, n: value.n };
+	return {
+		v: VERSION, name: value.name, key: value.key, e: value.e, n: value.n,
+		...(typeof value.net === "string" ? { net: value.net } : {}),
+		...(typeof value.scope === "string" ? { scope: value.scope } : {}),
+	};
 }
 
 /** Run the handshake over a fresh stream. Resolves with an open channel, or rejects and destroys the stream. */
@@ -186,7 +205,11 @@ export function openChannel(stream: Duplex, options: ChannelOptions): Promise<Se
 			key: options.identity.publicKey,
 			e: ephemeral.publicKey.export({ type: "spki", format: "der" }).toString("base64"),
 			n: randomBytes(16).toString("base64"),
+			...(options.network ? { net: networkTag(options.network) } : {}),
+			...(options.scope !== undefined ? { scope: options.scope } : {}),
 		};
+		/** Someone not pinned yet, who gets in only by proving they hold the network's secret. */
+		let newcomer = false;
 		let buffer: Buffer = Buffer.alloc(0);
 		let settled = false;
 		let theirs: Hello | undefined;
@@ -212,14 +235,18 @@ export function openChannel(stream: Duplex, options: ChannelOptions): Promise<Se
 		const accept = (hello: Hello): void => {
 			if (options.expect !== undefined && hello.name !== options.expect) throw new HandshakeError(`Expected to reach ${options.expect}, but ${hello.name} answered.`);
 			if (hello.name === options.identity.name) throw new HandshakeError("Refusing a connection from someone using your own name.");
+			if (options.network && hello.net !== mine.net) throw new HandshakeError(`${hello.name} is not in your network.`);
+			if (hello.scope !== mine.scope) throw new HandshakeError(`${hello.name} is working on something else.`);
 			const pinned = options.keyOf(hello.name);
 			if (pinned === undefined) {
-				options.onStranger?.(hello.name, hello.key);
-				throw new HandshakeError(`${hello.name} is not someone you have paired with.`);
-			}
-			if (pinned !== hello.key) {
+				if (!options.network) {
+					options.onStranger?.(hello.name, hello.key);
+					throw new HandshakeError(`${hello.name} is not someone you have paired with.`);
+				}
+				newcomer = true;
+			} else if (pinned !== hello.key) {
 				options.onChangedKey?.(hello.name, hello.key);
-				throw new HandshakeError(`${hello.name} presented a different key from the one you paired with.`);
+				throw new HandshakeError(`${hello.name} presented a different key from the one you know them by.`);
 			}
 			let theirEphemeral: KeyObject;
 			try {
@@ -236,10 +263,17 @@ export function openChannel(stream: Duplex, options: ChannelOptions): Promise<Se
 			theirs = hello;
 		};
 
+		/** Inside a network, the other side must show the keyed hash of this handshake. */
+		const member = (transcript: Buffer, proof: unknown, who: string): void => {
+			if (options.network && !checkMemberProof(options.network, transcript, proof)) throw new HandshakeError(`${who} could not prove they are in your network.`);
+		};
+		const proofOf = (transcript: Buffer): { mac?: string } => (options.network ? { mac: memberProof(options.network, transcript) } : {});
+
 		const finish = (sendCounter: bigint, receiveCounter: bigint): void => {
 			if (settled || !theirs || !keys) return;
 			settled = true;
 			cleanup();
+			if (newcomer) options.onMember?.(theirs.name, theirs.key);
 			resolve(new SecureChannel(stream, theirs.name, keys.send, keys.receive, buffer, sendCounter, receiveCounter));
 		};
 
@@ -261,14 +295,16 @@ export function openChannel(stream: Duplex, options: ChannelOptions): Promise<Se
 					if (theirs) return;
 					const line = takeLine();
 					if (line === undefined) return;
-					const parsed = JSON.parse(line) as Hello & { sig?: unknown };
+					const parsed = JSON.parse(line) as Hello & { sig?: unknown; mac?: unknown };
 					const hello = parseHello(line);
 					accept(hello);
 					if (typeof parsed.sig !== "string" || !verifyBytes(transcriptHash("resp", mine, hello), parsed.sig, hello.key)) {
 						throw new HandshakeError(`${hello.name} could not prove who they are.`);
 					}
+					member(transcriptHash("resp", mine, hello), parsed.mac, hello.name);
 					// Step 3: prove ourselves, as the first encrypted frame.
-					const proof = Buffer.from(JSON.stringify({ sig: options.identity.signBytes(transcriptHash("init", mine, hello)) }), "utf8");
+					const ours = transcriptHash("init", mine, hello);
+					const proof = Buffer.from(JSON.stringify({ sig: options.identity.signBytes(ours), ...proofOf(ours) }), "utf8");
 					stream.write(sealFrame(proof, (keys as { send: Buffer }).send, 0n));
 					finish(1n, 0n);
 				} else if (!theirs) {
@@ -276,16 +312,18 @@ export function openChannel(stream: Duplex, options: ChannelOptions): Promise<Se
 					if (line === undefined) return;
 					const hello = parseHello(line);
 					accept(hello);
-					stream.write(`${JSON.stringify({ ...mine, sig: options.identity.signBytes(transcriptHash("resp", hello, mine)) })}\n`);
+					const ours = transcriptHash("resp", hello, mine);
+					stream.write(`${JSON.stringify({ ...mine, sig: options.identity.signBytes(ours), ...proofOf(ours) })}\n`);
 					onData(Buffer.alloc(0));
 				} else {
 					const frame = readFrame(buffer, (keys as { receive: Buffer }).receive, 0n);
 					if (!frame) return;
 					buffer = frame.rest;
-					const proof = JSON.parse(frame.plain.toString("utf8")) as { sig?: unknown };
+					const proof = JSON.parse(frame.plain.toString("utf8")) as { sig?: unknown; mac?: unknown };
 					if (typeof proof.sig !== "string" || !verifyBytes(transcriptHash("init", theirs, mine), proof.sig, theirs.key)) {
 						throw new HandshakeError(`${theirs.name} could not prove who they are.`);
 					}
+					member(transcriptHash("init", theirs, mine), proof.mac, theirs.name);
 					finish(0n, 1n);
 				}
 			} catch (error) {

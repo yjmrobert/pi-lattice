@@ -1,5 +1,5 @@
 /** What a key press means while the pane has the keyboard. Pure: the extension carries the actions out. */
-import { findNode, type InboxItem, itemKey, type PaneView, paneInbox, paneOrder } from "./view.ts";
+import { findNode, gone, type InboxItem, itemKey, type PaneView, paneInbox, paneOrder } from "./view.ts";
 
 /** A key as the pane sees it: a name for the special ones, else the character typed. */
 export type PaneKey = "up" | "down" | "enter" | "escape" | (string & {});
@@ -15,8 +15,8 @@ export type PaneAction =
 	| { do: "answer"; repo: string; nodeId: string; dialogId: string; confirmed: boolean }
 	/** Approve or reject a message waiting for approval. */
 	| { do: "decide"; repo: string; nodeId: string; envelopeId: string; action: "approve" | "reject" }
-	/** Accept or decline a session someone offers. */
-	| { do: "sharing"; repo: string; action: "accept" | "cancel"; nodeId: string }
+	/** Accept or decline a session someone offers, decline someone's request, or take back one's own. */
+	| { do: "sharing"; repo: string; action: "accept" | "cancel" | "decline" | "withdraw"; args: string[] }
 	/** Create a session under this one. */
 	| { do: "new"; nodeId: string | undefined }
 	/** Start the host of a repository whose tree is asleep, so its sessions can be seen and opened. */
@@ -35,20 +35,36 @@ export type PaneAction =
 /** The key a person must press twice to stop a session, as the view records it. */
 export const stopKey = (nodeId: string): string => `stop:${nodeId}`;
 
-/** What the session under the cursor allows: it is this person's, it is working, it is the one open here. */
-function cursorSession(view: PaneView): { id: string; repo: string; mine: boolean; working: boolean; here: boolean } | undefined {
+/**
+ * What the session under the cursor allows: it is this person's, it is working, it is the one
+ * open here; whether this person is in a network; and for a teammate's session, whether they
+ * can be reached and whether it has already been asked for.
+ */
+function cursorSession(view: PaneView): { id: string; repo: string; mine: boolean; working: boolean; here: boolean; network: boolean; reachable: boolean; asked: boolean } | undefined {
 	const id = cursorNode(view);
 	const found = id ? findNode(view, id) : undefined;
 	if (!found) return undefined;
 	const { node, repo } = found;
-	return { id: node.id, repo: repo.key, mine: node.owner === repo.state.owner, working: node.status === "running" || node.status === "starting", here: node.id === view.current };
+	const sharing = repo.state.sharing;
+	return {
+		id: node.id, repo: repo.key, mine: node.owner === repo.state.owner, working: node.status === "running" || node.status === "starting", here: node.id === view.current,
+		network: sharing !== null, reachable: !gone(node, repo.state), asked: sharing?.requests.some((request) => request.role === "asker" && request.nodeId === node.id) ?? false,
+	};
+}
+
+/** The key that hands a session over, and what it does there: offer yours, ask for a teammate's, or set a network up first. */
+function handKey(at: ReturnType<typeof cursorSession>): readonly [key: string, does: string] | undefined {
+	if (!at || !at.network) return ["o", "network"];
+	if (at.mine) return ["o", "offer"];
+	if (at.reachable) return ["t", at.asked ? "withdraw" : "take"];
+	return undefined;
 }
 
 /** Every key the pane takes, for the help screen. */
 export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyArray<readonly [key: string, does: string]>]> = [
 	["Moving", [["↑ ↓  j k", "move through what is waiting, then the sessions"], ["1-9", "jump to a waiting item"], ["esc  alt+l", "give the keyboard back to Pi"], [",", "settings"], ["?", "show or hide this list"]]],
-	["A session", [["enter", "open it in this terminal"], ["-", "go back to the session you were in before"], ["n", "create a session under it"], ["r", "rename it"], ["s", "stop what its agent is doing (press twice)"], ["d", "archive it and everything under it"], ["o", "share: pair, offer, accept"]]],
-	["Something waiting", [["y  n", "answer a yes/no question"], ["a  x", "approve or reject a message; accept or decline an offer"], ["enter", "answer or review it with Pi's prompts"]]],
+	["A session", [["enter", "open it in this terminal"], ["-", "go back to the session you were in before"], ["n", "create a session under it"], ["r", "rename it"], ["s", "stop what its agent is doing (press twice)"], ["d", "archive it and everything under it"], ["o", "offer it to a teammate; before that, create or join a network"], ["t", "ask a teammate for theirs, or take the request back"]]],
+	["Something waiting", [["y  n", "answer a yes/no question"], ["a  x", "approve or reject a message; accept or decline an offer; hand over or keep a session someone asks for"], ["enter", "answer or review it with Pi's prompts"]]],
 	["A sleeping repository", [["enter", "start its host"]]],
 ];
 
@@ -81,7 +97,9 @@ export function cursorKeys(view: PaneView): Array<readonly [key: string, does: s
 		if (at?.mine) keys.push(["r", "rename"]);
 		if (at?.mine && at.working) keys.push(["s", view.confirm === stopKey(at.id) ? "again to stop" : "stop"]);
 		if (at?.mine && !at.here) keys.push(["d", "archive"]);
-		keys.push(["o", "share"], [",", "settings"], ["?", "keys"]);
+		const hand = handKey(at);
+		if (hand) keys.push(hand);
+		keys.push([",", "settings"], ["?", "keys"]);
 		return keys;
 	}
 	const { item } = found;
@@ -89,6 +107,8 @@ export function cursorKeys(view: PaneView): Array<readonly [key: string, does: s
 	if (item.kind === "question") return [["⏎", "answer"]];
 	if (item.kind === "message") return item.envelope ? [["a", "approve"], ["x", "reject"]] : [["⏎", "review"]];
 	if (item.kind === "offer") return [["a", "accept"], ["x", "decline"]];
+	if (item.kind === "request") return [["a", "hand over"], ["x", "keep"]];
+	if (item.kind === "release") return [["⏎", "send now"], ["x", "cancel"]];
 	return [["⏎", "review"]];
 }
 
@@ -121,8 +141,19 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 		if (item.kind === "question" && key === "enter") return [{ do: "leave" }, { do: "command", text: `/lattice answer ${nodeId}` }];
 		if (item.kind === "message" && item.envelope && (key === "a" || key === "x")) return [{ do: "decide", repo, nodeId, envelopeId: item.envelope.id, action: key === "a" ? "approve" : "reject" }];
 		if (item.kind === "message" && key === "enter") return [{ do: "leave" }, { do: "command", text: "/lattice approvals" }];
-		if (item.kind === "offer" && (key === "a" || key === "x")) return [{ do: "sharing", repo, action: key === "a" ? "accept" : "cancel", nodeId }];
-		if (key === "enter") return [{ do: "leave" }, { do: "command", text: `/lattice share ${nodeId}`.trim() }];
+		if (item.kind === "offer" && (key === "a" || key === "x")) return [{ do: "sharing", repo, action: key === "a" ? "accept" : "cancel", args: [nodeId] }];
+		if (item.kind === "request" && item.person) {
+			// Handing over sends the conversation away, so it is confirmed with Pi's prompt; keeping it is one key.
+			if (key === "a" || key === "enter") return [{ do: "leave" }, { do: "command", text: `/lattice approve ${nodeId} ${item.person}` }];
+			if (key === "x") return [{ do: "sharing", repo, action: "decline", args: [nodeId, item.person] }];
+			return [];
+		}
+		if (item.kind === "release") {
+			if (key === "enter") return [{ do: "leave" }, { do: "command", text: `/lattice release ${nodeId}` }];
+			if (key === "x") return [{ do: "sharing", repo, action: "cancel", args: [nodeId] }];
+			return [];
+		}
+		if (key === "enter") return [{ do: "leave" }, { do: "command", text: "/lattice network" }];
 		return [];
 	}
 	const target = cursorNode(view) ?? view.current;
@@ -136,6 +167,11 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 		if (key === "s" && on.working) return view.confirm === stopKey(on.id) ? [{ do: "interrupt", repo: on.repo, nodeId: on.id }] : [{ do: "confirm", what: stopKey(on.id) }];
 	}
 	if (key === "a") return [{ do: "leave" }, { do: "command", text: "/lattice approvals" }];
-	if (key === "o") return [{ do: "leave" }, { do: "command", text: `/lattice share ${target ?? ""}`.trim() }];
+	const hand = handKey(on);
+	if (hand && key === hand[0]) {
+		if (!on || hand[1] === "network") return [{ do: "leave" }, { do: "command", text: "/lattice network" }];
+		if (hand[1] === "withdraw") return [{ do: "sharing", repo: on.repo, action: "withdraw", args: [on.id] }];
+		return [{ do: "leave" }, { do: "command", text: `/lattice ${hand[1]} ${on.id}` }];
+	}
 	return [];
 }

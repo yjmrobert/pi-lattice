@@ -58,14 +58,18 @@ describe("Identity", () => {
 });
 
 describe("PeerBook", () => {
-	it("pins a key per person, keeps a known address, and persists", () => {
+	it("pins the first key seen per person, remembers where they were, and persists", () => {
 		const yan = Identity.loadOrCreate(dir, "yan");
 		const other = Identity.loadOrCreate(join(dir, "other"), "yan");
 		const book = new PeerBook(join(dir, "peers.json"));
 		expect(book.keyOf("yan")).toBeUndefined();
-		book.pin("yan", yan.publicKey, "10.0.0.5:47610");
+		expect(book.learn("yan", yan.publicKey)).toBe(true);
+		expect(book.learn("yan", other.publicKey)).toBe(false); // a second key is never taken silently
+		book.sawAt("yan", ["10.0.0.5"]);
+		book.sawAt("yan", ["laptop.local", "not a host!"], true); // the latest machine is tried first
+		expect(new PeerBook(join(dir, "peers.json")).get("yan")).toEqual({ name: "yan", publicKey: yan.publicKey, hosts: ["laptop.local", "10.0.0.5"] });
 		book.pin("yan", other.publicKey); // a deliberate re-pin keeps where to reach them
-		expect(new PeerBook(join(dir, "peers.json")).get("yan")).toEqual({ name: "yan", publicKey: other.publicKey, address: "10.0.0.5:47610" });
+		expect(new PeerBook(join(dir, "peers.json")).get("yan")).toEqual({ name: "yan", publicKey: other.publicKey, hosts: ["laptop.local", "10.0.0.5"] });
 		book.remove("yan");
 		expect(new PeerBook(join(dir, "peers.json")).list()).toEqual([]);
 		expect(() => book.pin("../x", yan.publicKey)).toThrow(/person name/);

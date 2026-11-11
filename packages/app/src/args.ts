@@ -9,12 +9,10 @@ export interface CliOptions {
 	kind: string | undefined;
 	fragments: string[];
 	brief: string | undefined;
-	/** `[host:]port` to accept connections from paired people on. Turns sharing on. */
-	listen: string | undefined;
-	/** Host name or address other people should use to reach this machine. */
+	/** A join code: become a member of that network before starting. */
+	join: string | undefined;
+	/** Host name or address teammates should use to reach this machine. */
 	advertise: string | undefined;
-	/** Invites from people to pair with. */
-	peers: string[];
 	/** The name this person acts as: owner of the nodes created here. */
 	as: string | undefined;
 	/** Daemon only: seconds without a terminal or work before exiting. 0 never exits. */
@@ -36,9 +34,8 @@ Options:
   --cwd <dir>        Project directory (default: current directory)
   --state <dir>      Where the host keeps its tree and sessions (default: <cwd>/.lattice)
   --as <name>        The name you act as (default: your OS user name)
-  --listen [host:]port  Share this tree, peer to peer: accept paired people on this port
-  --peer <invite>    Pair with someone by their invite (repeatable); implies sharing
-  --advertise <host> Address others should use to reach you (default: first network address)
+  --join <code>      Join a network with the code a teammate gave you
+  --advertise <host> Address teammates should use to reach you (default: every network address)
   --idle-exit <sec>  daemon: exit after this long with nobody connected (default 600, 0 = never)
   -h, --help         Show this help
 
@@ -54,7 +51,7 @@ Arguments after -- are passed to every Pi session, for example -- --model sonnet
 export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 	const options: CliOptions = {
 		command: "plain", cwd, stateDir: undefined, name: undefined, kind: undefined, fragments: [], brief: undefined,
-		listen: undefined, advertise: undefined, peers: [], as: undefined, idleExit: undefined, help: false, piArgs: [],
+		join: undefined, advertise: undefined, as: undefined, idleExit: undefined, help: false, piArgs: [],
 	};
 	const value = (flag: string, index: number): string => {
 		const next = argv[index + 1];
@@ -75,9 +72,8 @@ export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 		else if (arg === "--name") options.name = value(arg, i++);
 		else if (arg === "--kind") options.kind = value(arg, i++);
 		else if (arg === "--brief") options.brief = value(arg, i++);
-		else if (arg === "--listen") options.listen = value(arg, i++);
+		else if (arg === "--join") options.join = value(arg, i++);
 		else if (arg === "--advertise") options.advertise = value(arg, i++);
-		else if (arg === "--peer") options.peers.push(value(arg, i++));
 		else if (arg === "--as") options.as = value(arg, i++);
 		else if (arg === "--idle-exit") {
 			const seconds = Number(value(arg, i++));

@@ -10,7 +10,7 @@ const state = (over: Partial<UiState> = {}): UiState => ({
 	owner: "yan",
 	nodes: [node("r", null, { name: "checkout", kind: "feature" }), node("a", "r", { name: "grilling", status: "running" }), node("b", "r", { name: "impl", owner: "sam", status: "idle" })],
 	attention: {}, foreground: ["r"],
-	sharing: { people: [{ name: "yan", fingerprint: "f", trust: "trusted", online: true, self: true }, { name: "sam", fingerprint: "g", trust: "trusted", online: true, self: false }], handoffs: [], pendingTransfers: [] },
+	sharing: { network: "team", people: [{ name: "yan", fingerprint: "f", trust: "trusted", online: true, self: true }, { name: "sam", fingerprint: "g", trust: "trusted", online: true, self: false }], handoffs: [], requests: [], pendingTransfers: [] },
 	...over,
 });
 const repo = (s: UiState = state(), over: Partial<PaneRepo> = {}): PaneRepo => ({ key: "/shop/.lattice", name: "shop", state: s, here: true, inbox: inboxItems(s), ...over });
@@ -179,17 +179,24 @@ describe("pane helpers", () => {
 		const s = state({
 			attention: { a: { dialogs: 2, pending: 1 } },
 			sharing: {
-				people: [{ name: "kim", fingerprint: "k", trust: "unknown", online: false, self: false }],
+				network: "team",
+				people: [{ name: "kim", fingerprint: "k", trust: "changed", online: false, self: false }],
 				handoffs: [
 					{ nodeId: "b", nodeName: "impl", from: "sam", to: "yan", state: "offered", role: "recipient" },
 					{ nodeId: "a", nodeName: "grilling", from: "yan", to: "sam", state: "accepted", role: "owner" },
 				],
+				requests: [{ nodeId: "r", nodeName: "checkout", from: "sam", to: "yan", role: "owner" }],
 				pendingTransfers: [],
 			},
 		});
 		expect(inboxItems(s).map((item) => `${item.title}: ${item.text}`)).toEqual([
-			"grilling: asks 2 questions", "grilling: 1 message to approve", "kim: wants to pair", "sam: offers impl", "grilling: confirm release to sam",
+			"grilling: asks 2 questions", "grilling: 1 message to approve", "kim: key changed", "sam: asks for checkout", "sam: offers impl", "grilling: sam accepted: sending",
 		]);
+		// A session open in a terminal is not sent from under its owner, and the item says what will send it.
+		expect(inboxItems({ ...s, foreground: ["a"] }).at(-1)?.text).toBe("sam accepted: leave it to send");
+		// An offer of something this person asked for needs nothing from them: it is on its way.
+		if (s.sharing) s.sharing.requests = [{ nodeId: "b", nodeName: "impl", from: "yan", to: "sam", role: "asker" }];
+		expect(inboxItems(s).map((item) => item.kind)).not.toContain("offer");
 		const detailed = inboxItems(s, { dialogs: { a: [{ id: "d1", method: "confirm", title: "Run  it?" }, { id: "d2", method: "input", title: "Which port?" }] } });
 		expect(detailed.slice(0, 2).map((item) => `${item.id} ${item.text}`)).toEqual(["q:a:d1 Run it?", "q:a:d2 Which port?"]);
 	});
@@ -198,6 +205,17 @@ describe("pane helpers", () => {
 		const s = state();
 		if (s.sharing) s.sharing.pendingTransfers = [{ nodeId: "a", to: "sam" }];
 		expect(renderPane(view({}, s), 34)[2]).toBe("  ├ ⠋ grilling            → sam… ");
+	});
+
+	it("shows what is offered and what has been asked for, on the session itself", () => {
+		const s = state();
+		if (s.sharing) {
+			s.sharing.handoffs = [{ nodeId: "a", nodeName: "grilling", from: "yan", to: "sam", state: "offered", role: "owner" }];
+			s.sharing.requests = [{ nodeId: "b", nodeName: "impl", from: "yan", to: "sam", role: "asker" }];
+		}
+		const lines = renderPane(view({}, s), 34);
+		expect(lines[2]).toBe("  ├ ⠋ grilling            → sam? ");
+		expect(lines[3]).toContain("@sam asked");
 	});
 
 	it("falls back to one line per session, marking the one open here", () => {
@@ -241,6 +259,42 @@ describe("keys while the pane has the keyboard", () => {
 		expect(interpretKey(at(nodeKey("a")), "escape")).toEqual([{ do: "leave" }]);
 	});
 
+	it("offers your session with o, asks for a teammate's with t, and sets a network up first when there is none", () => {
+		expect(interpretKey(at(nodeKey("a")), "o")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice offer a" }]);
+		expect(interpretKey(at(nodeKey("b")), "t")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice take b" }]);
+		expect(interpretKey(at(nodeKey("b")), "o")).toEqual([]);
+		expect(interpretKey(at(nodeKey("a")), "t")).toEqual([]);
+		// Asked already: the same key takes the request back.
+		const asked = state();
+		if (asked.sharing) asked.sharing.requests = [{ nodeId: "b", nodeName: "impl", from: "yan", to: "sam", role: "asker" }];
+		const v = { ...view({}, asked), focused: true, cursor: nodeKey("b") };
+		expect(cursorKeys(v)).toContainEqual(["t", "withdraw"]);
+		expect(interpretKey(v, "t")).toEqual([{ do: "sharing", repo: "/shop/.lattice", action: "withdraw", args: ["b"] }]);
+		// A teammate who is away cannot be asked.
+		const away = state();
+		if (away.sharing) (away.sharing.people[1] as { online: boolean }).online = false;
+		expect(cursorKeys({ ...view({}, away), focused: true, cursor: nodeKey("b") }).map(([key]) => key)).not.toContain("t");
+		// Outside a network the key leads to making or joining one.
+		const alone = { ...view({}, state({ sharing: null })), focused: true, cursor: nodeKey("a") };
+		expect(cursorKeys(alone)).toContainEqual(["o", "network"]);
+		expect(interpretKey(alone, "o")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice network" }]);
+	});
+
+	it("hands over or keeps a session someone asks for, and accepts or declines one that is offered", () => {
+		const s = state();
+		if (s.sharing) {
+			s.sharing.requests = [{ nodeId: "a", nodeName: "grilling", from: "sam", to: "yan", role: "owner" }];
+			s.sharing.handoffs = [{ nodeId: "b", nodeName: "impl", from: "sam", to: "yan", state: "offered", role: "recipient" }];
+		}
+		const on = (cursor: string) => ({ ...view({}, s), focused: true, cursor });
+		expect(cursorKeys(on(itemKey("t:a:sam")))).toEqual([["a", "hand over"], ["x", "keep"]]);
+		// Handing over sends the conversation away, so it goes through a prompt that says so.
+		expect(interpretKey(on(itemKey("t:a:sam")), "a")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice approve a sam" }]);
+		expect(interpretKey(on(itemKey("t:a:sam")), "x")).toEqual([{ do: "sharing", repo: "/shop/.lattice", action: "decline", args: ["a", "sam"] }]);
+		expect(interpretKey(on(itemKey("o:b")), "a")).toEqual([{ do: "sharing", repo: "/shop/.lattice", action: "accept", args: ["b"] }]);
+		expect(interpretKey(on(itemKey("o:b")), "x")).toEqual([{ do: "sharing", repo: "/shop/.lattice", action: "cancel", args: ["b"] }]);
+	});
+
 	it("renames and archives the session the cursor is on, if it is yours", () => {
 		expect(interpretKey(at(nodeKey("a")), "r")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice rename a" }]);
 		expect(interpretKey(at(nodeKey("a")), "d")).toEqual([{ do: "archive", repo: "/shop/.lattice", nodeId: "a" }]);
@@ -277,10 +331,10 @@ describe("keys while the pane has the keyboard", () => {
 		expect(cursorKeys(at(itemKey("q:a:d2")))).toEqual([["⏎", "answer"]]);
 		expect(cursorKeys(at(itemKey("m:a:e1")))).toEqual([["a", "approve"], ["x", "reject"]]);
 		// A working session of yours that is not the one open here can be renamed, stopped and archived.
-		expect(cursorKeys(at(nodeKey("a")))).toEqual([["⏎", "open"], ["n", "new"], ["r", "rename"], ["s", "stop"], ["d", "archive"], ["o", "share"], [",", "settings"], ["?", "keys"]]);
-		// The one open here cannot be archived from under you; someone else's can only be opened.
-		expect(cursorKeys(at(nodeKey("r")))).toEqual([["n", "new"], ["r", "rename"], ["o", "share"], [",", "settings"], ["?", "keys"]]);
-		expect(cursorKeys(at(nodeKey("b")))).toEqual([["⏎", "open"], ["n", "new"], ["o", "share"], [",", "settings"], ["?", "keys"]]);
+		expect(cursorKeys(at(nodeKey("a")))).toEqual([["⏎", "open"], ["n", "new"], ["r", "rename"], ["s", "stop"], ["d", "archive"], ["o", "offer"], [",", "settings"], ["?", "keys"]]);
+		// The one open here cannot be archived from under you; someone else's can be opened and asked for.
+		expect(cursorKeys(at(nodeKey("r")))).toEqual([["n", "new"], ["r", "rename"], ["o", "offer"], [",", "settings"], ["?", "keys"]]);
+		expect(cursorKeys(at(nodeKey("b")))).toEqual([["⏎", "open"], ["n", "new"], ["t", "take"], [",", "settings"], ["?", "keys"]]);
 		const v = at(itemKey("q:a:d1"));
 		expect(renderPane({ ...v, keys: cursorKeys(v) }, 34).at(-1)).toBe(" y yes  n no  ↑↓ move  esc close");
 	});
@@ -326,7 +380,7 @@ describe("the inspector", () => {
 			" WAITING ON YOU",
 			" 1 grilling: Run stripe listen in this shell?",
 			"───────────────────────────────────────────────────────────",
-			" ⏎ open  n new  r rename  s stop  d archive  o share",
+			" ⏎ open  n new  r rename  s stop  d archive  o offer",
 			" , settings  ? keys",
 		]);
 	});
@@ -362,7 +416,7 @@ describe("the inspector", () => {
 	it("pins its keys to the bottom, and keeps the pane's own footer to the keys that move", () => {
 		const lines = renderInspector(at(nodeKey("a")), 60, PLAIN, 30);
 		expect(lines).toHaveLength(30);
-		expect(lines.slice(-2)).toEqual([" ⏎ open  n new  r rename  s stop  d archive  o share", " , settings  ? keys"]);
+		expect(lines.slice(-2)).toEqual([" ⏎ open  n new  r rename  s stop  d archive  o offer", " , settings  ? keys"]);
 		expect(renderPane(at(nodeKey("a")), 34).at(-1)).toBe(" ↑↓ move  1-9 jump  esc close");
 	});
 

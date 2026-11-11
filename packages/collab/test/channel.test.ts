@@ -187,3 +187,62 @@ describe("secure channel", () => {
 		second.close();
 	});
 });
+
+describe("secure channel inside a network", () => {
+	const secret = Buffer.alloc(32, 7);
+	const other = Buffer.alloc(32, 8);
+	const nobody = () => undefined;
+
+	it("lets in someone not seen before who holds the network's secret, and reports them once they have proved it", async () => {
+		const { client, server, close } = await tcpPair();
+		const met: string[] = [];
+		const [a, b] = await Promise.all([
+			openChannel(client, { identity: yan, initiator: true, keyOf: nobody, network: secret, onMember: (name, key) => met.push(`yan met ${name} ${key === sam.publicKey}`) }),
+			openChannel(server, { identity: sam, initiator: false, keyOf: nobody, network: secret, onMember: (name, key) => met.push(`sam met ${name} ${key === yan.publicKey}`) }),
+		]);
+		expect([a.peer, b.peer]).toEqual(["sam", "yan"]);
+		expect(met.sort()).toEqual(["sam met yan true", "yan met sam true"]);
+		const got = next(b);
+		a.send("hello");
+		expect(await got).toBe("hello");
+		close();
+	});
+
+	it("refuses someone with another network's secret, or none, without pinning them", async () => {
+		for (const theirs of [other, undefined]) {
+			const { client, server, close } = await tcpPair();
+			const met: string[] = [];
+			const results = await Promise.allSettled([
+				openChannel(client, { identity: mallory, initiator: true, keyOf: book(sam), ...(theirs ? { network: theirs } : {}), timeoutMs: 500 }),
+				openChannel(server, { identity: sam, initiator: false, keyOf: nobody, network: secret, onMember: (name) => met.push(name), timeoutMs: 500 }),
+			]);
+			expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+			expect((results[1] as PromiseRejectedResult).reason).toBeInstanceOf(HandshakeError);
+			expect(met).toEqual([]);
+			close();
+		}
+	});
+
+	it("still refuses a known name with a different key, even with the secret", async () => {
+		const { client, server, close } = await tcpPair();
+		const changed: string[] = [];
+		const results = await Promise.allSettled([
+			openChannel(client, { identity: fakeYan, initiator: true, keyOf: nobody, network: secret, timeoutMs: 500 }),
+			openChannel(server, { identity: sam, initiator: false, keyOf: book(yan), network: secret, onChangedKey: (name) => changed.push(name), timeoutMs: 500 }),
+		]);
+		expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+		expect(changed).toEqual(["yan"]);
+		close();
+	});
+
+	it("connects only hosts working on the same thing", async () => {
+		const { client, server, close } = await tcpPair();
+		const results = await Promise.allSettled([
+			openChannel(client, { identity: yan, initiator: true, keyOf: nobody, network: secret, scope: "repo-a", timeoutMs: 500 }),
+			openChannel(server, { identity: sam, initiator: false, keyOf: nobody, network: secret, scope: "repo-b", timeoutMs: 500 }),
+		]);
+		expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+		expect(String((results[1] as PromiseRejectedResult).reason)).toContain("working on something else");
+		close();
+	});
+});

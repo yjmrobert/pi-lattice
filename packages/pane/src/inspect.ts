@@ -77,7 +77,7 @@ function itemText(item: InboxItem): string[] {
 	return [item.text];
 }
 
-const ITEM_TITLE: Record<InboxItem["kind"], string> = { question: "Question from", message: "Message", pair: "Pairing request from", offer: "Session offered by", release: "Release of" };
+const ITEM_TITLE: Record<InboxItem["kind"], string> = { question: "Question from", message: "Message", pair: "A different key from", offer: "Session offered by", request: "Session asked for by", release: "Handing over" };
 
 /**
  * Render the inspector for whatever the cursor is on: a session, a waiting item, or a

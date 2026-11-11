@@ -230,7 +230,7 @@ describe("the tree inside Pi", () => {
 	it("works with a host someone started by hand, with no launcher installed", async () => {
 		const { runDaemon } = await import("../../packages/app/src/index.ts");
 		const daemon = await runDaemon({
-			stateDir, cwd: sandbox.work, owner: "tester", idleExitMs: 0,
+			stateDir, cwd: sandbox.work, owner: "tester", idleExitMs: 0, home: sandbox.home,
 			hostOptions: {
 				piCommand: [process.execPath, piCli], piArgs: fauxArgs, extensionPaths: [extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
 				socketDir: join(sandbox.root, "sock"),

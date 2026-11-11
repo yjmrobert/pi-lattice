@@ -7,8 +7,8 @@ import { connect, createServer, type Server, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 
 export interface PeerTransport {
-	/** Start accepting connections. Resolves with the `host:port` actually bound. */
-	listen(onConnection: (stream: Duplex) => void): Promise<string>;
+	/** Start accepting connections. Resolves with the `host:port` actually bound. `from` is the caller's machine, when known. */
+	listen(onConnection: (stream: Duplex, from?: string) => void): Promise<string>;
 	/** Open a stream to an address. Rejects when it cannot be reached. */
 	connect(address: string): Promise<Duplex>;
 	close(): Promise<void>;
@@ -19,6 +19,8 @@ export interface TcpTransportOptions {
 	host?: string;
 	/** Port to listen on. 0 picks a free one. */
 	port?: number;
+	/** When the port is taken, listen on a free one instead of failing. */
+	orAnyPort?: boolean;
 	connectTimeoutMs?: number;
 }
 
@@ -46,16 +48,21 @@ export class TcpTransport implements PeerTransport {
 		return socket;
 	}
 
-	async listen(onConnection: (stream: Duplex) => void): Promise<string> {
-		const server = createServer((socket) => onConnection(this.track(socket)));
-		this.server = server;
+	async listen(onConnection: (stream: Duplex, from?: string) => void): Promise<string> {
 		const host = this.options.host ?? "0.0.0.0";
-		await new Promise<void>((resolve, reject) => {
-			server.once("error", (error: NodeJS.ErrnoException) => {
-				reject(new Error(error.code === "EADDRINUSE" ? `Port ${this.options.port} is already in use. Choose another with --listen.` : error.message));
+		const open = (port: number): Promise<Server> =>
+			new Promise<Server>((resolve, reject) => {
+				const server = createServer((socket) => onConnection(this.track(socket), socket.remoteAddress?.replace(/^::ffff:/, "")));
+				server.once("error", (error: NodeJS.ErrnoException) => reject(error));
+				server.listen(port, host, () => resolve(server));
 			});
-			server.listen(this.options.port ?? 0, host, () => resolve());
+		const wanted = this.options.port ?? 0;
+		const server = await open(wanted).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "EADDRINUSE") throw new Error(error.message);
+			if (this.options.orAnyPort) return open(0);
+			throw new Error(`Port ${wanted} is already in use.`);
 		});
+		this.server = server;
 		return `${host}:${(server.address() as { port: number }).port}`;
 	}
 
@@ -63,7 +70,7 @@ export class TcpTransport implements PeerTransport {
 		const { host, port } = splitAddress(address);
 		return new Promise<Duplex>((resolve, reject) => {
 			const socket = connect({ host, port });
-			const timer = setTimeout(() => socket.destroy(new Error("timed out")), this.options.connectTimeoutMs ?? 5000);
+			const timer = setTimeout(() => socket.destroy(new Error("timed out")), this.options.connectTimeoutMs ?? 3000);
 			socket.once("connect", () => {
 				clearTimeout(timer);
 				resolve(this.track(socket));

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CollabSession, Identity, PeerBook, TcpTransport } from "../../packages/collab/src/index.ts";
+import { CollabSession, createNetwork, Identity, parseJoinCode, PeerBook, TcpTransport } from "../../packages/collab/src/index.ts";
 import { LatticeHost } from "../../packages/host/src/index.ts";
 import { createSandbox, eventually, hostOptionsFor, type Sandbox } from "../support/harness.ts";
 
@@ -10,6 +10,7 @@ interface Person {
 	name: string;
 	sandbox: Sandbox;
 	host: LatticeHost;
+	/** Set once the person is in the network. */
 	collab: CollabSession;
 }
 
@@ -22,7 +23,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
 	for (const person of people) {
-		await person.collab.stop().catch(() => {});
+		await person.collab?.stop().catch(() => {});
 		await person.host.stop().catch(() => {});
 		person.sandbox.cleanup();
 	}
@@ -36,19 +37,26 @@ const machine = async (name: string, prepareProject: (dir: string) => void): Pro
 	const sandbox = createSandbox();
 	prepareProject(sandbox.work);
 	const host = await LatticeHost.start(hostOptionsFor(sandbox, { owner: name }));
-	const collab = new CollabSession({
-		host,
-		identity: Identity.loadOrCreate(join(sandbox.root, "keys"), name),
-		peers: new PeerBook(join(sandbox.root, "peers.json")),
+	const person = { name, sandbox, host } as Person;
+	people.push(person);
+	return person;
+};
+/** Put a person in the network: the first one creates it, the others use the code they were given. */
+const enter = async (person: Person, code?: string): Promise<string> => {
+	person.collab = new CollabSession({
+		host: person.host,
+		identity: Identity.loadOrCreate(join(person.sandbox.root, "keys"), person.name),
+		network: code ? parseJoinCode(code) : createNetwork("team"),
+		peers: new PeerBook(join(person.sandbox.root, "people.json")),
 		transport: new TcpTransport({ host: "127.0.0.1", port: 0 }),
-		dir: join(sandbox.root, "collab"),
-		projectDir: sandbox.work,
+		scope: "the-project",
+		dir: join(person.sandbox.root, "collab"),
+		projectDir: person.sandbox.work,
 		advertise: "127.0.0.1",
 		redialMs: 200,
 	});
-	const person = { name, sandbox, host, collab };
-	people.push(person);
-	return person;
+	await person.collab.start();
+	return person.collab.joinCode();
 };
 const assistantTexts = async (h: LatticeHost, id: string): Promise<string> => {
 	const { messages } = await h.rpc<{ messages: Array<{ role: string; content: unknown }> }>(id, { type: "get_messages" });
@@ -88,12 +96,10 @@ describe("two people sharing a tree, peer to peer", () => {
 		git(kid.cwd, "add", ".");
 		git(kid.cwd, "-c", "user.email=yan@example.com", "-c", "user.name=Yan", "commit", "-q", "-m", "wip");
 
-		// They pair by exchanging invites, and their hosts connect directly.
-		await yan.collab.start();
-		await sam.collab.start();
+		// Yan creates a network; sam joins with the code, and their hosts connect directly. Nobody approves anybody.
+		const code = await enter(yan);
 		expect(sam.host.nodes()).toEqual([]);
-		await sam.collab.addInvite(yan.collab.invite());
-		await yan.collab.addInvite(sam.collab.invite());
+		await enter(sam, code);
 		await eventually(() => sam.host.nodes().length === 2, "yan's sessions to appear for sam");
 		expect(sam.host.nodes().map((n) => [n.name, n.owner])).toEqual([["checkout", "yan"], ["impl", "yan"]]);
 
@@ -102,12 +108,12 @@ describe("two people sharing a tree, peer to peer", () => {
 		expect(fetched).toContain("heliotrope");
 		await expect(sam.host.prompt(kid.id, "hello?")).rejects.toThrow(/owned by yan/);
 
-		// Two-phase handoff: offer, accept, confirm release.
-		await yan.collab.offer(kid.id, "sam");
-		await eventually(() => sam.collab.handoffs().length === 1, "the offer to reach sam");
-		await sam.collab.accept(kid.id);
+		// Sam asks for the session; it is still yan's until yan says yes, and then it moves by itself.
+		await sam.collab.ask(kid.id);
+		await eventually(() => yan.collab.requests().length === 1, "sam's request to reach yan");
 		expect(yan.host.node(kid.id)?.owner).toBe("yan");
-		await yan.collab.confirm(kid.id);
+		await yan.collab.approve(kid.id, "sam");
+		await eventually(() => yan.host.node(kid.id)?.owner === "sam", "yan to release the session");
 		expect(yan.host.node(kid.id)).toMatchObject({ owner: "sam", version: 2 });
 		expect(yan.host.isRunning(kid.id)).toBe(false);
 		await expect(yan.host.prompt(kid.id, "still mine?")).rejects.toThrow(/owned by sam/);
@@ -118,7 +124,7 @@ describe("two people sharing a tree, peer to peer", () => {
 		expect(adopted).toMatchObject({ owner: "sam", version: 2, workspace: "worktree", branch: kid.branch });
 		expect(adopted?.cwd.startsWith(sam.sandbox.work)).toBe(true);
 		expect(readFileSync(join(adopted?.cwd ?? "", "work.txt"), "utf8")).toBe("yan's work in progress\n");
-		expect(yan.collab.pendingTransfers()).toEqual([]);
+		await eventually(() => yan.collab.pendingTransfers().length === 0, "sam's receipt to reach yan");
 
 		await sam.host.prompt(kid.id, "what do you remember?");
 		await eventually(async () => (await assistantTexts(sam.host, kid.id)).includes("what do you remember?"), "the adopted session to answer");

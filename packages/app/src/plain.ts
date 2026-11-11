@@ -12,11 +12,13 @@ const HELP = `Type a message to send it to the current session. Commands:
   :answer <n> <text> answer dialog n (for confirm: yes or no)
   :abort             stop the current session's work
   :quit              stop all sessions and exit
-Sharing, peer to peer:
-  :share [port]      turn sharing on                         :invite         show your invite
-  :add <invite>      pair with someone                       :trust <name>   pair with someone who knocked
-  :people            paired people and who is online         :handoffs       open ownership handoffs
-  :offer <session> <person>   :accept <session>   :confirm <session>   :cancel <session>   :sync`;
+Your network, peer to peer:
+  :create <name>     start a network                         :join <code>    join a teammate's
+  :code              the code teammates join with            :leave          leave the network
+  :people            who is in it and who is here            :handoffs       open offers and requests
+  :offer <session> <person>   :accept <session>   :cancel <session>
+  :take <session>    ask its owner for it                    :withdraw <session>
+  :approve <session> <person>   :decline <session> <person>   :trust <person>   :sync`;
 
 export async function runPlain(host: LatticeHost, rootId: string | undefined, input: NodeJS.ReadableStream, output: NodeJS.WritableStream): Promise<void> {
 	let current = rootId ?? "";
@@ -85,19 +87,24 @@ export async function runPlain(host: LatticeHost, rootId: string | undefined, in
 				else if (entry.dialog.method === "confirm") host.answerDialog(entry.nodeId, entry.dialog.id, { confirmed: /^(y|yes|true)$/i.test(text) });
 				else host.answerDialog(entry.nodeId, entry.dialog.id, text === "" ? { cancelled: true } : { value: text });
 			} else if (command === "abort") await host.abort(current);
-			else if (["share", "invite", "add", "people", "trust", "handoffs", "sync", "offer", "accept", "confirm", "cancel"].includes(command ?? "")) {
+			else if (["create", "join", "leave", "code", "people", "trust", "handoffs", "sync", "offer", "accept", "confirm", "cancel", "take", "withdraw", "approve", "decline"].includes(command ?? "")) {
 				const sharing = host.uiState().sharing;
 				const run = async (action: string, args: string[]): Promise<void> => print(await host.runSharing(action, args));
-				if (command === "share") await run("start", rest);
-				else if (!sharing) print("Sharing is off. Turn it on with :share [port].");
-				else if (command === "people") print(sharing.people.map((p) => `${p.name}${p.self ? " (you)" : ""}  ${p.trust}  ${p.online ? "online" : "offline"}  ${p.fingerprint}`).join("\n"));
-				else if (command === "handoffs") print(sharing.handoffs.map((h) => `${h.nodeName}: ${h.from} -> ${h.to}, ${h.state} (you are the ${h.role})`).join("\n") || "No open handoffs.");
-				else if (command === "invite" || command === "add" || command === "trust") await run(command, rest);
+				if (command === "create" || command === "join" || command === "leave") await run(command, rest);
+				else if (!sharing) print("You are not in a network. Start one with :create <name>, or join one with :join <code>.");
+				else if (command === "people") print(sharing.people.map((p) => `${p.name}${p.self ? " (you)" : ""}  ${p.trust === "changed" ? "key changed" : p.online ? "here" : "away"}  ${p.fingerprint}`).join("\n"));
+				else if (command === "handoffs") {
+					const lines = [
+						...sharing.handoffs.map((h) => `${h.nodeName}: ${h.from} -> ${h.to}, ${h.state} (you are the ${h.role})`),
+						...sharing.requests.map((r) => `${r.nodeName}: ${r.from} asks ${r.to}`),
+					];
+					print(lines.join("\n") || "Nothing is being handed over.");
+				} else if (command === "code" || command === "trust") await run(command, rest);
 				else if (command === "sync") await run("refresh", []);
 				else {
 					const target = find(rest[0] ?? "");
 					if (!target) print(`No session "${rest[0] ?? ""}".`);
-					else await run(command ?? "", [target.id, ...rest.slice(1)]);
+					else await run(command === "take" ? "ask" : (command ?? ""), [target.id, ...rest.slice(1)]);
 				}
 			}
 			else print(`Unknown command :${command}. Try :help.`);
