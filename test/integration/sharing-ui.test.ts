@@ -1,7 +1,6 @@
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CollabSession, GitSharedStore, Identity, TrustStore } from "../../packages/collab/src/index.ts";
+import { CollabSession, Identity, PeerBook, TcpTransport } from "../../packages/collab/src/index.ts";
 import { LatticeHost, TreeApp } from "../../packages/host/src/index.ts";
 import { createSandbox, eventually, hostOptionsFor, type Sandbox } from "../support/harness.ts";
 
@@ -40,9 +39,7 @@ interface Seat {
 	screen(needle: string): Promise<string>;
 }
 let seats: Seat[] = [];
-let shared: Sandbox;
 beforeEach(() => {
-	shared = createSandbox();
 	seats = [];
 });
 afterEach(async () => {
@@ -52,20 +49,19 @@ afterEach(async () => {
 		await seat.host.stop().catch(() => {});
 		seat.sandbox.cleanup();
 	}
-	shared.cleanup();
 });
 
-const sit = async (name: string, remote: string, withRoot: boolean): Promise<Seat> => {
+const sit = async (name: string, withRoot: boolean): Promise<Seat> => {
 	const sandbox = createSandbox();
 	const host = await LatticeHost.start(hostOptionsFor(sandbox, { owner: name }));
 	const root = withRoot ? await host.createRoot({ name: "checkout", cwd: sandbox.work }) : undefined;
 	const collab = new CollabSession({
-		host, identity: Identity.loadOrCreate(join(sandbox.root, "keys"), name), trust: new TrustStore(join(sandbox.root, "trusted.json")),
-		store: new GitSharedStore({ remote, dir: join(sandbox.root, "shared"), author: name }), dir: join(sandbox.root, "collab"), projectDir: sandbox.work, pollMs: 0,
+		host, identity: Identity.loadOrCreate(join(sandbox.root, "keys"), name), peers: new PeerBook(join(sandbox.root, "peers.json")),
+		transport: new TcpTransport({ host: "127.0.0.1", port: 0 }), dir: join(sandbox.root, "collab"), projectDir: sandbox.work, advertise: "127.0.0.1", redialMs: 200,
 	});
 	await collab.start();
 	const terminal = new FakeTerminal();
-	const app = new TreeApp({ host, rootId: root?.id, collab, terminal: terminal as never });
+	const app = new TreeApp({ host, rootId: root?.id, collab, terminal: terminal as never, clipboard: async () => false });
 	app.start();
 	const seat: Seat = {
 		sandbox, host, collab, app, terminal,
@@ -79,33 +75,47 @@ const sit = async (name: string, remote: string, withRoot: boolean): Promise<Sea
 };
 
 describe("sharing in the tree interface", () => {
-	it("walks both people through trust and a two-phase handoff", async () => {
-		const remote = join(shared.root, "shared.git");
-		execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
-		const yan = await sit("yan", remote, true);
-		const sam = await sit("sam", remote, false);
+	it("walks both people through pairing and a two-phase handoff", async () => {
+		const yan = await sit("yan", true);
+		const sam = await sit("sam", false);
 		const rootId = yan.host.nodes()[0]?.id ?? "";
 
-		// Sam joined with nothing, and sees nothing of yan's until trusting yan's key.
+		// Sam starts with nothing, and pairs using the invite yan read out.
 		await sam.screen("No sessions yet");
-		const notice = await sam.screen("yan joined; their sessions stay hidden until you trust their key");
-		expect(notice).not.toContain("checkout feature");
+		yan.terminal.type(KEY.ctrlO);
+		await yan.screen("Show my invite");
+		yan.terminal.type(KEY.down); // past "Offer ..."
+		yan.terminal.type(KEY.enter);
+		const shown = await yan.screen("Send this to the person you want to work with");
+		const invite = (shown.split("\n").find((line) => line.includes("yan@")) ?? "").replace(/[│\s]/g, "");
+		expect(invite).toBe(yan.collab.invite());
+		yan.terminal.type(KEY.enter);
 
 		sam.terminal.type(KEY.ctrlO);
-		await sam.screen("Trust yan");
-		sam.terminal.type(KEY.enter); // "Trust yan" is the first entry
-		const prompt = await sam.screen("Key fingerprint:");
-		expect(prompt).toContain(yan.collab.people().find((p) => p.self)?.fingerprint ?? "missing");
-		expect(prompt).toContain("Compare it with yan over a channel you already trust");
-		sam.terminal.type(KEY.down);
-		sam.terminal.type(KEY.enter); // "The fingerprint matches"
-		const tree = await sam.screen("checkout feature @yan");
-		expect(tree).toContain("owned by yan and runs on their machine");
+		await sam.screen("Pair using someone's invite");
+		sam.terminal.type(KEY.down); // "Show my invite" is first; the next is "Pair using someone's invite"
+		sam.terminal.type(KEY.enter);
+		await sam.screen("Paste the invite");
+		sam.terminal.type(invite);
+		sam.terminal.type(KEY.enter);
 
-		// Yan trusts sam and offers the node.
-		await yan.collab.sync();
-		await yan.screen("sam joined");
-		await yan.collab.trustPerson("sam");
+		// Yan is told sam knocked, checks the fingerprint, and pairs.
+		await yan.screen("sam wants to connect; pair with them to allow it (ctrl+o)");
+		expect(sam.app.text()).not.toContain("checkout feature");
+		yan.terminal.type(KEY.ctrlO);
+		await yan.screen("Pair with sam");
+		yan.terminal.type(KEY.enter); // first entry
+		const prompt = await yan.screen("Key fingerprint:");
+		expect(prompt).toContain(sam.collab.people().find((p) => p.self)?.fingerprint ?? "missing");
+		yan.terminal.type(KEY.down);
+		yan.terminal.type(KEY.enter); // "The fingerprint matches; pair"
+
+		// Sam's host reconnects on its own and yan's session appears, readable but not runnable.
+		const tree = await sam.screen("checkout feature @yan");
+		expect(tree).toBeDefined();
+		await sam.screen("Read-only: this session is owned by yan");
+
+		// Yan offers the node.
 		yan.terminal.type(KEY.ctrlO);
 		await yan.screen('Offer "checkout" to someone');
 		yan.terminal.type(KEY.enter);
@@ -114,7 +124,6 @@ describe("sharing in the tree interface", () => {
 		await eventually(() => yan.collab.handoffs().length === 1, "yan's offer to be recorded");
 
 		// Sam is told, and accepts.
-		await sam.collab.sync();
 		await sam.screen('yan offers you "checkout" (ctrl+o)');
 		sam.terminal.type(KEY.ctrlO);
 		await sam.screen('Accept "checkout" from yan');
@@ -123,26 +132,28 @@ describe("sharing in the tree interface", () => {
 		expect(yan.host.node(rootId)?.owner).toBe("yan"); // nothing has moved yet
 
 		// Yan is told, sees what releasing means, and confirms.
-		await yan.collab.sync();
 		await yan.screen('sam accepted "checkout"; confirm the release (ctrl+o)');
 		yan.terminal.type(KEY.ctrlO);
 		await yan.screen('Confirm release of "checkout" to sam');
 		yan.terminal.type(KEY.enter);
 		const warning = await yan.screen("sends its whole conversation");
+		expect(warning).toContain("directly to the new owner");
 		expect(warning).toContain("After this you can no longer run it");
 		yan.terminal.type(KEY.down);
 		yan.terminal.type(KEY.enter); // "Release it"
 		await eventually(() => yan.host.node(rootId)?.owner === "sam", "yan to release the node");
 		await yan.screen("checkout feature @sam");
-		await yan.screen("owned by sam and runs on their machine");
 
 		// Sam now owns it and can talk to it.
-		await sam.collab.sync();
 		await eventually(() => sam.host.node(rootId)?.owner === "sam", "sam to take the node over");
 		sam.terminal.type(KEY.ctrlT);
 		sam.terminal.type(KEY.enter);
 		sam.terminal.type("mine now");
 		sam.terminal.type(KEY.enter);
 		await sam.screen("echo[user] roles=[] mine now");
+
+		// When sam goes offline, yan's tree greys the node out.
+		await sam.collab.stop();
+		await yan.screen("checkout feature @sam offline");
 	}, 120_000);
 });
