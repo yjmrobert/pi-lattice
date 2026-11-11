@@ -1,6 +1,5 @@
 /** A line-based interface to the host, for terminals without full-screen support and for scripting. */
 import { createInterface } from "node:readline";
-import type { CollabSession } from "@pi-lattice/collab";
 import { formatTree } from "@pi-lattice/protocol";
 import type { LatticeHost } from "./host.ts";
 import type { RpcRecord } from "./pi-process.ts";
@@ -14,13 +13,13 @@ const HELP = `Type a message to send it to the current session. Commands:
   :answer <n> <text> answer dialog n (for confirm: yes or no)
   :abort             stop the current session's work
   :quit              stop all sessions and exit
-When the tree is shared (--listen or --peer):
-  :invite            show your invite                        :add <invite>   pair with someone
-  :people            paired people and who is online         :trust <name>   pair with someone who knocked
-  :handoffs          open ownership handoffs                 :sync           refresh from everyone online
-  :offer <session> <person>   :accept <session>   :confirm <session>   :cancel <session>`;
+Sharing, peer to peer:
+  :share [port]      turn sharing on                         :invite         show your invite
+  :add <invite>      pair with someone                       :trust <name>   pair with someone who knocked
+  :people            paired people and who is online         :handoffs       open ownership handoffs
+  :offer <session> <person>   :accept <session>   :confirm <session>   :cancel <session>   :sync`;
 
-export async function runPlain(host: LatticeHost, rootId: string | undefined, input: NodeJS.ReadableStream, output: NodeJS.WritableStream, collab?: CollabSession): Promise<void> {
+export async function runPlain(host: LatticeHost, rootId: string | undefined, input: NodeJS.ReadableStream, output: NodeJS.WritableStream): Promise<void> {
 	let current = rootId ?? "";
 	const print = (text: string): void => void output.write(`${text}\n`);
 	const label = (id: string): string => host.node(id)?.name ?? id;
@@ -35,7 +34,6 @@ export async function runPlain(host: LatticeHost, rootId: string | undefined, in
 		for (const dialog of host.dialogs(nodeId)) print(`[blocked] ${label(nodeId)} asks: ${dialog.title}${dialog.options ? ` [${dialog.options.join(" / ")}]` : ""} (see :dialogs)`);
 	});
 	host.on("log", (level, message) => print(`[${level}] ${message}`));
-	collab?.on("log", (level, message) => print(`[sharing:${level}] ${message}`));
 	const find = (text: string) => host.nodes().find((node) => node.id === text || node.name === text);
 	host.on("session", (nodeId, event: RpcRecord) => {
 		if (event.type === "message_end" && event.message?.role === "assistant") {
@@ -88,22 +86,19 @@ export async function runPlain(host: LatticeHost, rootId: string | undefined, in
 				else if (entry.dialog.method === "confirm") host.answerDialog(entry.nodeId, entry.dialog.id, { confirmed: /^(y|yes|true)$/i.test(text) });
 				else host.answerDialog(entry.nodeId, entry.dialog.id, text === "" ? { cancelled: true } : { value: text });
 			} else if (command === "abort") await host.abort(current);
-			else if (["invite", "add", "people", "trust", "handoffs", "sync", "offer", "accept", "confirm", "cancel"].includes(command ?? "")) {
-				if (!collab) print("This tree is not shared. Start with --listen <port>.");
-				else if (command === "invite") print(collab.invite());
-				else if (command === "add") print(`Paired with ${await collab.addInvite(arg)}.`);
-				else if (command === "people") print(collab.people().map((p) => `${p.name}${p.self ? " (you)" : ""}  ${p.trust}  ${p.online ? "online" : "offline"}  ${p.fingerprint}`).join("\n"));
-				else if (command === "trust") await collab.trustPerson(arg);
-				else if (command === "sync") await collab.refresh();
-				else if (command === "handoffs") print(collab.handoffs().map((h) => `${h.nodeName}: ${h.from} -> ${h.to}, ${h.state} (you are the ${h.role})`).join("\n") || "No open handoffs.");
+			else if (["share", "invite", "add", "people", "trust", "handoffs", "sync", "offer", "accept", "confirm", "cancel"].includes(command ?? "")) {
+				const sharing = host.uiState().sharing;
+				const run = async (action: string, args: string[]): Promise<void> => print(await host.runSharing(action, args));
+				if (command === "share") await run("start", rest);
+				else if (!sharing) print("Sharing is off. Turn it on with :share [port].");
+				else if (command === "people") print(sharing.people.map((p) => `${p.name}${p.self ? " (you)" : ""}  ${p.trust}  ${p.online ? "online" : "offline"}  ${p.fingerprint}`).join("\n"));
+				else if (command === "handoffs") print(sharing.handoffs.map((h) => `${h.nodeName}: ${h.from} -> ${h.to}, ${h.state} (you are the ${h.role})`).join("\n") || "No open handoffs.");
+				else if (command === "invite" || command === "add" || command === "trust") await run(command, rest);
+				else if (command === "sync") await run("refresh", []);
 				else {
 					const target = find(rest[0] ?? "");
 					if (!target) print(`No session "${rest[0] ?? ""}".`);
-					else if (command === "offer") await collab.offer(target.id, rest[1] ?? "");
-					else if (command === "accept") await collab.accept(target.id);
-					else if (command === "confirm") await collab.confirm(target.id);
-					else await collab.cancel(target.id);
-					print("Done.");
+					else await run(command ?? "", [target.id, ...rest.slice(1)]);
 				}
 			}
 			else print(`Unknown command :${command}. Try :help.`);
