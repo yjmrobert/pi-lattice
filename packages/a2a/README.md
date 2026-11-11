@@ -14,7 +14,7 @@ pi install ./packages/a2a        # or: pi -e ./packages/a2a
 | Model | `list_peers` | List sessions it can message |
 | Human | `/inbox` | Review messages waiting for approval; `/inbox approve\|reject <id\|all>`, `/inbox trust\|untrust <node>` |
 | Human | `/peers` | List reachable sessions |
-| Human | `/lattice` | Show this session's node id, owner, transport and mail counts |
+| Human | `/node` | Show this session's node id, owner, transport and mail counts |
 
 Inbound messages reach the model as a delimited `<lattice-message>` block that names the sender and states that the content is peer data, not user instructions. An idle session wakes to handle it; a busy one sees it after its current work.
 

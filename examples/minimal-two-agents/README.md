@@ -9,7 +9,7 @@ Two Pi sessions on one machine exchanging messages through `@pi-lattice/a2a` alo
    pi -e ./packages/a2a --name beta
    ```
 
-2. In either session run `/lattice` to see its node id, or `/peers` to see the other one.
+2. In either session run `/node` to see its node id, or `/peers` to see the other one.
 
 3. In alpha, ask the agent:
 

@@ -2,7 +2,7 @@
  * pi-lattice a2a: agent-to-agent messaging between Pi sessions.
  *
  * Gives the model `send_message` and `list_peers`, gives the human `/inbox`, `/peers`
- * and `/lattice`, and delivers inbound mail to the model after the approval policy allows it.
+ * and `/node`, and delivers inbound mail to the model after the approval policy allows it.
  * Useful on its own: without a host, sessions sharing a lattice home talk through a file spool.
  */
 import { readFileSync } from "node:fs";
@@ -388,7 +388,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerCommand("lattice", {
+	pi.registerCommand("node", {
 		description: "Show this session's lattice identity and mail counts",
 		handler: async (_args, ctx) => {
 			if (!active) {
