@@ -132,5 +132,10 @@ describe("a network of teammates, through the background host", () => {
 		await eventually(() => sharing(other) === null, "sam's other host to leave too");
 		expect(existsSync(join(samBox.home, "network.json"))).toBe(false);
 		await eventually(() => sharing(yan)?.people.some((p) => p.name === "sam" && !p.online), "yan to see sam leave");
+
+		// One repository can be kept out of the network, by a setting of its own.
+		writeFileSync(join(yanBox.work, ".lattice", "config.json"), JSON.stringify({ network: { share: false } }));
+		await eventually(() => sharing(yan) === null, "yan's host for that repository to stop sharing");
+		expect(existsSync(join(yanBox.home, "network.json"))).toBe(true); // yan is still in the network, elsewhere
 	}, 120_000);
 });
