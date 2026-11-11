@@ -1,0 +1,12 @@
+{
+  "name": "@pi-lattice/collab",
+  "version": "0.1.0",
+  "description": "Shared session trees for pi-lattice: signed ownership handoff, cross-owner mail and session transfer over a shared git repository.",
+  "type": "module",
+  "keywords": ["pi", "multi-agent", "collaboration"],
+  "license": "MIT",
+  "files": ["src", "README.md"],
+  "exports": { ".": "./src/index.ts", "./package.json": "./package.json" },
+  "engines": { "node": ">=22.19" },
+  "dependencies": { "@pi-lattice/protocol": "0.1.0" }
+}
