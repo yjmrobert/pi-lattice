@@ -64,7 +64,7 @@ describe("host tree", () => {
 		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
 		await h.prompt(root.id, spawnTool({ name: "kid", brief: sendTool("parent", "hello up") }));
 		const kid = await child(h, root.id, "kid");
-		const record = await eventually(() => h.traffic().find((r) => r.envelope.payload.text === "hello up" && r.mailState === "delivered"), "delivered journal record");
+		const record = await eventually(() => h.traffic().find((r) => r.envelope.payload.text === "hello up" && r.mailState === "delivered" && r.acked), "delivered and acknowledged journal record");
 		expect(record).toMatchObject({ recipient: root.id, acked: true });
 		expect(record.envelope).toMatchObject({ from: kid.id, to: "parent", fromOwner: "tester" });
 	});
