@@ -15,7 +15,7 @@
     "test": "vitest --run --passWithNoTests",
     "spike:phase0": "node spikes/phase0/run.mjs",
     "check": "npm run typecheck && npm test",
-    "lattice": "node packages/host/src/cli.ts"
+    "lattice": "node packages/app/src/cli.ts"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.5.2",
@@ -35,6 +35,7 @@
   ],
   "pi": {
     "extensions": [
+      "./packages/app/src/launcher.ts",
       "./packages/pane/src/extension.ts",
       "./packages/a2a/src/extension.ts",
       "./packages/roles/src/extension.ts",
