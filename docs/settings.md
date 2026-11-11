@@ -86,9 +86,11 @@ These say where things are kept and how Pi is started. They are not on the setti
 
 | Variable | What it does |
 |---|---|
-| `LATTICE_HOME` | Where your own settings, templates and the list of your trees are kept. Default: `<Pi agent directory>/lattice`, usually `~/.pi/agent/lattice`. |
+| `LATTICE_HOME` | Where your own settings, templates, the list of your trees, and your network, its people and your key are kept. Default: `<Pi agent directory>/lattice`, usually `~/.pi/agent/lattice`. |
 | `LATTICE_STATE_DIR` | Where the tree for the current directory is kept, in place of `<repository>/.lattice`. With it set, a first message does not start a tree by itself. |
 | `LATTICE_OWNER` | The name sessions you start are owned by. Default: your user name. |
+| `LATTICE_ADVERTISE` | The host name or address teammates in your network should reach this machine at. Default: every network address it has. |
+| `LATTICE_DISCOVERY` | `off` stops this machine announcing itself to, and listening for, teammates on the local network. They are then found only at the machines already known. |
 | `LATTICE_NODE_NAME` | The name a session without a host announces itself by. |
 | `LATTICE_FRAGMENTS` | Roles for a plain session, separated by commas, when no host gives it any. |
 | `LATTICE_PI_BIN` | The `pi` command the host starts background sessions with. Default: `pi` on your PATH. |
