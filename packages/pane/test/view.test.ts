@@ -1,6 +1,6 @@
 import type { NodeMeta, UiState } from "@pi-lattice/protocol";
 import { describe, expect, it } from "vitest";
-import { ago, cursorKeys, renderInspector, repoKey, inboxItems, interpretKey, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
+import { ago, cursorKeys, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
 
 const node = (id: string, parentId: string | null, over: Partial<NodeMeta> = {}): NodeMeta => ({
 	id, parentId, rootId: "r", kind: "task", name: id, brief: "", fragments: [], owner: "yan", version: 1, status: "idle",
@@ -286,5 +286,32 @@ describe("the inspector", () => {
 
 	it("says how long ago in the largest unit that fits", () => {
 		expect([ago("2026-01-01T00:13:20.000Z", now), ago("2026-01-01T00:00:00.000Z", now), ago("2025-12-31T21:00:00.000Z", now), ago("2025-12-29T00:00:00.000Z", now), ago("", now)]).toEqual(["40s", "14m", "3h", "3d", ""]);
+	});
+});
+
+describe("the strip for narrow terminals", () => {
+	it("puts this repository's sessions on one row, the open one first", () => {
+		expect(renderStrip(view(), 72)).toEqual([" ◆ shop  ▸● checkout │ ⠋ grilling │ ● impl"]);
+	});
+
+	it("adds the first thing waiting on a second row, and brings the session it is from forward", () => {
+		const s = state({ attention: { b: { dialogs: 1, pending: 0 } } });
+		expect(renderStrip(view({}, s), 72)).toEqual([
+			" ◆ shop  ▸● checkout │ ● impl ?1 │ ⠋ grilling",
+			" ? impl  asks a question                                alt+l to answer ",
+		]);
+	});
+
+	it("counts what does not fit, and the other repositories", () => {
+		const many = state({ nodes: [node("r", null, { name: "checkout" }), ...Array.from({ length: 9 }, (_, index) => node(`session-${index}`, "r"))] });
+		const other = state({ nodes: [node("x", null, { name: "invoices", status: "running" })], foreground: [] });
+		const lines = renderStrip({ repos: [repo(many), repo(other, { key: "/b/.lattice", name: "billing-api", here: false })], current: "r", cursor: undefined, focused: false }, 72);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toMatch(/│ \+\d+  ◇ billing-api ⠋1$/);
+		expect([...(lines[0] as string)].length).toBeLessThanOrEqual(72);
+	});
+
+	it("shows nothing when there is no tree anywhere", () => {
+		expect(renderStrip({ repos: [], current: undefined, cursor: undefined, focused: false }, 72)).toEqual([]);
 	});
 });

@@ -378,3 +378,66 @@ export function renderCompact(view: PaneView, limit = 8): string[] {
 	);
 	return rows.length > limit ? [...rows.slice(0, limit - 1), `  … ${rows.length - limit + 1} more (/lattice)`] : rows;
 }
+
+/**
+ * The pane in two rows, for a terminal too narrow for it (or where it cannot be installed):
+ * the sessions of this repository with the others counted, then the first thing waiting.
+ * Sessions are placed by what matters most: the one open here, then waiting, then working.
+ */
+export function renderStrip(view: PaneView, width: number, paint: Paint = PLAIN): string[] {
+	const groups = view.repos.filter((repo) => repo.state.nodes.length > 0);
+	if (groups.length === 0 && (view.asleep ?? []).length === 0) return [];
+	const frame = view.frame ?? 0;
+	const here = groups.find((repo) => repo.here);
+	const row: Seg[] = [];
+	const others: Seg[] = [];
+	for (const repo of groups) {
+		if (repo.here) continue;
+		const counts = tally(repo);
+		others.push(["  ◇ ", paint.accent], [fit(repo.name, 16)], [counts.working ? ` ${SPINNER[frame % SPINNER.length]}${counts.working}` : "", paint.accent], [counts.waiting ? ` ●${counts.waiting}` : "", paint.warn]);
+	}
+	if (here) {
+		row.push([` ◆ ${fit(here.name, 16)} `, (text) => paint.accent(paint.bold(text))]);
+		const rank = (node: NodeMeta): number => {
+			const attention = here.state.attention[node.id];
+			if (node.id === view.current) return 0;
+			if ((attention?.dialogs ?? 0) > 0 || (attention?.pending ?? 0) > 0 || node.status === "blocked") return 1;
+			return node.status === "running" || node.status === "starting" ? 2 : 3;
+		};
+		const nodes = treeLines(here.state.nodes).map((line) => line.node).sort((a, b) => rank(a) - rank(b));
+		let shown = 0;
+		for (const node of nodes) {
+			const attention = here.state.attention[node.id];
+			const marks = [attention?.dialogs ? `?${attention.dialogs}` : "", attention?.pending ? `✉${attention.pending}` : ""].filter(Boolean).join(" ");
+			const open = node.id === view.current;
+			const cell: Seg[] = [
+				[shown > 0 ? " │ " : " ", paint.dim],
+				[open ? "▸" : "", paint.accent],
+				statusMark(node.status, (attention?.dialogs ?? 0) > 0, gone(node, here.state), frame, paint),
+				[` ${fit(node.name, 18)}`, open ? paint.bold : undefined],
+				[marks ? ` ${marks}` : "", paint.warn],
+			];
+			const rest = nodes.length - shown - 1;
+			// Leave room to say how many are not shown, and for the other repositories.
+			if (shown > 0 && widthOf(row) + widthOf(cell) + (rest > 0 ? 6 : 0) + widthOf(others) > width - 1) break;
+			row.push(...cell);
+			shown++;
+		}
+		if (shown < nodes.length) row.push([` │ +${nodes.length - shown}`, paint.dim]);
+	}
+	row.push(...(here ? others : others.length > 0 ? [[" "] as Seg, ...others.slice(0)] : []));
+	for (const repo of view.asleep ?? []) if (widthOf(row) + [...repo.name].length + 12 < width) row.push([`  ◇ ${repo.name} asleep`, paint.dim]);
+	const lines = [widthOf(row) > width ? fit(row.map(([text]) => text).join(""), width) : draw(row)];
+	const inbox = paneInbox(view);
+	const first = inbox[0];
+	const hint: Seg[] = [["alt+l", paint.bold], [inbox.length > 1 ? ` ${inbox.length} waiting ` : " to answer ", paint.dim]];
+	if (first) {
+		const from = first.repo.here ? "" : ` (${first.repo.name})`;
+		const lead: Seg[] = [[" "], [ITEM_ICON[first.item.kind], paint.warn], [" "]];
+		const room = width - widthOf(lead) - widthOf(hint) - 2;
+		const title = fit(`${first.item.title}${from}`, Math.max(6, Math.min(30, room)));
+		const text = fit(first.item.text, Math.max(0, room - [...title].length - 2));
+		lines.push(draw(spread([...lead, [title, paint.bold], [text ? `  ${text}` : "", paint.dim]], hint, width)));
+	}
+	return lines;
+}

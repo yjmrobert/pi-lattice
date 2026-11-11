@@ -67,6 +67,17 @@ Each repository keeps its own tree. The pane shows all of them: the one this ter
 - A repository whose background host has stopped is listed as `asleep`; `enter` on it starts the host again.
 - Quitting Pi leaves your shell in the directory you started Pi from.
 
+## Narrow terminals
+
+Below 90 columns there is no room to keep the pane beside Pi. Two rows above the editor carry the same information: this repository's sessions with the open one first, the other repositories counted, and the first thing waiting on you.
+
+```
+  ◆ shop  ▸● checkout ✉1 │ ⠹ payments │ +3  ◇ billing-api ⠹1
+  ✉ cart-api → payments  Totals endpoint is live…   alt+l to answer
+```
+
+`alt+l` still gives you the pane and the inspector, in place of the chat, until you leave them.
+
 ## What opening a session does
 
 Sessions you are not in keep running in the background. Opening one hands it to this terminal: the background copy is stopped and Pi switches to that session, with its history. Leaving hands it back.

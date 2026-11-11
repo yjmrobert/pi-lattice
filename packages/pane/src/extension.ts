@@ -13,7 +13,7 @@ import { emitEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type Kn
 import { renderInspector } from "./inspect.ts";
 import { cursorKeys, interpretKey, type PaneAction } from "./keys.ts";
 import { connectHost, hasTree, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
-import { type InboxDetails, inboxItems, nodeKey, type Paint, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "./view.ts";
+import { type InboxDetails, inboxItems, nodeKey, type Paint, type PaneView, paneOrder, PLAIN, renderCompact, renderPane, renderStrip } from "./view.ts";
 
 const NODE_ENTRY = "lattice:node";
 const PANE_WIDTH = 34;
@@ -63,8 +63,8 @@ interface Shared {
 	paint: Paint;
 	tui: Hooked | undefined;
 	wrapped: boolean;
-	/** Whether the compact fallback list is currently showing. */
-	compact: boolean;
+	/** What the strip above the editor currently shows, when it is showing. */
+	strip: string | undefined;
 	pi: ExtensionAPI | undefined;
 	ctx: ExtensionContext | undefined;
 }
@@ -72,7 +72,7 @@ const KEY = Symbol.for("pi-lattice.pane.2");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
 	links: new Map(), home: undefined, asleep: [], current: undefined, currentDir: undefined, previous: undefined, assignment: undefined, cursor: undefined, focused: false,
-	ticker: undefined, scanner: undefined, scanning: false, paint: PLAIN, tui: undefined, wrapped: false, compact: false, pi: undefined, ctx: undefined,
+	ticker: undefined, scanner: undefined, scanning: false, paint: PLAIN, tui: undefined, wrapped: false, strip: undefined, pi: undefined, ctx: undefined,
 });
 
 /** The link to the repository this terminal is in, if it has a tree with a running host. */
@@ -106,7 +106,12 @@ function view(): PaneView {
 
 /** Whether the inspector is showing: the pane has the keyboard and sits beside Pi. */
 function inspecting(): boolean {
-	return shared.focused && shared.wrapped && (shared.tui?.terminal.columns ?? 0) >= MIN_TERMINAL_WIDTH;
+	return shared.focused && shared.wrapped;
+}
+
+/** Whether the terminal is wide enough to keep the pane beside Pi all the time. */
+function roomy(): boolean {
+	return shared.wrapped && (shared.tui?.terminal.columns ?? 0) >= MIN_TERMINAL_WIDTH;
 }
 
 /** A repository's name: what its sessions report, else the folder its tree is kept in. */
@@ -125,7 +130,8 @@ function restingCursor(): string | undefined {
 function tick(): void {
 	const working = [...shared.links.values()].some((link) => link.state?.nodes.some((node) => node.status === "running" || node.status === "starting"));
 	if (working && !shared.ticker && shared.wrapped) {
-		shared.ticker = setInterval(() => shared.tui?.requestRender(), SPINNER_MS);
+		// The strip is a widget with fixed text, so it has to be set again to turn; the pane only needs drawing again.
+		shared.ticker = setInterval(() => (shared.strip !== undefined ? redraw() : shared.tui?.requestRender()), SPINNER_MS);
 		shared.ticker.unref?.();
 	} else if (!working && shared.ticker) {
 		clearInterval(shared.ticker);
@@ -140,13 +146,13 @@ function redraw(): void {
 	try {
 		const ctx = shared.ctx;
 		if (ctx?.mode !== "tui") return;
-		// The compact list is only for terminals where the side pane could not be installed.
-		if (!shared.wrapped) {
-			ctx.ui.setWidget("lattice", shared.links.size > 0 ? renderCompact(view()) : undefined);
-			shared.compact = true;
-		} else if (shared.compact) {
-			ctx.ui.setWidget("lattice", undefined);
-			shared.compact = false;
+		// Where the pane cannot sit beside Pi (a narrow terminal, or a Pi it cannot be installed in),
+		// two rows above the editor carry the same information.
+		const lines = roomy() || shared.focused ? [] : renderStrip(view(), (shared.tui?.terminal.columns ?? 80) - 2, shared.paint);
+		const strip = lines.length > 0 ? lines.join("\n") : undefined;
+		if (strip !== shared.strip) {
+			ctx.ui.setWidget("lattice", strip === undefined ? undefined : lines);
+			shared.strip = strip;
 		}
 	} catch {
 		shared.ctx = undefined;
@@ -271,7 +277,8 @@ function installPane(tui: Hooked): void {
 	const wrap = (inner: Component): Component =>
 		new HStack([
 			// Always there, so opening pi shows the sessions without typing anything.
-			{ component: pane, basis: PANE_WIDTH, shrink: 0, visible: (viewport) => viewport.width >= MIN_TERMINAL_WIDTH },
+			// In a narrow terminal it appears only while it has the keyboard.
+			{ component: pane, basis: PANE_WIDTH, shrink: 0, visible: (viewport) => viewport.width >= MIN_TERMINAL_WIDTH || shared.focused },
 			{ component: inspector, basis: 0, grow: 1, minSize: 20, visible: () => inspecting() },
 			{ component: inner, basis: 0, grow: 1, minSize: 20, visible: () => !inspecting() },
 		]);
@@ -471,6 +478,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		handler: async (ctx) => {
 			if (shared.links.size === 0 && shared.asleep.length === 0) {
 				ctx.ui.notify("No session tree here yet. Run /lattice to start one.", "info");
+				return;
+			}
+			if (!shared.wrapped) {
+				// Without the side pane there is nothing to give the keyboard to; list everything instead.
+				dispatch("/lattice status");
 				return;
 			}
 			shared.focused = !shared.focused;
