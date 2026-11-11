@@ -30,6 +30,7 @@ import {
 	validateEnvelope,
 	WORKSPACE_MODES,
 } from "@pi-lattice/protocol";
+import { buildSessionContext, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import { type ExitInfo, PiProcess, type RpcRecord } from "./pi-process.ts";
 import { type Connection, type Hello, SocketServer } from "./socket-server.ts";
 import { type JournalRecord, SqliteStore, type Store } from "./store.ts";
@@ -509,6 +510,22 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const runtime = this.runtimes.get(id);
 		if (!runtime) throw new Error(`Session ${id} is not running.`);
 		return runtime.proc.requestMarked<T>(command);
+	}
+
+	/**
+	 * A node's conversation as a list of messages. Asks the session when it is running;
+	 * otherwise reads its session file, so looking never starts a process.
+	 */
+	async readMessages(id: string): Promise<RpcRecord[]> {
+		const runtime = this.runtimes.get(id);
+		if (runtime?.channels.has("a2a")) {
+			const { messages } = await runtime.proc.request<{ messages: RpcRecord[] }>({ type: "get_messages" });
+			return messages;
+		}
+		const file = this.must(id).sessionFile;
+		if (!file || !existsSync(file)) return [];
+		const entries = parseSessionEntries(readFileSync(file, "utf8")).filter((entry) => entry.type !== "session");
+		return buildSessionContext(entries as Parameters<typeof buildSessionContext>[0]).messages as RpcRecord[];
 	}
 
 	/** Answer a dialog a node is blocked on. Nothing answers dialogs automatically. */
