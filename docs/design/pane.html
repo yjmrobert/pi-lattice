@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="margin:0">
+<title>Lattice Pane Proposal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column; the design is told as six states of one pane, then the rules and the build order. */
+:root {
+  --bg: #eceef2; --surface: #f8f9fb; --fg: #171a21; --muted: #596172; --line: #d2d7e0; --accent: #0b7f7a; --warn: #9a6200;
+  /* The terminal is drawn dark in both themes on purpose: it is a picture of a terminal. */
+  --t-bg: #0f1218; --t-edge: #232936; --t-fg: #c6ccd9; --t-dim: #5f6879; --t-bright: #f3f6fb; --t-green: #7fd18b; --t-yellow: #e8b755;
+  --t-red: #f0717b; --t-blue: #7aa7ff; --t-cyan: #5fd4d0; --t-mag: #c79bf2; --t-sel: #233252; --t-key: #272e3d;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #090b0f; --surface: #12151b; --fg: #e4e8ef; --muted: #98a1b2; --line: #262c38; --accent: #5fd4d0; --warn: #e8b755; color-scheme: dark } }
+:root[data-theme="dark"] { --bg: #090b0f; --surface: #12151b; --fg: #e4e8ef; --muted: #98a1b2; --line: #262c38; --accent: #5fd4d0; --warn: #e8b755; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 400 16px/1.55 var(--sans); padding-block: 40px 72px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+main { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+h1 { font: 700 clamp(26px, 5vw, 38px)/1.1 var(--mono); letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+h2 { font: 700 21px/1.2 var(--mono); margin: 0; letter-spacing: -0.01em; }
+h3 { font: 600 12px/1.3 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+p { margin: 0; } .lede { color: var(--muted); max-width: 65ch; margin-top: 12px; }
+.eyebrow { font: 400 13px var(--mono); color: var(--accent); margin-bottom: 10px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+nav a { font: 400 13px var(--mono); color: var(--fg); text-decoration: none; border: 1px solid var(--line); padding: 5px 10px; border-radius: 4px; }
+nav a:hover, nav a:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+nav a b { color: var(--accent); margin-right: 6px; }
+section { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.mock > header { display: flex; gap: 14px; align-items: flex-start; }
+.tag { font: 700 15px/1 var(--mono); color: var(--bg); background: var(--accent); width: 30px; height: 30px; display: grid; place-items: center; border-radius: 4px; flex: none; }
+.idea { color: var(--muted); max-width: 65ch; margin-top: 4px; }
+.term { margin: 0; background: var(--t-bg); border: 1px solid var(--t-edge); border-radius: 8px; overflow: hidden; min-width: 0; align-self: flex-start; max-width: 100%; }
+.term figcaption { font: 400 12px var(--mono); color: var(--t-dim); padding: 7px 12px; border-bottom: 1px solid var(--t-edge); }
+.scroll { overflow-x: auto; }
+pre { margin: 0; padding: 10px 12px; font: 400 13px/1.3 var(--mono); color: var(--t-fg); width: max-content; font-variant-ligatures: none; }
+pre i { font-style: normal; display: inline-block; width: 1ch; text-align: center; }
+.td { color: var(--t-dim) } .tg { color: var(--t-green) } .ty { color: var(--t-yellow) } .tr { color: var(--t-red) } .tb { color: var(--t-blue) }
+.tc { color: var(--t-cyan) } .tm { color: var(--t-mag) } .tw { color: var(--t-bright); font-weight: 700 } .tb.tw { color: var(--t-blue) } .ty.tw { color: var(--t-yellow) }
+.ts { background: var(--t-sel) } .tk { color: var(--t-bright); background: var(--t-key) }
+ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; } li { font-size: 15px; max-width: 72ch; }
+.points { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 8px 36px; }
+.legend { font: 400 13px/1.9 var(--mono); background: var(--t-bg); color: var(--t-fg); border: 1px solid var(--t-edge); border-radius: 8px; padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 2px 26px; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px 36px; }
+.two > div { min-width: 0; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th { text-align: left; font: 600 12px var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+th, td { padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+td:first-child { white-space: nowrap; }
+kbd { font: 400 13px var(--mono); background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; }
+.chip { display: inline-block; font: 500 12px var(--sans); padding: 1px 7px; border-radius: 3px; border: 1px solid currentColor; white-space: nowrap; }
+.chip.ok { color: var(--accent) } .chip.new { color: var(--warn) }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 22px 24px; }
+code { font: 400 0.9em var(--mono); }
+</style>
+<main>
+<header>
+  <p class="eyebrow">pi-lattice · packages/pane · proposal</p>
+  <h1>One pane, three depths</h1>
+  <p class="lede">The recommended design, combining the rail, the inbox and the inspector from the layout study. At rest it is a quiet one-line-per-session rail. When something needs you, that goes on top. When you give it the keyboard, the chat steps aside and the selected thing is shown in full. The last screen shows the same pane when work is running in several repositories at once. Screens are drawn at 104 × 26 with the pane at its current 34 columns.</p>
+  <nav>
+    <a href="#s1"><b>1</b>Quiet</a><a href="#s2"><b>2</b>Needs you</a><a href="#s3"><b>3</b>Focused</a><a href="#s4"><b>4</b>Answering</a><a href="#s5"><b>5</b>New child</a><a href="#s6"><b>6</b>Narrow</a><a href="#s7"><b>7</b>Several repos</a><a href="#rules"><b>§</b>Rules</a><a href="#keys"><b>§</b>Keys</a><a href="#build"><b>§</b>Build order</a>
+  </nav>
+</header>
+
+
+<section class="mock" id="s1">
+  <header><span class="tag">1</span><div><h2>Quiet</h2><p class="idea">Nothing is waiting. The pane is a map and stays out of the way.</p></div></header>
+  <figure class="term"><figcaption>pi — shop — pane not focused, nothing waiting</figcaption><div class="scroll"><pre> <span class="tb tw"><i>◆</i> shop</span>                <span class="td">6 sessions</span> <span class="td"><i>│</i></span>                                                                     
+<span class="tb"><i>▸</i></span> <span class="tc"><i class="sp">⠹</i></span> <span class="tw">checkout</span>              <span class="td">feature</span> <span class="td"><i>│</i></span> <span class="tb"><i>›</i></span> <span class="tw">Wire the checkout flow to the new payments service</span>                
+  <span class="td"><i>├</i></span> <span class="tc"><i class="sp">⠹</i></span> payments               <span class="td">task</span> <span class="td"><i>│</i></span>                                                                     
+  <span class="td"><i>│</i> <i>└</i></span> <span class="tc"><i class="sp">⠹</i></span> stripe-webhooks      <span class="td">task</span> <span class="td"><i>│</i></span> I'll split this in two: <span class="tw">payments</span> takes the Stripe                   
+  <span class="td"><i>├</i></span> <span class="td"><i>●</i></span> cart-api               <span class="td">task</span> <span class="td"><i>│</i></span> integration, <span class="tw">cart-api</span> exposes the totals endpoint.                  
+  <span class="td"><i>├</i> <i>○</i> impl</span>           <span class="tm">@sam</span> <span class="td">offline</span> <span class="td"><i>│</i></span>                                                                     
+  <span class="td"><i>└</i> <i>○</i> e2e-tests</span>            <span class="td">verify</span> <span class="td"><i>│</i></span> <span class="td"><i>┌</i> lattice_spawn</span>                                                     
+                                  <span class="td"><i>│</i></span> <span class="td"><i>│</i></span> payments <span class="td"><i>·</i> task <i>·</i> own worktree</span>                                    
+                                  <span class="td"><i>│</i></span> <span class="td"><i>└</i></span> <span class="tg">started in the background</span>                                         
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span> <span class="td"><i>┌</i> edit</span> src/checkout/session.ts                                      
+                                  <span class="td"><i>│</i></span> <span class="td"><i>│</i></span> <span class="tr">- const intent = legacyCharge(cart)</span>                               
+                                  <span class="td"><i>│</i></span> <span class="td"><i>│</i></span> <span class="tg">+ const intent = await payments.createIntent(cart)</span>                
+                                  <span class="td"><i>│</i></span> <span class="td"><i>└</i> 1 line changed</span>                                                    
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span> <span class="tc"><i class="sp">⠹</i></span> Working <span class="td"><i>·</i> esc to interrupt</span>                                        
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span><span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+                                  <span class="td"><i>│</i></span> <span class="tb"><i>›</i></span> <span class="td">Ask anything</span>                                                      
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="td"><i>│</i></span><span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+ <span class="tk">alt+l</span> <span class="td">sessions</span>   <span class="td">nothing waiting</span> <span class="td"><i>│</i></span> <span class="td">~/src/shop (main)</span>                              <span class="td">sonnet <i>·</i> 42% context</span> </pre></div></figure>
+  <ul class="points"><li>One line per session: six sessions take six lines, where today they take twelve.</li><li>The repository is named once, as the header of its group. Owner appears only when it is not you.</li><li>Working sessions spin; idle and asleep ones are dim. Nothing is yellow, because nothing needs you.</li><li>The bottom line always says how to get in: <code>alt+l</code>.</li></ul>
+</section>
+
+
+<section class="mock" id="s2">
+  <header><span class="tag">2</span><div><h2>Something needs you</h2><p class="idea">Questions and messages appear above the tree with one line of their content.</p></div></header>
+  <figure class="term"><figcaption>pi — shop — pane not focused, two things waiting</figcaption><div class="scroll"><pre> <span class="ty tw">NEEDS YOU</span>                      <span class="ty">2</span> <span class="td"><i>│</i></span>                                                                     
+ <span class="ty">?</span> <span class="tw">stripe-webhooks</span>                <span class="td"><i>│</i></span> <span class="tb"><i>›</i></span> <span class="tw">Wire the checkout flow to the new payments service</span>                
+   <span class="td">Run `stripe listen`?</span>           <span class="td"><i>│</i></span>                                                                     
+ <span class="ty"><i>✉︎</i></span> <span class="tw">cart-api</span> <span class="td"><i>→</i> payments</span>            <span class="td"><i>│</i></span> I'll split this in two: <span class="tw">payments</span> takes the Stripe                   
+   <span class="td"><i>“</i>Totals endpoint is live<i>…</i><i>”</i></span>     <span class="td"><i>│</i></span> integration, <span class="tw">cart-api</span> exposes the totals endpoint.                  
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="td"><i>│</i></span>                                                                     
+ <span class="tb tw"><i>◆</i> shop</span>                <span class="td">6 sessions</span> <span class="td"><i>│</i></span> <span class="td"><i>┌</i> lattice_spawn</span>                                                     
+<span class="tb"><i>▸</i></span> <span class="tc"><i class="sp">⠹</i></span> <span class="tw">checkout</span>              <span class="td">feature</span> <span class="td"><i>│</i></span> <span class="td"><i>│</i></span> payments <span class="td"><i>·</i> task <i>·</i> own worktree</span>                                    
+  <span class="td"><i>├</i></span> <span class="tc"><i class="sp">⠹</i></span> payments            <span class="ty"><i>✉︎</i>1</span> <span class="td">task</span> <span class="td"><i>│</i></span> <span class="td"><i>└</i></span> <span class="tg">started in the background</span>                                         
+  <span class="td"><i>│</i> <i>└</i></span> <span class="ty"><i>●</i></span> stripe-webhooks   <span class="ty">?1</span> <span class="td">task</span> <span class="td"><i>│</i></span>                                                                     
+  <span class="td"><i>├</i></span> <span class="td"><i>●</i></span> cart-api               <span class="td">task</span> <span class="td"><i>│</i></span> <span class="td"><i>┌</i> edit</span> src/checkout/session.ts                                      
+  <span class="td"><i>├</i> <i>○</i> impl</span>           <span class="tm">@sam</span> <span class="td">offline</span> <span class="td"><i>│</i></span> <span class="td"><i>│</i></span> <span class="tr">- const intent = legacyCharge(cart)</span>                               
+  <span class="td"><i>└</i> <i>○</i> e2e-tests</span>            <span class="td">verify</span> <span class="td"><i>│</i></span> <span class="td"><i>│</i></span> <span class="tg">+ const intent = await payments.createIntent(cart)</span>                
+                                  <span class="td"><i>│</i></span> <span class="td"><i>└</i> 1 line changed</span>                                                    
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span> <span class="tc"><i class="sp">⠹</i></span> Working <span class="td"><i>·</i> esc to interrupt</span>                                        
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span><span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+                                  <span class="td"><i>│</i></span> <span class="tb"><i>›</i></span> <span class="td">Ask anything</span>                                                      
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="td"><i>│</i></span><span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+ <span class="tk">alt+l</span> <span class="td">to answer</span>        <span class="ty">2 waiting</span> <span class="td"><i>│</i></span> <span class="td">~/src/shop (main)</span>                              <span class="td">sonnet <i>·</i> 42% context</span> </pre></div></figure>
+  <ul class="points"><li>You can read what is being asked without leaving the chat or opening a menu.</li><li>The same items are marked on their rows (<code>?1</code>, <code>✉1</code>), so you can see where in the tree they come from.</li><li>The section is absent when empty, so its arrival is itself the signal.</li><li>The footer hint changes from “sessions” to “to answer”, with the count.</li></ul>
+</section>
+
+
+<section class="mock" id="s3">
+  <header><span class="tag">3</span><div><h2>Focused on a session</h2><p class="idea">alt+l gives the pane the keyboard. The chat is replaced by everything known about the selected session.</p></div></header>
+  <figure class="term"><figcaption>pi — shop — pane focused, cursor on payments</figcaption><div class="scroll"><pre> <span class="ty tw">NEEDS YOU</span>                      <span class="ty">2</span> <span class="tb"><i>│</i></span> <span class="tw">payments</span>                                            <span class="tc"><i class="sp">⠹</i></span> working <span class="td"><i>·</i> 14m</span> 
+ <span class="tk">1</span> <span class="ty">?</span> <span class="tw">stripe-webhooks</span>              <span class="tb"><i>│</i></span> <span class="td">checkout <i>›</i> payments</span>                                                 
+     <span class="td">Run `stripe listen`?</span>         <span class="tb"><i>│</i></span>                                                                     
+ <span class="tk">2</span> <span class="ty"><i>✉︎</i></span> <span class="tw">cart-api</span> <span class="td"><i>→</i> payments</span>          <span class="tb"><i>│</i></span> <span class="td">BRIEF</span>                                                               
+     <span class="td"><i>“</i>Totals endpoint is live<i>…</i><i>”</i></span>   <span class="tb"><i>│</i></span> Integrate Stripe payment intents behind payments.createIntent(cart).
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="tb"><i>│</i></span> Cover create, confirm and refund with tests.                        
+ <span class="tb tw"><i>◆</i> shop</span>                <span class="td">6 sessions</span> <span class="tb"><i>│</i></span>                                                                     
+<span class="tb"><i>▸</i></span> <span class="tc"><i class="sp">⠹</i></span> <span class="tw">checkout</span>              <span class="td">feature</span> <span class="tb"><i>│</i></span> <span class="td">owner</span>      you                                                      
+<span class="ts">  <span class="td"><i>├</i></span> <span class="tc"><i class="sp">⠹</i></span> payments            <span class="ty"><i>✉︎</i>1</span> <span class="td">task</span> </span><span class="tb"><i>│</i></span> <span class="td">kind</span>       task                                                     
+  <span class="td"><i>│</i> <i>└</i></span> <span class="ty"><i>●</i></span> stripe-webhooks   <span class="ty">?1</span> <span class="td">task</span> <span class="tb"><i>│</i></span> <span class="td">roles</span>      worker <span class="td"><i>·</i></span> implementation                                  
+  <span class="td"><i>├</i></span> <span class="td"><i>●</i></span> cart-api               <span class="td">task</span> <span class="tb"><i>│</i></span> <span class="td">workspace</span>  own worktree <span class="td"><i>·</i> branch</span> lattice/payments                   
+  <span class="td"><i>├</i> <i>○</i> impl</span>           <span class="tm">@sam</span> <span class="td">offline</span> <span class="tb"><i>│</i></span>                                                                     
+  <span class="td"><i>└</i> <i>○</i> e2e-tests</span>            <span class="td">verify</span> <span class="tb"><i>│</i></span> <span class="ty tw">WAITING ON YOU</span>                                                      
+                                  <span class="tb"><i>│</i></span> <span class="ty"><i>✉︎</i></span> <span class="tw">cart-api</span> <span class="td">says</span>                                                     
+                                  <span class="tb"><i>│</i></span> <span class="ty"><i>│</i></span> Totals endpoint is live at /cart/totals, schema attached.         
+                                  <span class="tb"><i>│</i></span> <span class="ty"><i>│</i></span> <span class="tk">a</span> <span class="td">approve</span>   <span class="tk">x</span> <span class="td">reject</span>                                              
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="tb"><i>│</i></span><span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+ <span class="tk"><i>↑</i><i>↓</i></span> <span class="td">move</span>  <span class="tk">1</span><span class="td">-</span><span class="tk">2</span> <span class="td">jump</span>  <span class="tk">esc</span> <span class="td">back</span>      <span class="tb"><i>│</i></span> <span class="tk"><i>⏎</i></span> <span class="td">open here</span>   <span class="tk">n</span> <span class="td">new child</span>   <span class="tk">z</span> <span class="td">sleep</span>   <span class="tk">h</span> <span class="td">hand over</span>   <span class="tk">o</span> <span class="td">sharing</span>       </pre></div></figure>
+  <ul class="points"><li>The cursor is a row highlight that keeps the row's colours; <code>▸</code> still marks the session this terminal is in.</li><li>The brief, roles, workspace and branch are shown: all four are already in the session's record and are displayed nowhere today.</li><li>Anything that session is waiting on is repeated here with its keys, so you can act without moving the cursor.</li><li>Every action is one key, listed along the bottom. <code>esc</code> puts the chat back exactly as it was.</li></ul>
+</section>
+
+
+<section class="mock" id="s4">
+  <header><span class="tag">4</span><div><h2>Answering</h2><p class="idea">Inbox items and sessions are one list. Move onto an item, or press its number, and answer it in place.</p></div></header>
+  <figure class="term"><figcaption>pi — shop — pane focused, cursor on the question from stripe-webhooks</figcaption><div class="scroll"><pre> <span class="ty tw">NEEDS YOU</span>                      <span class="ty">2</span> <span class="tb"><i>│</i></span> <span class="tw">Question from stripe-webhooks</span>                        <span class="ty"><i>●</i></span> waiting <span class="td"><i>·</i> 6m</span> 
+<span class="ts"> <span class="tk">1</span> <span class="ty">?</span> <span class="tw">stripe-webhooks</span>              </span><span class="tb"><i>│</i></span> <span class="td">checkout <i>›</i> payments <i>›</i> stripe-webhooks</span>                               
+<span class="ts">     <span class="td">Run `stripe listen`?</span>         </span><span class="tb"><i>│</i></span>                                                                     
+ <span class="tk">2</span> <span class="ty"><i>✉︎</i></span> <span class="tw">cart-api</span> <span class="td"><i>→</i> payments</span>          <span class="tb"><i>│</i></span> <span class="ty"><i>│</i></span> Run `stripe listen --forward-to localhost:3000/hooks`             
+     <span class="td"><i>“</i>Totals endpoint is live<i>…</i><i>”</i></span>   <span class="tb"><i>│</i></span> <span class="ty"><i>│</i></span> in this shell?                                                    
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="tb"><i>│</i></span> <span class="ty"><i>│</i></span>                                                                   
+ <span class="tb tw"><i>◆</i> shop</span>                <span class="td">6 sessions</span> <span class="tb"><i>│</i></span> <span class="ty"><i>│</i></span> <span class="tk">y</span> <span class="td">yes</span>   <span class="tk">n</span> <span class="td">no</span>                                                      
+<span class="tb"><i>▸</i></span> <span class="tc"><i class="sp">⠹</i></span> <span class="tw">checkout</span>              <span class="td">feature</span> <span class="tb"><i>│</i></span>                                                                     
+  <span class="td"><i>├</i></span> <span class="tc"><i class="sp">⠹</i></span> payments            <span class="ty"><i>✉︎</i>1</span> <span class="td">task</span> <span class="tb"><i>│</i></span> <span class="td">THE SESSION ASKING</span>                                                  
+  <span class="td"><i>│</i> <i>└</i></span> <span class="ty"><i>●</i></span> stripe-webhooks   <span class="ty">?1</span> <span class="td">task</span> <span class="tb"><i>│</i></span> <span class="td">brief</span>      Verify Stripe webhook signatures and route events        
+  <span class="td"><i>├</i></span> <span class="td"><i>●</i></span> cart-api               <span class="td">task</span> <span class="tb"><i>│</i></span>            to payments.                                             
+  <span class="td"><i>├</i> <i>○</i> impl</span>           <span class="tm">@sam</span> <span class="td">offline</span> <span class="tb"><i>│</i></span> <span class="td">roles</span>      worker <span class="td"><i>·</i></span> implementation                                  
+  <span class="td"><i>└</i> <i>○</i> e2e-tests</span>            <span class="td">verify</span> <span class="tb"><i>│</i></span> <span class="td">workspace</span>  own worktree <span class="td"><i>·</i> branch</span> lattice/stripe-webhooks            
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="tb"><i>│</i></span><span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+ <span class="tk"><i>↑</i><i>↓</i></span> <span class="td">move</span>  <span class="tk">1</span><span class="td">-</span><span class="tk">2</span> <span class="td">jump</span>  <span class="tk">esc</span> <span class="td">back</span>      <span class="tb"><i>│</i></span> <span class="tk">y</span><span class="td">/</span><span class="tk">n</span> <span class="td">answer</span>   <span class="tk"><i>⏎</i></span> <span class="td">open the session (drops the question)</span>   <span class="tk"><i>↓</i></span> <span class="td">next item</span>  </pre></div></figure>
+  <ul class="points"><li>A yes/no question is one keypress. Today it is: open the approvals or session menu, choose “Answer it here”, then answer.</li><li>The full text is shown, with the asking session's brief underneath for context.</li><li>Opening the session is still offered, with the consequence stated: the question is dropped.</li><li>Messages to approve work the same way, with <code>a</code> and <code>x</code>.</li></ul>
+</section>
+
+
+<section class="mock" id="s5">
+  <header><span class="tag">5</span><div><h2>New child</h2><p class="idea">One form in place of five prompts in a row.</p></div></header>
+  <figure class="term"><figcaption>pi — shop — after pressing n on payments</figcaption><div class="scroll"><pre> <span class="ty tw">NEEDS YOU</span>                      <span class="ty">2</span> <span class="tb"><i>│</i></span> <span class="tw">New session</span> <span class="td">under payments</span>                                          
+ <span class="ty">?</span> <span class="tw">stripe-webhooks</span>                <span class="tb"><i>│</i></span>                                                                     
+   <span class="td">Run `stripe listen`?</span>           <span class="tb"><i>│</i></span> <span class="tb">Name</span>        <span class="ts"> refund-rounding<i>▏</i>                                </span>       
+ <span class="ty"><i>✉︎</i></span> <span class="tw">cart-api</span> <span class="td"><i>→</i> payments</span>            <span class="tb"><i>│</i></span>                                                                     
+   <span class="td"><i>“</i>Totals endpoint is live<i>…</i><i>”</i></span>     <span class="tb"><i>│</i></span> <span class="td">Kind</span>        task                                                    
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="tb"><i>│</i></span>                                                                     
+ <span class="tb tw"><i>◆</i> shop</span>                <span class="td">6 sessions</span> <span class="tb"><i>│</i></span> <span class="td">Roles</span>       <span class="tk"> worker </span> <span class="tk"> implementation </span>  <span class="td">coordinator  planning  <i>…</i></span>     
+<span class="tb"><i>▸</i></span> <span class="tc"><i class="sp">⠹</i></span> <span class="tw">checkout</span>              <span class="td">feature</span> <span class="tb"><i>│</i></span>                                                                     
+  <span class="td"><i>├</i></span> <span class="tc"><i class="sp">⠹</i></span> payments            <span class="ty"><i>✉︎</i>1</span> <span class="td">task</span> <span class="tb"><i>│</i></span> <span class="td">Workspace</span>   <span class="tb"><i>◉</i></span> own worktree and branch   <span class="td"><i>○</i> this directory</span>            
+<span class="ts">  <span class="td"><i>│</i> <i>├</i> <i>◌</i> refund-rounding</span>       <span class="tb">new</span> </span><span class="tb"><i>│</i></span>                                                                     
+  <span class="td"><i>│</i> <i>└</i></span> <span class="ty"><i>●</i></span> stripe-webhooks   <span class="ty">?1</span> <span class="td">task</span> <span class="tb"><i>│</i></span> <span class="td">Brief</span>                                                               
+  <span class="td"><i>├</i></span> <span class="td"><i>●</i></span> cart-api               <span class="td">task</span> <span class="tb"><i>│</i></span> <span class="td"><i>╭</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>╮</i></span>    
+  <span class="td"><i>├</i> <i>○</i> impl</span>           <span class="tm">@sam</span> <span class="td">offline</span> <span class="tb"><i>│</i></span> <span class="td"><i>│</i></span> Refunds round per line item; Stripe wants the total rounded  <span class="td"><i>│</i></span>    
+  <span class="td"><i>└</i> <i>○</i> e2e-tests</span>            <span class="td">verify</span> <span class="tb"><i>│</i></span> <span class="td"><i>│</i></span> once. Fix refund.ts and make the failing test pass.          <span class="td"><i>│</i></span>    
+                                  <span class="tb"><i>│</i></span> <span class="td"><i>│</i></span>                                                              <span class="td"><i>│</i></span>    
+                                  <span class="tb"><i>│</i></span> <span class="td"><i>╰</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>╯</i></span>    
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+                                  <span class="tb"><i>│</i></span>                                                                     
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="tb"><i>│</i></span><span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+ <span class="td">creating under payments</span>          <span class="tb"><i>│</i></span> <span class="tk">tab</span> <span class="td">next field</span>   <span class="tk">space</span> <span class="td">toggle</span>   <span class="tk">ctrl+<i>⏎</i></span> <span class="td">create</span>   <span class="tk">esc</span> <span class="td">cancel</span>          </pre></div></figure>
+  <ul class="points"><li>Name, kind, roles, workspace and brief are visible together, so you can go back and change one.</li><li>Roles are chosen from the fragments that exist, not typed from memory.</li><li>The tree shows where the session will appear before you commit.</li><li>This is the largest piece to build: the pane has to do its own text editing. The existing prompts can stay until it is ready.</li></ul>
+</section>
+
+
+<section class="mock" id="s6">
+  <header><span class="tag">6</span><div><h2>Narrow terminal</h2><p class="idea">Below the width where the side pane fits, two lines above the editor carry the same information.</p></div></header>
+  <figure class="term"><figcaption>pi — shop — 72 columns</figcaption><div class="scroll"><pre>                                                                        
+ <span class="tb"><i>›</i></span> <span class="tw">Wire the checkout flow to the new payments service</span>                   
+                                                                        
+ I'll split this in two: <span class="tw">payments</span> takes the Stripe                      
+ integration, <span class="tw">cart-api</span> exposes the totals endpoint.                     
+                                                                        
+ <span class="td"><i>┌</i> lattice_spawn</span>                                                        
+ <span class="td"><i>│</i></span> payments <span class="td"><i>·</i> task <i>·</i> own worktree</span>                                       
+ <span class="td"><i>└</i></span> <span class="tg">started in the background</span>                                            
+                                                                        
+ <span class="td"><i>┌</i> edit</span> src/checkout/session.ts                                         
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+ <span class="tb tw"><i>◆</i> shop</span> <span class="ts"> <i>▸</i> <i class="sp">⠹</i> checkout </span> <span class="tc"><i class="sp">⠹</i></span> payments <span class="ty"><i>✉︎</i>1</span> <span class="td"><i>│</i></span> <span class="ty"><i>●</i></span> stripe-webhooks <span class="ty">?1</span> <span class="td"><i>│</i> +3</span>        
+ <span class="ty">?</span> <span class="tw">stripe-webhooks</span> <span class="td">Run `stripe listen`?</span>                  <span class="tk">alt+l</span> <span class="td">sessions</span> 
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+ <span class="tb"><i>›</i></span> <span class="td">Ask anything</span>                                                         
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+ <span class="td">~/src/shop (main)</span>                                 <span class="td">sonnet <i>·</i> 42% context</span> </pre></div></figure>
+  <ul class="points"><li>Replaces today's compact list, which spends up to eight lines.</li><li>Line one is the sessions, open one highlighted, the rest counted. Line two is the first thing waiting on you.</li><li><code>alt+l</code> opens the same focused view as screens 3 to 5, full width.</li></ul>
+</section>
+
+
+<section class="mock" id="s7">
+  <header><span class="tag">7</span><div><h2>Several repositories</h2><p class="idea">When you have work running in more than one repository, the pane groups by repository and the inbox covers all of them.</p></div></header>
+  <figure class="term"><figcaption>pi — shop — pane not focused, three repositories with sessions</figcaption><div class="scroll"><pre> <span class="ty tw">NEEDS YOU</span>                      <span class="ty">3</span> <span class="td"><i>│</i></span>                                                                     
+ <span class="ty">?</span> <span class="tw">stripe-webhooks</span>                <span class="td"><i>│</i></span> <span class="tb"><i>›</i></span> <span class="tw">Wire the checkout flow to the new payments service</span>                
+   <span class="td">Run `stripe listen`?</span>           <span class="td"><i>│</i></span>                                                                     
+ <span class="ty"><i>✉︎</i></span> <span class="tw">cart-api</span> <span class="td"><i>→</i> payments</span>            <span class="td"><i>│</i></span> I'll split this in two: <span class="tw">payments</span> takes the Stripe                   
+   <span class="td"><i>“</i>Totals endpoint is live<i>…</i><i>”</i></span>     <span class="td"><i>│</i></span> integration, <span class="tw">cart-api</span> exposes the totals endpoint.                  
+ <span class="ty">?</span> <span class="tw">pdf-renderer</span>       <span class="tb">billing-api</span> <span class="td"><i>│</i></span>                                                                     
+   <span class="td">Overwrite fixtures/invoice.pdf?</span><span class="td"><i>│</i></span> <span class="td"><i>┌</i> lattice_spawn</span>                                                     
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="td"><i>│</i></span> <span class="td"><i>│</i></span> payments <span class="td"><i>·</i> task <i>·</i> own worktree</span>                                    
+ <span class="tb tw"><i>◆</i> shop</span>                     <span class="tc"><i class="sp">⠹</i>2</span> <span class="ty"><i>●</i>1</span> <span class="td"><i>│</i></span> <span class="td"><i>└</i></span> <span class="tg">started in the background</span>                                         
+<span class="tb"><i>▸</i></span> <span class="tc"><i class="sp">⠹</i></span> <span class="tw">checkout</span>              <span class="td">feature</span> <span class="td"><i>│</i></span>                                                                     
+  <span class="td"><i>├</i></span> <span class="tc"><i class="sp">⠹</i></span> payments            <span class="ty"><i>✉︎</i>1</span> <span class="td">task</span> <span class="td"><i>│</i></span> <span class="td"><i>┌</i> edit</span> src/checkout/session.ts                                      
+  <span class="td"><i>│</i> <i>└</i></span> <span class="ty"><i>●</i></span> stripe-webhooks   <span class="ty">?1</span> <span class="td">task</span> <span class="td"><i>│</i></span> <span class="td"><i>│</i></span> <span class="tr">- const intent = legacyCharge(cart)</span>                               
+  <span class="td"><i>├</i></span> <span class="td"><i>●</i></span> cart-api               <span class="td">task</span> <span class="td"><i>│</i></span> <span class="td"><i>│</i></span> <span class="tg">+ const intent = await payments.createIntent(cart)</span>                
+  <span class="td"><i>├</i> <i>○</i> impl</span>           <span class="tm">@sam</span> <span class="td">offline</span> <span class="td"><i>│</i></span> <span class="td"><i>└</i> 1 line changed</span>                                                    
+  <span class="td"><i>└</i> <i>○</i> e2e-tests</span>            <span class="td">verify</span> <span class="td"><i>│</i></span>                                                                     
+ <span class="tb"><i>◇</i></span> <span class="tw">billing-api</span>              <span class="tc"><i class="sp">⠹</i>1</span> <span class="ty"><i>●</i>1</span> <span class="td"><i>│</i></span> <span class="tc"><i class="sp">⠹</i></span> Working <span class="td"><i>·</i> esc to interrupt</span>                                        
+  <span class="tc"><i class="sp">⠹</i></span> invoice-export        <span class="td">feature</span> <span class="td"><i>│</i></span>                                                                     
+  <span class="td"><i>└</i></span> <span class="ty"><i>●</i></span> pdf-renderer        <span class="ty">?1</span> <span class="td">task</span> <span class="td"><i>│</i></span>                                                                     
+ <span class="td"><i>◇</i> docs-site</span>               <span class="td">2 idle</span> <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span>                                                                     
+                                  <span class="td"><i>│</i></span><span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+                                  <span class="td"><i>│</i></span> <span class="tb"><i>›</i></span> <span class="td">Ask anything</span>                                                      
+<span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span><span class="td"><i>│</i></span><span class="td"><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i><i>─</i></span>
+ <span class="tk">alt+l</span> <span class="td">to answer</span>        <span class="ty">3 waiting</span> <span class="td"><i>│</i></span> <span class="td">~/src/shop (main)</span>                              <span class="td">sonnet <i>·</i> 42% context</span> </pre></div></figure>
+  <ul class="points"><li><b>One inbox for everything.</b> A question from another repository shows up here, labelled with where it is from, and is answered the same way.</li><li><b>This terminal's repository is first</b>, marked <code>◆</code>. The others follow, marked <code>◇</code>, each with its own counts.</li><li><b>Quiet repositories fold to one line.</b> A repository opens up only while something in it is working or waiting on you.</li><li><b>With one repository nothing changes:</b> the group header is the single header in screens 1 to 5.</li><li><b><code>enter</code> goes there.</b> A session in another repository opens in this terminal like any other: Pi's tools, settings and project context move to that repository, <code>◆</code> moves to its group, and a one-line notice names where you now are. The session you left keeps working in the background.</li><li><b><code>-</code> goes back</b> to the session you were in before, so moving between two repositories is one key each way.</li><li>In the narrow strip, each other repository is one counter at the end of the line.</li></ul>
+</section>
+
+<section id="rules">
+  <h2>The rules behind the screens</h2>
+  <div class="two">
+    <div>
+      <h3>A row, column by column</h3>
+      <figure class="term"><figcaption>one session row</figcaption><div class="scroll"><pre><span class="tb"><i>▸</i></span> <span class="td"><i>├</i></span> <span class="tc"><i class="sp">⠹</i></span> payments              <span class="ty"><i>✉︎</i>1</span> <span class="td">task</span>                                             
+<span class="td"><i>│</i> <i>│</i> <i>│</i> <i>│</i>                     <i>│</i>  <i>└</i> kind, or @owner when it is not yours</span>           
+<span class="td"><i>│</i> <i>│</i> <i>│</i> <i>└</i> name                <i>└</i> what is waiting on you: ?n questions, <i>✉︎</i>n messages</span> 
+<span class="td"><i>│</i> <i>│</i> <i>└</i> status</span>                                                                    
+<span class="td"><i>│</i> <i>└</i> tree</span>                                                                        
+<span class="td"><i>└</i> open in this terminal (its own gutter; the cursor is a row highlight)</span>         </pre></div></figure>
+    </div>
+    <div>
+      <h3>When a row runs out of room</h3>
+      <ul>
+        <li>The kind goes first.</li>
+        <li>Then the name is cut with an ellipsis.</li>
+        <li>The <code>?n</code> and <code>✉n</code> marks are never dropped.</li>
+        <li>A deep tree compresses its guides to one column per level, as it does today.</li>
+      </ul>
+    </div>
+  </div>
+  <h3>Status</h3>
+  <div class="legend"><span><span class="tc"><i class="sp">⠹</i></span> working or starting</span><span><span class="ty">●</span> waiting on you</span><span><span class="td">●</span> idle</span><span><span class="td">○</span> asleep or offline</span><span><span class="tg">✓</span> finished</span><span><span class="tr">✗</span> failed</span><span><span class="tb">▸</span> open here</span><span><span class="tm">@sam</span> someone else's</span></div>
+  <ul>
+    <li><b>Yellow means you.</b> It is used only for things waiting on a person. A working agent is never yellow.</li>
+    <li><b>Motion means work.</b> The spinner is the only thing that moves, and it stops when the session does.</li>
+    <li><b>Calm states are dim.</b> Idle and asleep differ by fill, not by colour.</li>
+  </ul>
+</section>
+
+<section id="keys">
+  <h2>Keys</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Key</th><th>Does</th><th>Today</th></tr>
+    <tr><td><kbd>alt+l</kbd></td><td>Give the pane the keyboard, and back</td><td>Same</td></tr>
+    <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Move through inbox items, then sessions</td><td>Sessions only</td></tr>
+    <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>Jump to an inbox item</td><td>New</td></tr>
+    <tr><td><kbd>enter</kbd></td><td>Open the selected session here</td><td>Same</td></tr>
+    <tr><td><kbd>-</kbd></td><td>Back to the session you were in before, in any repository</td><td>New</td></tr>
+    <tr><td><kbd>y</kbd> <kbd>n</kbd></td><td>Answer the selected yes/no question</td><td>New; was a menu</td></tr>
+    <tr><td><kbd>a</kbd> <kbd>x</kbd></td><td>Approve or reject the selected message</td><td><kbd>a</kbd> opened a menu</td></tr>
+    <tr><td><kbd>n</kbd></td><td>New child under the selected session, as a form</td><td>Five prompts</td></tr>
+    <tr><td><kbd>z</kbd></td><td>Put the selected session to sleep</td><td>Command only</td></tr>
+    <tr><td><kbd>h</kbd></td><td>Offer the selected session to someone you are paired with</td><td>Inside the sharing menu</td></tr>
+    <tr><td><kbd>o</kbd></td><td>Sharing: pair, people, invites</td><td>Same</td></tr>
+    <tr><td><kbd>esc</kbd></td><td>Back to the chat</td><td>Same</td></tr>
+  </table></div>
+  <p class="idea">Questions that are a choice list or free text keep using Pi's own prompt, opened with <kbd>enter</kbd> on the item.</p>
+</section>
+
+<section id="build">
+  <h2>Build order</h2>
+  <p class="idea">Each step ships on its own and leaves the pane better than before. Every step except the third works with what the host already reports. Several repositories comes third because it changes how the pane connects, and everything after it should be built on that.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Step</th><th>What</th><th>Where</th><th>Data</th></tr>
+    <tr><td>1</td><td>The rail: one-line rows, the status colours, separate gutter for <code>▸</code>, highlight that keeps colour, header with the repository, pinned footer hint. Screen 1.</td><td><code>view.ts</code> and its tests; one more colour in <code>Paint</code></td><td><span class="chip ok">has it</span></td></tr>
+    <tr><td>2</td><td>The inbox section and one cursor across items and sessions; <code>y</code> <code>n</code> <code>a</code> <code>x</code> act in place. Screens 2 and 4.</td><td><code>view.ts</code>, key handling in <code>extension.ts</code></td><td><span class="chip ok">has it</span> counts are in the pane state; the text is what the approvals menu already fetches</td></tr>
+    <tr><td>3</td><td>Several repositories: grouped sessions and one inbox across them. Screen 7.</td><td>The pane connects to every running host, where today it finds only the one for the current directory. Needs a per-user list of running hosts, written by each host as it starts.</td><td><span class="chip new">new</span> the list of hosts; nothing new per session</td></tr>
+    <tr><td>4</td><td>The inspector while focused: brief, roles, workspace, branch, time in state. Screen 3.</td><td>A second renderer; the pane takes the full width while focused</td><td><span class="chip ok">has it</span> all fields are on the session record; time in state comes from <code>updatedAt</code></td></tr>
+    <tr><td>5</td><td>The strip for narrow terminals. Screen 6.</td><td>Replaces <code>renderCompact</code></td><td><span class="chip ok">has it</span></td></tr>
+    <tr><td>6</td><td>The new-child form. Screen 5.</td><td>A small form component with its own text editing</td><td><span class="chip ok">has it</span> role names come from the fragments directory</td></tr>
+    <tr><td>Later</td><td>What each session is doing right now, and a recent-events list in the inspector.</td><td>Host and protocol</td><td><span class="chip new">new</span></td></tr>
+  </table></div>
+</section>
+
+<section class="box">
+  <h2>Not yet checked</h2>
+  <ul>
+    <li>Switching to a session in another repository was tried against real Pi in RPC mode: its tools ran in the other repository afterwards. It has not been tried in the interactive interface. The shell Pi was started from stays where it was, so quitting Pi returns you there.</li>
+    <li>Step 3 assumes the pane can change width when it gains focus. It is laid out as a fixed 34-column item beside Pi today; I have not tried resizing it.</li>
+    <li>Time in state uses <code>updatedAt</code>, which may also change for reasons other than status. If so it needs its own timestamp.</li>
+    <li>The colours shown are illustrative. The real ones come from the Pi theme, which needs to offer a colour distinct from warning for “working”.</li>
+    <li>These are drawings, not a running build. Spinner speed and how the inbox feels when it appears mid-typing need judging live.</li>
+  </ul>
+</section>
+</main>
+<script>
+(() => {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", els = document.querySelectorAll(".sp");
+  let n = 0;
+  setInterval(() => { const f = frames[n++ % frames.length]; els.forEach((el) => { el.textContent = f; }); }, 90);
+})();
+</script>
+</body>
+</html>
