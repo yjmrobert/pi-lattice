@@ -36,9 +36,12 @@ Nothing changes in a session until you run `/lattice`. See the [pane readme](pac
 | [`a2a`](packages/a2a/README.md) | Pi extension. Sessions message each other; inbound mail can require human approval. Also works alone ([try it](examples/minimal-two-agents/README.md)). |
 | [`roles`](packages/roles/README.md) | Pi extension. Compose a session's role from markdown fragments and change it mid-session. Also works alone ([guide](docs/roles.md)). |
 | [`graph`](packages/graph/README.md) | Pi extension. Lets an agent spawn child sessions and see the tree. |
-| [`host`](packages/host/README.md) | Background process that owns the tree and runs the sessions you are not in. Started for you. |
+| [`host`](packages/host/README.md) | Library. Owns the tree and runs the sessions you are not in. |
 | [`collab`](packages/collab/README.md) | Library. Shares a tree between people, peer to peer, with signed ownership handoff. |
-| `protocol` | Shared envelope schema, state machines and wire types. |
+| [`app`](packages/app/README.md) | Everything assembled: the Pi package, the launcher, the background host, the command line. |
+| `protocol` | The contracts everything else shares: envelope, events, wire types, state machines. |
+
+Each package depends only on `protocol` and works on its own; `app` is the one place they are put together. A test enforces this ([ADR 0014](docs/decisions/0014-package-seams.md)).
 
 ## Documentation
 

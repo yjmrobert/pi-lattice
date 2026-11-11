@@ -44,20 +44,29 @@ Two kinds of thing, kept separate.
 
 | Package | What it is | Depends on |
 |---|---|---|
-| `protocol` | Envelope schema and validators, `pi.events` names and payload types, inbound and lease state machines as pure functions, version constant. No Pi dependency. | typebox |
-| `a2a` | Extension. `send_message` tool, `/inbox`, inbound state machine, `Transport` interface, file transport, host transport. | protocol |
+| `protocol` | The contracts: envelope, typed events, host assignment, wire frames, inbound and lease state machines. No I/O, no Pi. | typebox |
+| `a2a` | Extension. `send_message`, `/inbox`, inbound state machine, `Transport` interface, file and host transports. | protocol |
 | `roles` | Extension plus markdown fragments. `/role`, `apply_role`, prompt-section injection. | protocol |
-| `graph` | Extension. Node metadata, `spawn_session`, `list_sessions`, `/children`. Needs a host to spawn. | protocol |
-| `pane` | Extension. The tree as a left pane inside Pi; `/lattice`; opens a session here by taking it over from the host. | protocol, host |
-| `host` | Node app, run in the background. Store, supervisor, broker, socket API, foreground handover. | protocol, collab |
-| `collab` | Library the host loads. Identities, pairing, an encrypted peer channel, signed ownership logs, cross-owner mail, handoff and session transfer. | protocol |
+| `graph` | Extension. `spawn_session`, `list_sessions`, `/children`. Needs a host to spawn. | protocol |
+| `pane` | Extension. The tree as a left pane inside Pi; `/lattice`; opens a session here by taking it over from the host. | protocol |
+| `host` | Library. Store, supervisor, broker, socket API, foreground handover. | protocol |
+| `collab` | Library. Identities, pairing, an encrypted peer channel, signed ownership logs, cross-owner mail, handoff. | protocol |
+| `app` | The composition root. The Pi package manifest, the launcher extension, the background host wired to sharing, the command line. | all of the above |
 
-Rules:
+## Seams
 
-- The contract between extensions is the set of typed events in `protocol`. Each extension announces itself with a hello event carrying its protocol version, so a mismatch is reported instead of failing silently.
-- `protocol` holds no state ([0001](decisions/0001-packaging-and-scope.md)).
-- Extensions start nothing in their factory. Sockets, watchers and timers start in `session_start` and stop in an idempotent `session_shutdown`.
+The full account is in [ADR 0014](decisions/0014-package-seams.md). In short:
+
+- A package imports only `protocol` from this repository. `app` imports everything, and nothing imports `app`.
+- Extensions talk through typed events on `pi.events`, defined in `protocol`. They never read each other's state and never write to the environment for each other.
+- A session learns it is a node through a **host assignment**: from the environment when the host started it, or from the `lattice:host:assigned` event when a person opens the node in their own Pi. Extensions accept it at any time, so load order does not matter.
+- A package that needs something from another defines an interface and is handed an implementation: `HostPort` (collab), `SharingPort` (host), `Transport` (a2a), `PeerTransport` (collab).
+- The pane does not start hosts. It asks on the event bus; the app's launcher answers.
+- An extension goes quiet when its session ends, because the event bus outlives a session switch.
+- `protocol` holds no state ([0001](decisions/0001-packaging-and-scope.md)). Extensions start nothing in their factory.
 - Kinds, intents and fragment names are free-form strings everywhere. No enums of agent types.
+
+`test/architecture.test.ts` fails the build if a package imports something it should not.
 
 ## Identity
 
