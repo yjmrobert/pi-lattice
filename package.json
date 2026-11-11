@@ -25,5 +25,20 @@
     "typebox": "1.3.27",
     "typescript": "^5.9.0",
     "vitest": "^4.1.0"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "multi-agent",
+    "session-tree",
+    "a2a"
+  ],
+  "pi": {
+    "extensions": [
+      "./packages/pane/src/extension.ts",
+      "./packages/a2a/src/extension.ts",
+      "./packages/roles/src/extension.ts",
+      "./packages/graph/src/extension.ts"
+    ]
   }
 }
