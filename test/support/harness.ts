@@ -15,7 +15,9 @@ export const extensionPaths = {
 	roles: join(repoRoot, "packages/roles"),
 	graph: join(repoRoot, "packages/graph"),
 	collab: join(repoRoot, "packages/collab"),
+	pane: join(repoRoot, "packages/pane"),
 };
+export const piCli = cliPath;
 export const directorScript = join(here, "director.mjs");
 
 /** One isolated world: a Pi agent dir, a lattice home, a working directory, a sessions dir. */
