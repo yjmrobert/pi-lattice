@@ -6,7 +6,7 @@ Sharing is peer to peer. Each person runs their own host, and the hosts connect 
 
 ## Pairing
 
-1. One person shows their invite (`ctrl+o`, "Show my invite"). It looks like `name@host:port#key`.
+1. One person turns sharing on and shows their invite (`/lattice share`, "Show my invite"). It looks like `name@host:port#key`.
 2. The other pairs with it ("Pair using someone's invite"). Their host connects.
 3. The first person is told who knocked, compares the key fingerprint with them over a call or in person, and pairs back.
 
@@ -14,9 +14,9 @@ From then on the two hosts connect whenever both are running. Someone using a pa
 
 ## What you see of a peer
 
-- Their sessions appear in your tree, marked `@name`. You cannot run them or type into them.
-- Opening one fetches its conversation from them, read-only.
-- When they are offline, their sessions stay in your tree as last seen, greyed out, and cannot be opened until they are back.
+- Their sessions appear in your pane, marked `@name`. You cannot run them or type into them.
+- Opening one fetches its conversation from them and shows it read-only.
+- When they are offline, their sessions stay in your pane as last seen, marked offline, and cannot be opened until they are back.
 
 ## The handoff
 

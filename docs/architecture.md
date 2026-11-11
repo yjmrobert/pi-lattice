@@ -20,21 +20,24 @@ Two kinds of thing, kept separate.
 
 **Extensions** run inside each Pi session. Each is optional and useful alone. They share types through `@pi-lattice/protocol` and find each other at runtime through `pi.events`. No extension imports another.
 
-**The host** is a separate Node process. It owns the tree, spawns and supervises sessions, brokers messages, and renders the tree UI. Sessions are workers.
+**The host** is a separate Node process that runs in the background. It owns the tree, runs the sessions nobody has open, and brokers messages. It has no interface of its own: the developer's Pi is the interface ([ADR 0013](decisions/0013-pane-inside-pi.md)).
 
 ```
-            human
-              |
-        +-----------+        stdio RPC (prompts, events, dialogs)
-        |   host    |<------------------------------------+
-        | tree store|        unix socket (envelopes,      |
-        | broker    |<----------- spawn, metadata) ---+   |
-        | tree UI   |                                 |   |
-        +-----------+                           +-----------------+
-                                                | pi (RPC mode)   |
-   no host: sessions exchange envelopes         |  a2a  graph     |
-   through a maildir spool on disk              |  roles collab   |
-                                                +-----------------+
+        developer
+            |
+   +------------------+   control socket    +-------------+
+   | pi (interactive) |<------------------->|    host     |
+   |  pane  a2a       |   (tree, takeover,  | tree store  |
+   |  roles graph     |    approvals)       | broker      |
+   +------------------+                     +-------------+
+     the session that is                      |  stdio RPC + socket
+     open in this terminal                    v
+                                    +-------------------+
+                                    | pi (headless) x N |   every other session
+                                    |  a2a roles graph  |
+                                    +-------------------+
+
+   another person's host  <== encrypted peer channel ==>  host
 ```
 
 ## Packages
@@ -45,7 +48,8 @@ Two kinds of thing, kept separate.
 | `a2a` | Extension. `send_message` tool, `/inbox`, inbound state machine, `Transport` interface, file transport, host transport. | protocol |
 | `roles` | Extension plus markdown fragments. `/role`, `apply_role`, prompt-section injection. | protocol |
 | `graph` | Extension. Node metadata, `spawn_session`, `list_sessions`, `/children`. Needs a host to spawn. | protocol |
-| `host` | Node app. Store, supervisor, broker, socket API, tree UI. | protocol |
+| `pane` | Extension. The tree as a left pane inside Pi; `/lattice`; opens a session here by taking it over from the host. | protocol, host |
+| `host` | Node app, run in the background. Store, supervisor, broker, socket API, foreground handover. | protocol, collab |
 | `collab` | Library the host loads. Identities, pairing, an encrypted peer channel, signed ownership logs, cross-owner mail, handoff and session transfer. | protocol |
 
 Rules:
@@ -85,7 +89,8 @@ Details in [roles.md](roles.md). Each applied fragment becomes one system prompt
 - **Supervisor**: one Pi child per running node, lazy resume, concurrency cap, explicit handling of exit and failure ([0005](decisions/0005-host-control-plane.md)).
 - **Broker**: routes and journals every envelope.
 - **Workspaces**: shared directory or a git worktree per node ([0010](decisions/0010-workspace-policy.md)).
-- **UI**: terminal only. Tree with status and owner badges, attach, spawn with fragment picker, pending approvals, blocked dialogs ([0006](decisions/0006-attach-model.md)).
+- **Foreground handover**: a session opened in a terminal is taken over from the host and handed back on leaving. Its messaging goes through the same broker either way.
+- **No UI of its own**: the pane in the developer's Pi shows the tree and drives the host ([0013](decisions/0013-pane-inside-pi.md)).
 
 ## Collaboration
 
@@ -119,7 +124,7 @@ Each phase ends with something usable and a stop for review.
 | 1 | `protocol` (envelope, events, inbound and lease machines, tests) and `a2a` with the file transport | **Done.** Two local Pi sessions exchange messages and the model sees them. |
 | 2 | `roles` | **Done.** `coordinator + planning` can be composed on a session and changed mid-session. |
 | 3 | `host` (store, supervisor, broker, socket) and `graph` | **Done.** A coordinator spawns a child and both appear in the tree. |
-| 4 | Tree UI: view, attach, spawn with fragment picker, approvals, blocked dialogs | **Done.** Feature, grilling and task nodes can be navigated and typed into. |
+| 4 | Tree UI: view, attach, spawn, approvals, blocked dialogs | **Done, then redone inside Pi.** A pane in Pi lists the tree; any node can be opened and typed into with Pi's full interface. |
 | 5 | Lifecycle fragments, then a full feature run | **Done against a scripted model.** A feature goes through grilling, planning, implementation and verification. A run with a real model is still to do. |
 | 6 | `collab`: transport decision, handoff, cross-owner approvals, session transfer | **Done on one machine, peer to peer.** Two isolated hosts connect directly, share a tree, and a node changes owner with both confirming. A run across two real machines is still to do ([script](two-machine-handoff.md)). |
 
