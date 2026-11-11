@@ -72,12 +72,18 @@ export interface UiState {
 /** The control API a person's Pi uses to drive the host. Carried by the `ui` request. */
 export interface UiApi {
 	state: { params: Record<string, never>; result: UiState };
-	/** Take a node over into this terminal. Any headless copy is stopped first. */
-	attach: { params: { nodeId: string }; result: { node: NodeMeta; sessionFile: string; assignment: HostAssignment } };
-	/** Give a node back; the host runs it headless again when it has work. */
-	detach: { params: { nodeId: string }; result: Record<string, never> };
+	/**
+	 * Take a node over into this terminal. Any headless copy is stopped first; `wasWorking`
+	 * says its agent was mid-turn, so the terminal can let it carry on.
+	 */
+	attach: { params: { nodeId: string }; result: { node: NodeMeta; sessionFile: string; assignment: HostAssignment; wasWorking: boolean } };
+	/**
+	 * Give a node back. With `resume`, its agent was mid-turn when the person left: the host
+	 * runs it headless straight away and lets it carry on. Otherwise it sleeps until it has work.
+	 */
+	detach: { params: { nodeId: string; resume?: boolean }; result: Record<string, never> };
 	/** Make the session already open in this terminal the root of a new tree. */
-	adopt: { params: { sessionFile: string; sessionId: string; cwd: string; name: string; fragments?: string[] }; result: { node: NodeMeta; assignment: HostAssignment } };
+	adopt: { params: { sessionFile: string; sessionId: string; cwd: string; name: string; fragments?: string[]; kind?: string }; result: { node: NodeMeta; assignment: HostAssignment } };
 	spawn: { params: { parentId: string; spec: SpawnSpec }; result: { node: NodeMeta } };
 	/** Report whether the agent in a foreground node is working. */
 	status: { params: { nodeId: string; streaming: boolean }; result: Record<string, never> };
@@ -152,3 +158,11 @@ export class FrameDecoder {
 		return out;
 	}
 }
+
+/**
+ * What an agent is told when its session moved between the background and a terminal in
+ * the middle of a turn. The turn itself cannot move between processes, so it is stopped
+ * on one side and picked up again on the other.
+ */
+export const HANDOVER_NOTE =
+	"[pi-lattice] This session was moved between the background and a terminal while you were working, which interrupted your last step. This note is from pi-lattice, not from the user. Carry on from where you left off.";
