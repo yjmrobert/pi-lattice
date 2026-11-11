@@ -80,6 +80,12 @@ export interface PaneView {
 	keys?: ReadonlyArray<readonly [key: string, does: string]>;
 	/** Which frame of the working spinner to draw. */
 	frame?: number;
+	/** Something that needs the same key again before it happens; see `stopKey`. */
+	confirm?: string | undefined;
+	/** Whether the list of every key is showing in place of the inspector. */
+	help?: boolean;
+	/** The last few things the session under the cursor said and did, once fetched. */
+	tail?: { nodeId: string; lines: string[] } | undefined;
 	/** Rows available. When given, the footer is pinned to the bottom and a long list scrolls with the cursor. */
 	height?: number | undefined;
 }

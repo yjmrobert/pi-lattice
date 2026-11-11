@@ -1,5 +1,5 @@
 /** What a key press means while the pane has the keyboard. Pure: the extension carries the actions out. */
-import { type InboxItem, itemKey, type PaneView, paneInbox, paneOrder } from "./view.ts";
+import { findNode, type InboxItem, itemKey, type PaneView, paneInbox, paneOrder } from "./view.ts";
 
 /** A key as the pane sees it: a name for the special ones, else the character typed. */
 export type PaneKey = "up" | "down" | "enter" | "escape" | (string & {});
@@ -20,7 +20,35 @@ export type PaneAction =
 	/** Create a session under this one. */
 	| { do: "new"; nodeId: string | undefined }
 	/** Start the host of a repository whose tree is asleep, so its sessions can be seen and opened. */
-	| { do: "wake"; repo: string };
+	| { do: "wake"; repo: string }
+	/** Hide a session and everything under it from the tree. */
+	| { do: "archive"; repo: string; nodeId: string }
+	/** Stop what a session's agent is doing. */
+	| { do: "interrupt"; repo: string; nodeId: string }
+	/** Ask for the same key again before doing something that loses work. `what` names it. */
+	| { do: "confirm"; what: string }
+	/** Show or hide the list of every key. */
+	| { do: "help" };
+
+/** The key a person must press twice to stop a session, as the view records it. */
+export const stopKey = (nodeId: string): string => `stop:${nodeId}`;
+
+/** What the session under the cursor allows: it is this person's, it is working, it is the one open here. */
+function cursorSession(view: PaneView): { id: string; repo: string; mine: boolean; working: boolean; here: boolean } | undefined {
+	const id = cursorNode(view);
+	const found = id ? findNode(view, id) : undefined;
+	if (!found) return undefined;
+	const { node, repo } = found;
+	return { id: node.id, repo: repo.key, mine: node.owner === repo.state.owner, working: node.status === "running" || node.status === "starting", here: node.id === view.current };
+}
+
+/** Every key the pane takes, for the help screen. */
+export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyArray<readonly [key: string, does: string]>]> = [
+	["Moving", [["↑ ↓  j k", "move through what is waiting, then the sessions"], ["1-9", "jump to a waiting item"], ["esc  alt+l", "give the keyboard back to Pi"], ["?", "show or hide this list"]]],
+	["A session", [["enter", "open it in this terminal"], ["-", "go back to the session you were in before"], ["n", "create a session under it"], ["r", "rename it"], ["s", "stop what its agent is doing (press twice)"], ["d", "archive it and everything under it"], ["o", "share: pair, offer, accept"]]],
+	["Something waiting", [["y  n", "answer a yes/no question"], ["a  x", "approve or reject a message; accept or decline an offer"], ["enter", "answer or review it with Pi's prompts"]]],
+	["A sleeping repository", [["enter", "start its host"]]],
+];
 
 /** The item the cursor is on, with the repository it is from. */
 export function cursorItem(view: PaneView): { item: InboxItem; repo: string } | undefined {
@@ -43,7 +71,17 @@ const yesNo = (item: InboxItem): boolean => item.kind === "question" && item.dia
 export function cursorKeys(view: PaneView): Array<readonly [key: string, does: string]> {
 	const found = cursorItem(view);
 	if (view.cursor?.startsWith("r:")) return [["⏎", "wake"]];
-	if (!found) return cursorNode(view) && cursorNode(view) !== view.current ? [["⏎", "open"], ["n", "new"], ["o", "share"]] : [["n", "new"], ["o", "share"]];
+	if (!found) {
+		const at = cursorSession(view);
+		const keys: Array<readonly [string, string]> = [];
+		if (at && !at.here) keys.push(["⏎", "open"]);
+		keys.push(["n", "new"]);
+		if (at?.mine) keys.push(["r", "rename"]);
+		if (at?.mine && at.working) keys.push(["s", view.confirm === stopKey(at.id) ? "again to stop" : "stop"]);
+		if (at?.mine && !at.here) keys.push(["d", "archive"]);
+		keys.push(["o", "share"], ["?", "keys"]);
+		return keys;
+	}
 	const { item } = found;
 	if (yesNo(item)) return [["y", "yes"], ["n", "no"]];
 	if (item.kind === "question") return [["⏎", "answer"]];
@@ -59,6 +97,8 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 		const cursor = order[Math.min(order.length - 1, Math.max(0, at + delta))];
 		return cursor ? [{ do: "move", cursor }] : [];
 	};
+	if (view.help) return key === "escape" || key === "?" ? [{ do: "help" }] : [];
+	if (key === "?") return [{ do: "help" }];
 	if (key === "up" || key === "k") return step(-1);
 	if (key === "down" || key === "j") return step(1);
 	if (key === "escape") return [{ do: "leave" }];
@@ -85,6 +125,13 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 	const target = cursorNode(view) ?? view.current;
 	if (key === "enter") return target && target !== view.current ? [{ do: "leave" }, { do: "command", text: `/lattice open ${target}` }] : [{ do: "leave" }];
 	if (key === "n") return [{ do: "new", nodeId: target }];
+	const on = cursorSession(view);
+	if (on?.mine) {
+		if (key === "r") return [{ do: "leave" }, { do: "command", text: `/lattice rename ${on.id}` }];
+		if (key === "d" && !on.here) return [{ do: "archive", repo: on.repo, nodeId: on.id }];
+		// Stopping loses the step in flight, so it takes the key twice.
+		if (key === "s" && on.working) return view.confirm === stopKey(on.id) ? [{ do: "interrupt", repo: on.repo, nodeId: on.id }] : [{ do: "confirm", what: stopKey(on.id) }];
+	}
 	if (key === "a") return [{ do: "leave" }, { do: "command", text: "/lattice approvals" }];
 	if (key === "o") return [{ do: "leave" }, { do: "command", text: `/lattice share ${target ?? ""}`.trim() }];
 	return [];

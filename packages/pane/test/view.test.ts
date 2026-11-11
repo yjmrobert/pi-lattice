@@ -1,6 +1,6 @@
 import type { NodeMeta, UiState } from "@pi-lattice/protocol";
 import { describe, expect, it } from "vitest";
-import { ago, type ChildForm, cursorKeys, formKey, newChildForm, renderForm, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
+import { ago, ALL_KEYS, type ChildForm, cursorKeys, stopKey, usageText, formKey, newChildForm, renderForm, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
 
 const node = (id: string, parentId: string | null, over: Partial<NodeMeta> = {}): NodeMeta => ({
 	id, parentId, rootId: "r", kind: "task", name: id, brief: "", fragments: [], owner: "yan", version: 1, status: "idle",
@@ -203,11 +203,45 @@ describe("keys while the pane has the keyboard", () => {
 		expect(interpretKey(at(nodeKey("a")), "escape")).toEqual([{ do: "leave" }]);
 	});
 
+	it("renames and archives the session the cursor is on, if it is yours", () => {
+		expect(interpretKey(at(nodeKey("a")), "r")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice rename a" }]);
+		expect(interpretKey(at(nodeKey("a")), "d")).toEqual([{ do: "archive", repo: "/shop/.lattice", nodeId: "a" }]);
+		expect(interpretKey(at(nodeKey("r")), "d")).toEqual([]);
+		expect(interpretKey(at(nodeKey("b")), "d")).toEqual([]);
+		expect(interpretKey(at(nodeKey("b")), "r")).toEqual([]);
+	});
+
+	it("stops a working session only when s is pressed twice", () => {
+		expect(interpretKey(at(nodeKey("a")), "s")).toEqual([{ do: "confirm", what: stopKey("a") }]);
+		const asked = { ...at(nodeKey("a")), confirm: stopKey("a") };
+		expect(cursorKeys(asked)).toContainEqual(["s", "again to stop"]);
+		expect(interpretKey(asked, "s")).toEqual([{ do: "interrupt", repo: "/shop/.lattice", nodeId: "a" }]);
+		// A session that is not working has nothing to stop.
+		expect(interpretKey(at(nodeKey("r")), "s")).toEqual([]);
+	});
+
+	it("lists every key on ?, and takes nothing else until the list is closed", () => {
+		expect(interpretKey(at(nodeKey("a")), "?")).toEqual([{ do: "help" }]);
+		const open = { ...at(nodeKey("a")), help: true };
+		expect(interpretKey(open, "d")).toEqual([]);
+		expect(interpretKey(open, "escape")).toEqual([{ do: "help" }]);
+		const lines = renderInspector(open, 70);
+		for (const [section, keys] of ALL_KEYS) {
+			expect(lines).toContain(` ${section.toUpperCase()}`);
+			for (const [key] of keys) expect(lines.some((line) => line.startsWith(` ${key}`))).toBe(true);
+		}
+		expect(lines.at(-1)).toBe(" ? close  esc close");
+	});
+
 	it("shows in the footer exactly the keys that act on what the cursor is on", () => {
 		expect(cursorKeys(at(itemKey("q:a:d1")))).toEqual([["y", "yes"], ["n", "no"]]);
 		expect(cursorKeys(at(itemKey("q:a:d2")))).toEqual([["⏎", "answer"]]);
 		expect(cursorKeys(at(itemKey("m:a:e1")))).toEqual([["a", "approve"], ["x", "reject"]]);
-		expect(cursorKeys(at(nodeKey("a")))).toEqual([["⏎", "open"], ["n", "new"], ["o", "share"]]);
+		// A working session of yours that is not the one open here can be renamed, stopped and archived.
+		expect(cursorKeys(at(nodeKey("a")))).toEqual([["⏎", "open"], ["n", "new"], ["r", "rename"], ["s", "stop"], ["d", "archive"], ["o", "share"], ["?", "keys"]]);
+		// The one open here cannot be archived from under you; someone else's can only be opened.
+		expect(cursorKeys(at(nodeKey("r")))).toEqual([["n", "new"], ["r", "rename"], ["o", "share"], ["?", "keys"]]);
+		expect(cursorKeys(at(nodeKey("b")))).toEqual([["⏎", "open"], ["n", "new"], ["o", "share"], ["?", "keys"]]);
 		const v = at(itemKey("q:a:d1"));
 		expect(renderPane({ ...v, keys: cursorKeys(v) }, 34).at(-1)).toBe(" y yes  n no  ↑↓ move  esc close");
 	});
@@ -253,7 +287,8 @@ describe("the inspector", () => {
 			" WAITING ON YOU",
 			" 1 grilling: Run stripe listen in this shell?",
 			"───────────────────────────────────────────────────────────",
-			" ⏎ open  n new  o share",
+			" ⏎ open  n new  r rename  s stop  d archive  o share",
+			" ? keys",
 		]);
 	});
 
@@ -270,10 +305,25 @@ describe("the inspector", () => {
 		expect(lines.at(-1)).toBe(" y yes  n no");
 	});
 
+	it("shows the model, what has been used, and the last things the session said and did", () => {
+		const busy = state({ activity: { a: { text: "→ bash: npm test", at: now - 5000 } } });
+		(busy.nodes[1] as NodeMeta) = { ...(busy.nodes[1] as NodeMeta), model: "anthropic/claude-haiku-4-5", usage: { tokens: 12_400, cost: 0.031 } };
+		const base: PaneView = { repos: [repo(busy)], current: "r", cursor: nodeKey("a"), focused: true, now, inspector: true, tail: { nodeId: "a", lines: ["Reading the cart module.", "→ read: src/cart.ts"] } };
+		const lines = renderInspector(base, 60);
+		expect(lines).toContain(" model      anthropic/claude-haiku-4-5");
+		expect(lines).toContain(" used       12.4k tokens · $0.03");
+		const from = lines.indexOf(" RECENT  5s ago");
+		expect(lines.slice(from, from + 4)).toEqual([" RECENT  5s ago", " Reading the cart module.", " → read: src/cart.ts", " → bash: npm test"]);
+		// What was fetched for another session is not shown for this one.
+		expect(renderInspector({ ...base, tail: { nodeId: "r", lines: ["other"] } }, 60)).not.toContain(" other");
+		expect(usageText({ tokens: 950, cost: 0 })).toBe("950 tokens");
+		expect(usageText({ tokens: 2_300_000, cost: 0.004 })).toBe("2.3M tokens · $<0.01");
+	});
+
 	it("pins its keys to the bottom, and keeps the pane's own footer to the keys that move", () => {
 		const lines = renderInspector(at(nodeKey("a")), 60, PLAIN, 30);
 		expect(lines).toHaveLength(30);
-		expect(lines.at(-1)).toBe(" ⏎ open  n new  o share");
+		expect(lines.slice(-2)).toEqual([" ⏎ open  n new  r rename  s stop  d archive  o share", " ? keys"]);
 		expect(renderPane(at(nodeKey("a")), 34).at(-1)).toBe(" ↑↓ move  1-9 jump  esc close");
 	});
 
@@ -322,7 +372,7 @@ describe("the new-session form", () => {
 	const press = (form: ChildForm, ...keys: Array<Parameters<typeof formKey>[1] | string>): ChildForm => {
 		let at = form;
 		for (const key of keys) {
-			const named = ["tab", "back-tab", "up", "down", "left", "right", "enter", "space", "backspace", "escape", "submit"].includes(key as string);
+			const named = ["tab", "back-tab", "up", "down", "left", "right", "home", "end", "enter", "space", "backspace", "delete", "escape", "submit"].includes(key as string);
 			const result = formKey(at, (typeof key === "string" && !named ? { text: key } : key) as Parameters<typeof formKey>[1]);
 			if (!("form" in result)) throw new Error("the form ended");
 			at = result.form;
@@ -336,6 +386,7 @@ describe("the new-session form", () => {
 			"",
 			" Name       refund-rounding▏",
 			" Kind       task",
+			" Model      the default",
 			" Roles       coordinator   implementation   worker  ",
 			" Workspace  ◉ this directory   ○ its own worktree and branch",
 			"",
@@ -349,19 +400,37 @@ describe("the new-session form", () => {
 			"",
 			"   Create    runs in the background",
 			"─────────────────────────────────────────────────────────────────────",
-			" tab next field  ctrl+s create  esc cancel",
+			" ←→ move  tab next field  ctrl+s create  esc cancel",
 		]);
 	});
 
+	it("edits text where the caret is: move, insert, delete either side, jump to either end", () => {
+		const typed = press(blank(), "refnd", "left", "left", "u");
+		expect(typed).toMatchObject({ name: "refund", at: 4 });
+		expect(renderForm(typed, 70)[2]).toBe(" Name       refu▏nd");
+		expect(press(typed, "home", "delete", "R").name).toBe("Refund");
+		expect(press(typed, "end", "backspace", "backspace", "left", "left", "left", "left", "left", "backspace").name).toBe("refu");
+		// Moving to another field puts the caret at the end of what is there.
+		expect(press(typed, "tab")).toMatchObject({ field: "kind", at: 4 });
+	});
+
+	it("keeps the caret on the right row of a brief that wraps, and takes a model", () => {
+		const form = press(blank(), "x", "tab", "tab", "anthropic/claude-haiku-4-5", "tab", "tab", "tab", "first line", "enter", "second", "left", "left", "left");
+		expect(form).toMatchObject({ field: "brief", model: "anthropic/claude-haiku-4-5", brief: "first line\nsecond" });
+		const lines = renderForm(form, 70);
+		expect(lines.find((line) => line.includes("sec"))).toContain("sec▏ond");
+		expect(formKey(form, "submit")).toMatchObject({ submit: { spec: { model: "anthropic/claude-haiku-4-5" } } });
+	});
+
 	it("fills in from the keyboard: text, roles in the order chosen, workspace, a brief of several lines", () => {
-		const filled = press(blank(), "refund", "tab", "backspace", "backspace", "backspace", "backspace", "fix", "tab", "right", "right", "space", "left", "space", "tab", "space", "tab", "Fix rounding.", "enter", "Keep the tests green.");
+		const filled = press(blank(), "refund", "tab", "backspace", "backspace", "backspace", "backspace", "fix", "tab", "tab", "right", "right", "space", "left", "space", "tab", "space", "tab", "Fix rounding.", "enter", "Keep the tests green.");
 		expect(filled).toMatchObject({ name: "refund", kind: "fix", picked: ["worker", "implementation"], workspace: "worktree", brief: "Fix rounding.\nKeep the tests green.", field: "brief" });
 		expect(renderForm(filled, 70).join("\n")).toContain("[implementation]");
 		expect(formKey(filled, "submit")).toEqual({ submit: { parentId: "a", spec: { name: "refund", brief: "Fix rounding.\nKeep the tests green.", kind: "fix", fragments: ["worker", "implementation"], workspace: "worktree" } } });
 	});
 
 	it("creates from the button as well, and unchooses a role chosen by mistake", () => {
-		const form = press(blank(), "x", "tab", "tab", "space", "space", "tab", "tab", "do it", "tab");
+		const form = press(blank(), "x", "tab", "tab", "tab", "space", "space", "tab", "tab", "do it", "tab");
 		expect(form.picked).toEqual([]);
 		expect(form.field).toBe("create");
 		expect(formKey(form, "enter")).toMatchObject({ submit: { spec: { name: "x", brief: "do it", fragments: [], workspace: "shared" } } });

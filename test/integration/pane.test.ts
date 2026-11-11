@@ -268,6 +268,84 @@ describe("the tree inside Pi", () => {
 		await until((s) => s.nodes.length === 2, "the resumed root to be able to spawn");
 	}, 120_000);
 
+	it("renames, archives and restores sessions from /lattice", async () => {
+		const pi = await terminal();
+		await pi.prompt("hello");
+		await pi.command("/lattice");
+		const root = await until((s) => s.nodes[0]?.status === "idle" && s.nodes[0], "the root");
+		await pi.prompt(spawnTool({ name: "payments", brief: spawnTool({ name: "refunds", brief: "wait" }) }));
+		const child = await until((s) => childrenOf(s.nodes, root.id)[0], "the child");
+		await until((s) => s.nodes.length === 3 && s.nodes.every((n) => n.status === "idle"), "the tree to settle");
+
+		await pi.command(`/lattice rename ${child.id} card payments`);
+		await until((s) => s.nodes.find((n) => n.id === child.id)?.name === "card payments", "the new name");
+
+		// Archiving takes what is under it too, and stops their processes; nothing is deleted.
+		await pi.command(`/lattice archive ${child.id}`);
+		await until((s) => s.nodes.length === 1, "the branch to leave the tree");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes('Archived "card payments" and 1 under it')), "the archive notice");
+		expect((await observer?.ui("archived", {}))?.nodes.map((n) => n.name).sort()).toEqual(["card payments", "refunds"]);
+
+		// The session open here cannot be archived from under the person.
+		await pi.command(`/lattice archive ${root.id}`);
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes("is open in this terminal")), "the refusal");
+
+		await pi.command("/lattice restore card payments");
+		await until((s) => s.nodes.length === 3, "the branch to come back");
+	}, 120_000);
+
+	it("keeps the tree's settings in a file, applies them at restart, and says what is wrong with a bad one", async () => {
+		const pi = await terminal();
+		await pi.prompt("hello");
+		await pi.command("/lattice");
+		const root = await until((s) => s.nodes[0]?.status === "idle" && s.nodes[0], "the root");
+
+		await pi.command("/lattice config thinking loud");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes("thinking is one of")), "the complaint");
+		expect(existsSync(join(stateDir, "config.json"))).toBe(false);
+
+		await pi.command("/lattice config approval always");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes("approval set to always")), "the confirmation");
+		expect(JSON.parse(readFileSync(join(stateDir, "config.json"), "utf8"))).toEqual({ approval: "always" });
+		await pi.command("/lattice config");
+		await pi.waitFor(() => pi.notifications().find((text) => /approval\s+always/.test(text) && /model\s+not set/.test(text)), "the settings listed");
+
+		// With approval always, a child's report waits for the person instead of reaching the agent.
+		await pi.prompt(spawnTool({ name: "kid", brief: sendTool("parent", "report from the kid") }));
+		await until((s) => (s.attention[root.id]?.pending ?? 0) === 1, "the report to wait for approval");
+
+		// A restart gives a new host; this terminal still has its session, and the tree is as it was.
+		const before = JSON.parse(readFileSync(join(stateDir, "host.json"), "utf8")).pid as number;
+		observer?.close();
+		observer = undefined;
+		await pi.command("/lattice restart");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes("The host was restarted")), "the restart notice", 40_000);
+		expect(JSON.parse(readFileSync(join(stateDir, "host.json"), "utf8")).pid).not.toBe(before);
+		await until((s) => s.foreground.includes(root.id) && s.nodes.length === 2, "the session to be open here again");
+	}, 120_000);
+
+	it("checks itself, lists its commands, and answers for the other lattice commands", async () => {
+		const pi = await terminal();
+		await pi.prompt("hello");
+		await pi.command("/lattice");
+		await until((s) => s.nodes[0]?.status === "idle" && s.nodes[0], "the root");
+
+		await pi.command("/lattice doctor");
+		const report = await pi.waitFor(() => pi.notifications().find((text) => text.includes("Host running as tester")), "the report");
+		expect(report).toContain("✓ Tree: ");
+		expect(report).toContain("✓ Settings: defaults");
+		expect(report).toContain("in the tree");
+		expect(report).toMatch(/✓ Roles: \d+ available/);
+
+		await pi.command("/lattice help");
+		const help = await pi.waitFor(() => pi.notifications().find((text) => text.includes("rename <session> [name]")), "the command list");
+		expect(help).toContain("doctor");
+
+		const seen = pi.notifications().length;
+		await pi.command("/lattice peers");
+		await pi.waitFor(() => pi.notifications().length > seen, "the forwarded command to answer");
+	}, 120_000);
+
 	it("creates a child through Pi's own dialogs", async () => {
 		const pi = await terminal();
 		await pi.prompt("hello");
@@ -280,6 +358,7 @@ describe("the tree inside Pi", () => {
 			[/Kind/, { value: "grilling" }],
 			[/Roles/, { value: "worker grilling" }],
 			[/Where should it work/, { value: "shared: this directory" }],
+			[/Model/, { value: "" }],
 			[/Brief/, { value: "find the gaps in the checkout story" }],
 		];
 		let seen = 0;

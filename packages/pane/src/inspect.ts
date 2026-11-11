@@ -3,7 +3,7 @@
  * while the pane has the keyboard. Pure, like the pane itself. See ADR 0015.
  */
 import type { NodeMeta } from "@pi-lattice/protocol";
-import { cursorItem, cursorNode } from "./keys.ts";
+import { ALL_KEYS, cursorItem, cursorNode } from "./keys.ts";
 import { draw, findNode, fit, flow, gone, type InboxItem, type Paint, type PaneRepo, type PaneView, PLAIN, paneInbox, type Seg, SPINNER, spread, wrap } from "./view.ts";
 
 /** How long ago, in the largest unit that fits: 40s, 14m, 3h, 2d. */
@@ -44,6 +44,13 @@ function lineage(node: NodeMeta, repo: PaneRepo): string {
 	return names.join(" › ");
 }
 
+/** Tokens and cost in a few characters: `12.4k tokens · $0.03`. */
+export function usageText(usage: { tokens: number; cost: number }): string {
+	const tokens = usage.tokens >= 1_000_000 ? `${(usage.tokens / 1_000_000).toFixed(1)}M` : usage.tokens >= 1000 ? `${(usage.tokens / 1000).toFixed(1)}k` : String(usage.tokens);
+	const cost = usage.cost >= 0.01 ? usage.cost.toFixed(2) : usage.cost > 0 ? "<0.01" : "";
+	return cost ? `${tokens} tokens · $${cost}` : `${tokens} tokens`;
+}
+
 /** A session's facts as label and value rows. */
 function facts(node: NodeMeta, repo: PaneRepo): Array<[label: string, value: string]> {
 	const rows: Array<[string, string]> = [
@@ -53,6 +60,8 @@ function facts(node: NodeMeta, repo: PaneRepo): Array<[label: string, value: str
 	if (node.fragments.length > 0) rows.push(["roles", node.fragments.join(" · ")]);
 	rows.push(["workspace", node.workspace === "worktree" ? `own worktree${node.branch ? ` · branch ${node.branch}` : ""}` : "shared with its parent"]);
 	rows.push(["directory", node.cwd]);
+	if (node.model) rows.push(["model", node.model]);
+	if (node.usage) rows.push(["used", usageText(node.usage)]);
 	return rows;
 }
 
@@ -97,7 +106,34 @@ export function renderInspector(view: PaneView, width: number, paint: Paint = PL
 			blank();
 		}
 		table(facts(node, repo));
+		// What it last said and did, so there is no need to open it to see how it is getting on.
+		const fetched = view.tail?.nodeId === node.id ? view.tail.lines : [];
+		const live = repo.state.activity?.[node.id];
+		const lines = fetched.length > 0 ? (live && fetched[fetched.length - 1] !== live.text ? [...fetched, live.text] : fetched) : live ? [live.text] : [];
+		if (lines.length > 0) {
+			blank();
+			const when = live && view.now !== undefined ? ago(new Date(live.at).toISOString(), view.now) : "";
+			out.push([[" RECENT", paint.dim], [when ? `  ${when} ago` : "", paint.dim]]);
+			const shown = lines.slice(-6);
+			shown.forEach((line, index) => out.push([[` ${fit(line, text - 1)}`, index === shown.length - 1 ? undefined : paint.dim]]));
+		}
 	};
+
+	if (view.help) {
+		out.push([[" Keys", paint.bold], ["  while the pane has the keyboard", paint.dim]]);
+		for (const [section, keys] of ALL_KEYS) {
+			blank();
+			heading(section.toUpperCase());
+			for (const [key, does] of keys) out.push([[` ${key.padEnd(12)}`, paint.bold], [fit(does, Math.max(8, inner - 14))]]);
+		}
+		blank();
+		out.push([[` ${fit("Everything else is under /lattice: type it and press tab to see the commands.", inner - 1)}`, paint.dim]]);
+		const helpFoot: Seg[][] = [[["─".repeat(inner + 1), paint.dim]], ...flow([["?", "close"], ["esc", "close"]], inner, paint)];
+		const helpBody = out.map(draw);
+		if (height === undefined) return [...helpBody, ...helpFoot.map(draw)];
+		const helpRoom = Math.max(1, height - helpFoot.length);
+		return [...helpBody.slice(0, helpRoom), ...Array.from({ length: Math.max(0, helpRoom - helpBody.length) }, () => ""), ...helpFoot.map(draw)];
+	}
 
 	const found = cursorItem(view);
 	const nodeId = cursorNode(view);

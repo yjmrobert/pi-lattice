@@ -98,6 +98,19 @@ describe("several repositories", () => {
 		}
 	}, 120_000);
 
+	it("starts a tree with the first message in a repository, and keeps it out of git", async () => {
+		const shop = repository("shop");
+		execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: shop });
+		const pi = await terminal(shop);
+		await pi.prompt("add a refund endpoint");
+		const root = await until(shop, (s) => s.nodes.length === 1 && s.foreground.length === 1 && s.nodes[0], "a tree with this session in it");
+		expect(root).toMatchObject({ name: "add a refund endpoint", parentId: null, sessionFile: await sessionFile(pi) });
+		expect(execFileSync("git", ["status", "--porcelain"], { cwd: shop, encoding: "utf8" })).toBe("");
+		// Asking for a tree now shows the one that is there instead of making a second root.
+		await pi.command("/lattice");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes("Tree of 1 session")), "the tree listed");
+	}, 120_000);
+
 	it("opens a session from another repository here, moves Pi there, and goes back", async () => {
 		const shop = repository("shop");
 		const billing = repository("billing-api");

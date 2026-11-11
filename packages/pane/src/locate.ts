@@ -16,6 +16,16 @@ export function projectRoot(cwd: string): string {
 	}
 }
 
+/** Whether a directory is inside a git repository. */
+export function inRepository(cwd: string): boolean {
+	try {
+		execFileSync("git", ["rev-parse", "--git-dir"], { cwd, stdio: ["ignore", "ignore", "ignore"] });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export function stateDirFor(cwd: string): string {
 	return process.env.LATTICE_STATE_DIR ?? join(projectRoot(cwd), ".lattice");
 }
