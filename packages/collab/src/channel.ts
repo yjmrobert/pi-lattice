@@ -59,7 +59,7 @@ export interface ChannelOptions {
 	onMember?(name: string, publicKey: string): void;
 	/** Told about an authenticated-looking peer whose key is not pinned and who is not let in. */
 	onStranger?(name: string, publicKey: string): void;
-	/** Told when someone uses a paired name with a key other than the pinned one. */
+	/** Told when someone uses a known name with a key other than the pinned one. */
 	onChangedKey?(name: string, publicKey: string): void;
 	timeoutMs?: number;
 }
@@ -241,7 +241,7 @@ export function openChannel(stream: Duplex, options: ChannelOptions): Promise<Se
 			if (pinned === undefined) {
 				if (!options.network) {
 					options.onStranger?.(hello.name, hello.key);
-					throw new HandshakeError(`${hello.name} is not someone you have paired with.`);
+					throw new HandshakeError(`${hello.name} is not someone you know.`);
 				}
 				newcomer = true;
 			} else if (pinned !== hello.key) {

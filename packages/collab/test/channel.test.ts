@@ -102,7 +102,7 @@ describe("secure channel", () => {
 		]);
 		expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
 		expect((results[1] as PromiseRejectedResult).reason).toBeInstanceOf(HandshakeError);
-		expect(String((results[1] as PromiseRejectedResult).reason)).toContain("not someone you have paired with");
+		expect(String((results[1] as PromiseRejectedResult).reason)).toContain("not someone you know");
 		expect(knocks).toEqual(["mallory:true"]);
 		close();
 	});

@@ -1,7 +1,7 @@
 /**
  * Who a person is, cryptographically. Each person has an Ed25519 key pair; the private key
  * never leaves their machine. Ownership events are signed with it, and peer connections
- * are authenticated with it. Whose keys to believe is decided by pairing (see peers.ts).
+ * are authenticated with it. Whose key goes with which name is pinned the first time they are seen (see peers.ts).
  */
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject, sign, verify } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
