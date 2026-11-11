@@ -31,18 +31,19 @@ afterEach(async () => {
 });
 
 const fauxArgs = ["-e", extensionPaths.faux, "--provider", "lattice-faux", "--model", "scripted", "--no-skills", "--no-context-files"];
-/** A person's own Pi, with the lattice bundle loaded the way the package manifest orders it: pane first. */
-const terminal = async (args: string[] = []) => {
+const BUNDLE = [extensionPaths.launcher, extensionPaths.pane, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph];
+/** A person's own Pi with the lattice extensions loaded, in whatever order is given. */
+const terminal = async (args: string[] = [], extensions: string[] = BUNDLE) => {
 	const pi = await startPi(sandbox, {
 		name: "terminal",
-		extensions: [extensionPaths.pane, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
+		extensions,
 		args,
 		env: {
 			LATTICE_STATE_DIR: stateDir,
 			// The host this terminal starts must run its headless sessions against the scripted model too.
 			LATTICE_PI_COMMAND: JSON.stringify([process.execPath, piCli]),
 			LATTICE_PI_ARGS: JSON.stringify(fauxArgs),
-			LATTICE_EXTENSION_PATHS: JSON.stringify([extensionPaths.pane, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]),
+			LATTICE_EXTENSION_PATHS: JSON.stringify([extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]),
 			LATTICE_FAUX_SCRIPT: directorScript,
 		},
 	});
@@ -116,6 +117,63 @@ describe("the tree inside Pi", () => {
 		await pi.stop();
 		await until((s) => s.foreground.length === 0, "the terminal's session to be handed back");
 		expect((await state()).nodes).toHaveLength(2);
+	}, 120_000);
+
+	it("does not depend on the order the extensions load in", async () => {
+		// The reverse of the bundle's order: messaging and tree tools start before the pane knows the node.
+		const pi = await terminal([], [...BUNDLE].reverse());
+		await pi.prompt("hello");
+		await pi.command("/lattice");
+		const root = await until((s) => s.nodes[0]?.status === "idle" && s.nodes[0], "the root");
+		await pi.prompt(spawnTool({ name: "kid", fragments: ["worker"], brief: sendTool("parent", "reported in any order") }));
+		await pi.waitForAssistant("reported in any order");
+		const kid = await until((s) => childrenOf(s.nodes, root.id)[0], "the child");
+		await until((s) => s.nodes.find((n) => n.id === kid.id)?.status === "idle", "the child to settle");
+
+		await pi.command(`/lattice open ${kid.id}`);
+		await until((s) => s.foreground.includes(kid.id), "the child to be open here");
+		await pi.prompt("which roles?");
+		await pi.waitForAssistant("echo[user] roles=[lattice-role-worker] which roles?");
+		await pi.prompt(sendTool("parent", "still connected"));
+		await until((s) => s.nodes.find((n) => n.id === root.id)?.status === "idle", "the root to wake for its mail");
+	}, 120_000);
+
+	it("says what is missing when nothing can start a host", async () => {
+		const pi = await terminal([], [extensionPaths.pane, extensionPaths.a2a]); // no launcher
+		await pi.prompt("hello");
+		await pi.command("/lattice");
+		const note = await pi.waitFor(() => pi.notifications().find((text) => text.includes("Nothing here can start a lattice host")), "the explanation");
+		expect(note).toContain("pi-lattice daemon");
+		expect(existsSync(join(stateDir, "host.json"))).toBe(false);
+		// The session is untouched and still works on its own.
+		await pi.prompt("still fine");
+		await pi.waitForAssistant("echo[user] roles=[] still fine");
+	});
+
+	it("works with a host someone started by hand, with no launcher installed", async () => {
+		const { runDaemon } = await import("../../packages/app/src/index.ts");
+		const daemon = await runDaemon({
+			stateDir, cwd: sandbox.work, owner: "tester", idleExitMs: 0,
+			hostOptions: {
+				piCommand: [process.execPath, piCli], piArgs: fauxArgs, extensionPaths: [extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
+				socketDir: join(sandbox.root, "sock"),
+				env: { PI_CODING_AGENT_DIR: sandbox.agentDir, PI_OFFLINE: "1", PI_TELEMETRY: "0", LATTICE_FAUX_SCRIPT: directorScript },
+			},
+		});
+		try {
+			const pi = await terminal([], [extensionPaths.pane, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]);
+			await pi.prompt("hello");
+			await pi.command("/lattice");
+			const root = await until((s) => s.nodes[0]?.status === "idle" && s.nodes[0], "the root, on the hand-started host").catch(async (error: Error) => {
+				throw new Error(`${error.message}\nstate: ${JSON.stringify(await state())}\nnotes: ${JSON.stringify(pi.notifications())}`);
+			});
+			expect(daemon.host.node(root.id)?.owner).toBe("tester");
+			await pi.stop();
+		} finally {
+			observer?.close();
+			observer = undefined;
+			await daemon.stop();
+		}
 	}, 120_000);
 
 	it("rejoins the tree when Pi is started again on a session that belongs to it", async () => {

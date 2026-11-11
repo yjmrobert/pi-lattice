@@ -16,6 +16,8 @@ export const extensionPaths = {
 	graph: join(repoRoot, "packages/graph"),
 	collab: join(repoRoot, "packages/collab"),
 	pane: join(repoRoot, "packages/pane"),
+	/** The launcher extension from the app package: starts a background host when the pane asks. */
+	launcher: join(repoRoot, "packages/app/src/launcher.ts"),
 };
 export const piCli = cliPath;
 export const directorScript = join(here, "director.mjs");
