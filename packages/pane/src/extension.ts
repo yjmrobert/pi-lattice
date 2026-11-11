@@ -10,7 +10,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import { CONFIG_FILE, CONFIG_KEYS, type ConfigKey, configProblem, emitEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type KnownTree, type NodeMeta, parseConfig, type TreeConfig, type UiState, withSetting } from "@pi-lattice/protocol";
+import { CONFIG_FILE, CONFIG_KEYS, type ConfigKey, configProblem, emitEvent, onEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type KnownTree, type NodeMeta, parseConfig, type TreeConfig, type UiState, withSetting } from "@pi-lattice/protocol";
 import { type ChildForm, type FormKey, formKey, newChildForm, renderForm } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
@@ -71,8 +71,6 @@ interface Shared {
 	titled: number;
 	/** A tree being started for this repository by a first message. */
 	starting: boolean;
-	/** LATTICE_APPROVAL as the person set it, before the tree's settings were applied to this process. Null when they did not. */
-	ownApproval: string | null | undefined;
 	/** Redraws the pane while a session is working, so its spinner turns. */
 	ticker: ReturnType<typeof setInterval> | undefined;
 	scanner: ReturnType<typeof setInterval> | undefined;
@@ -89,7 +87,7 @@ const KEY = Symbol.for("pi-lattice.pane.3");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
 	links: new Map(), home: undefined, asleep: [], current: undefined, currentDir: undefined, previous: undefined, assignment: undefined, cursor: undefined, focused: false, form: undefined,
-	confirm: undefined, help: false, tail: undefined, waiting: 0, titled: 0, starting: false, ownApproval: undefined,
+	confirm: undefined, help: false, tail: undefined, waiting: 0, titled: 0, starting: false,
 	ticker: undefined, scanner: undefined, scanning: false, paint: PLAIN, tui: undefined, wrapped: false, strip: undefined, pi: undefined, ctx: undefined,
 });
 
@@ -157,18 +155,6 @@ function homeConfig(): { config: TreeConfig; problems: string[]; text: string | 
 	} catch (error) {
 		return { config: {}, problems: [`${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`], text };
 	}
-}
-
-/**
- * Make the approval policy in the tree's settings apply to the session in this terminal too.
- * The messaging extension reads it from the environment; what the person set there themselves wins.
- */
-function applyApproval(): void {
-	if (shared.ownApproval === undefined) shared.ownApproval = process.env.LATTICE_APPROVAL ?? null;
-	if (shared.ownApproval !== null) return;
-	const approval = homeConfig().config.approval;
-	if (approval) process.env.LATTICE_APPROVAL = approval;
-	else delete process.env.LATTICE_APPROVAL;
 }
 
 /** Tell each host whether this terminal is working in its repository or only watching it. */
@@ -571,6 +557,12 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		return { sessionFile: result.sessionFile, wasWorking: result.wasWorking };
 	};
 
+	// The messaging extension asks which approval policy the tree has been set to; the settings are ours to read.
+	onEvent(pi.events, "lattice:approval:query", (request) => {
+		const approval = homeConfig().config.approval;
+		if (approval) request.policy = approval;
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		shared.pi = pi;
 		shared.ctx = ctx;
@@ -578,7 +570,6 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		// A session from another repository was opened here: this terminal is now in that repository.
 		const moved = shared.home !== undefined && shared.home !== stateDir;
 		shared.home = stateDir;
-		applyApproval();
 		syncPresence();
 		try {
 			const existing = shared.links.get(stateDir);
@@ -1093,7 +1084,6 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		writeFileSync(path, withSetting(current.text, setting, clear ? undefined : value));
-		applyApproval();
 		ctx.ui.notify(`${setting} ${clear ? "cleared" : `set to ${value}`}. It applies to sessions started from now on${setting === "approval" ? ", and to this one" : ""}.`, "info");
 	};
 

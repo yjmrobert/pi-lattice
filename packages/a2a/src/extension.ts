@@ -98,8 +98,12 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 	});
 
 	const policy = (): ApprovalPolicy => {
-		const value = pi.getFlag("lattice-approval") ?? process.env.LATTICE_APPROVAL;
-		return isApprovalPolicy(value) ? value : "cross-owner";
+		const own = pi.getFlag("lattice-approval") ?? process.env.LATTICE_APPROVAL;
+		if (isApprovalPolicy(own)) return own;
+		// Nothing was said for this session: use what the tree it is in has been set to, if anyone here knows.
+		const request: { policy?: string } = {};
+		emitEvent(pi.events, "lattice:approval:query", request);
+		return isApprovalPolicy(request.policy) ? request.policy : "cross-owner";
 	};
 
 	const refreshStatus = (): void => {
