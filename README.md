@@ -10,7 +10,7 @@ Install the bundle into Pi once:
 pi install /path/to/pi-lattice
 ```
 
-Then open `pi` in a project as you always do, and run `/lattice`. The session you are in becomes the root of a tree, and a pane on the left lists its sessions:
+Then open `pi` in a project as you always do. A pane on the left lists the project's sessions:
 
 ```
  SESSIONS
@@ -22,11 +22,12 @@ Then open `pi` in a project as you always do, and run `/lattice`. The session yo
      @sam · shop · task · offline
 ```
 
+- The first time in a project, run `/lattice` once to start a tree. After that the pane is populated whenever Pi opens, and each new session joins with its first message.
 - Ask the agent to delegate, or press `alt+l` then `n`, to create child sessions. They run in the background.
-- `alt+l`, arrows, `enter` opens any session in this terminal, with all of Pi.
+- `alt+l`, arrows, `enter` opens any session in this terminal, with all of Pi. You can switch at any time, even mid-turn: the work you leave carries on in the background.
 - `/lattice share` pairs you with a collaborator, peer to peer, so you see each other's sessions and can hand one over.
 
-Nothing changes in a session until you run `/lattice`. See the [pane readme](packages/pane/README.md) for keys, and [a feature through the full lifecycle](examples/feature-lifecycle/README.md) for a walkthrough.
+See the [pane readme](packages/pane/README.md) for keys, and [a feature through the full lifecycle](examples/feature-lifecycle/README.md) for a walkthrough.
 
 ## What is here
 

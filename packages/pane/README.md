@@ -6,13 +6,7 @@ It is one of the extensions in the pi-lattice bundle, and that is the usual way 
 
 ## Use it
 
-Open `pi` in a project as usual. Nothing changes until you run:
-
-```
-/lattice
-```
-
-That makes the session you are in the root of a tree and shows the pane:
+Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 
 ```
  SESSIONS
@@ -23,6 +17,9 @@ That makes the session you are in the root of a tree and shows the pane:
  └ ○ impl
      @sam · shop · task · offline
 ```
+
+- **A project with sessions**: they are listed straight away, with nothing typed. A session you just opened joins the list with your first message, named after what you asked.
+- **A project with none**: the pane says so. Run `/lattice` once to start a tree from the session you are in.
 
 | Key or command | Does |
 |---|---|
@@ -39,7 +36,9 @@ Marks: `●` idle, `◐` working, `!` blocked, `○` asleep or offline, `▸` op
 
 ## What opening a session does
 
-Sessions you are not in keep running in the background. Opening one hands it to this terminal: the background copy is stopped and Pi switches to that session, with its history. Leaving hands it back. You cannot open another session while the agent in this one is working; press escape to stop it, or wait.
+Sessions you are not in keep running in the background. Opening one hands it to this terminal: the background copy is stopped and Pi switches to that session, with its history. Leaving hands it back.
+
+You can switch at any time, including while an agent is working. The step in flight is interrupted, the session moves, and the agent is told to carry on: the one you left keeps working in the background, and one that was working in the background keeps working in front of you. If a step must not be repeated (a deploy, a migration), let it finish before switching.
 
 A session waiting on a question (a permission prompt, for example) can be answered from here without opening it.
 
