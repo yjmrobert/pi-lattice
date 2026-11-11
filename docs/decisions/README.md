@@ -15,4 +15,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0008 | Host store is SQLite via `node:sqlite` | accepted |
 | 0009 | Messaging semantics, addressing and guardrails | accepted |
 | 0010 | Workspace policy per node | accepted |
-| 0011 | Collab transport | open, decide at start of Phase 6 |
+| 0011 | Collab transport: a shared git repository, with signed records | accepted |
