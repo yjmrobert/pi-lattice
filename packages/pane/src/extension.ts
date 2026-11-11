@@ -6,12 +6,12 @@
  * in a background host that this extension starts on demand; opening a session takes it
  * over from the host, and leaving it hands it back.
  */
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Component, HStack, matchesKey, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
+import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { emitEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type NodeMeta, type UiState } from "@pi-lattice/protocol";
-import { connectHost, hasTree, launchHost, stateDirFor } from "./locate.ts";
-import { type Paint, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "./view.ts";
+import { connectHost, hasTree, launchHost, projectRoot, stateDirFor } from "./locate.ts";
+import { findNode, type InboxItem, inboxItems, itemKey, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, renderCompact, renderPane } from "./view.ts";
 
 const NODE_ENTRY = "lattice:node";
 const PANE_WIDTH = 34;
@@ -32,8 +32,11 @@ interface Shared {
 	current: string | undefined;
 	/** What lets the open session speak as that node. Announced to the other extensions at each session start. */
 	assignment: HostAssignment | undefined;
-	selected: string | undefined;
+	/** What the pane's cursor is on: a key from the view's order. */
+	cursor: string | undefined;
 	focused: boolean;
+	/** Redraws the pane while a session is working, so its spinner turns. */
+	ticker: ReturnType<typeof setInterval> | undefined;
 	paint: Paint;
 	tui: Hooked | undefined;
 	wrapped: boolean;
@@ -46,21 +49,44 @@ interface Shared {
 const KEY = Symbol.for("pi-lattice.pane");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
-	client: undefined, stateDir: undefined, state: undefined, current: undefined, assignment: undefined, selected: undefined, focused: false, paint: PLAIN,
+	client: undefined, stateDir: undefined, state: undefined, current: undefined, assignment: undefined, cursor: undefined, focused: false, ticker: undefined, paint: PLAIN,
 	tui: undefined, wrapped: false, compact: false, pi: undefined, ctx: undefined, refreshing: undefined,
 });
 
+const SPINNER_MS = 120;
+
 function view(): PaneView {
+	const state = shared.state;
 	return {
-		state: shared.state,
+		repos: state && shared.stateDir ? [{ key: shared.stateDir, name: repoLabel(state, shared.stateDir), state, here: true, inbox: inboxItems(state) }] : [],
 		current: shared.current,
-		selected: shared.selected ?? shared.current,
+		cursor: shared.cursor,
 		focused: shared.focused,
 		hint: shared.client ? "No sessions yet. Your next\nmessage starts one here." : "No sessions in this\nproject yet.\n\n/lattice starts a tree\nfrom this session.",
+		frame: Math.floor(Date.now() / SPINNER_MS),
+		height: shared.tui?.terminal.rows,
 	};
 }
 
+/** A repository's name: what its sessions report, else the folder its tree is kept in. */
+function repoLabel(state: UiState, stateDir: string): string {
+	return state.nodes.find((node) => node.parentId === null && node.repo)?.repo ?? state.nodes.find((node) => node.repo)?.repo ?? basename(dirname(stateDir));
+}
+
+/** Keep the spinner turning while any session is working, and stop when none is. */
+function tick(): void {
+	const working = shared.state?.nodes.some((node) => node.status === "running" || node.status === "starting") ?? false;
+	if (working && !shared.ticker && shared.wrapped) {
+		shared.ticker = setInterval(() => shared.tui?.requestRender(), SPINNER_MS);
+		shared.ticker.unref?.();
+	} else if (!working && shared.ticker) {
+		clearInterval(shared.ticker);
+		shared.ticker = undefined;
+	}
+}
+
 function redraw(): void {
+	tick();
 	shared.tui?.requestRender();
 	// Between one session ending and the next starting there is no usable context; a redraw then simply waits.
 	try {
@@ -98,7 +124,7 @@ async function refresh(): Promise<void> {
 		.ui("state", {})
 		.then((state) => {
 			shared.state = state;
-			if (shared.selected && !state.nodes.some((node) => node.id === shared.selected)) shared.selected = undefined;
+			if (shared.cursor && !paneOrder(view()).includes(shared.cursor)) shared.cursor = undefined;
 		})
 		.catch(() => {})
 		.finally(() => {
@@ -129,7 +155,14 @@ function installPane(tui: Hooked): void {
 	shared.tui = tui;
 	if (shared.wrapped || !tui.layoutRoot || !tui.setLayoutRoot) return;
 	const pane: Component = {
-		render: (width) => renderPane(view(), width, shared.paint).map((line) => truncateToWidth(line, width)),
+		render: (width) => {
+			// The last column is the divider between the pane and Pi; it lights up while the pane has the keyboard.
+			const divider = shared.focused ? shared.paint.accent("│") : shared.paint.dim("│");
+			return renderPane(view(), width, shared.paint).map((line) => {
+				const text = truncateToWidth(line, width - 1);
+				return `${text}${" ".repeat(Math.max(0, width - 1 - visibleWidth(text)))}${divider}`;
+			});
+		},
 		invalidate() {},
 	};
 	const wrap = (inner: Component): Component =>
@@ -164,22 +197,26 @@ function dispatch(command: string): void {
 }
 
 function onPaneKey(data: string): void {
-	const order = paneOrder(shared.state);
-	const at = Math.max(0, order.indexOf(shared.selected ?? shared.current ?? ""));
+	const current = view();
+	const order = paneOrder(current);
+	const at = Math.max(0, order.indexOf(shared.cursor ?? ""));
 	const move = (delta: number): void => {
-		shared.selected = order[Math.min(order.length - 1, Math.max(0, at + delta))];
+		shared.cursor = order[Math.min(order.length - 1, Math.max(0, at + delta))];
 	};
 	const leave = (): void => {
 		shared.focused = false;
-		shared.selected = undefined;
+		shared.cursor = undefined;
 	};
-	const target = shared.selected ?? shared.current;
+	const item = paneInbox(current).find((entry) => itemKey(entry.item.id) === shared.cursor)?.item;
+	// The session the cursor is on, or the one a waiting item is about.
+	const target = item ? item.nodeId : shared.cursor?.startsWith("n:") ? shared.cursor.slice(2) : shared.current;
 	if (matchesKey(data, "up") || data === "k") move(-1);
 	else if (matchesKey(data, "down") || data === "j") move(1);
 	else if (matchesKey(data, "escape") || matchesKey(data, "alt+l")) leave();
 	else if (matchesKey(data, "enter")) {
 		leave();
-		if (target && target !== shared.current) dispatch(`/lattice open ${target}`);
+		if (item) dispatch(itemCommand(item));
+		else if (target && target !== shared.current) dispatch(`/lattice open ${target}`);
 	} else if (data === "n") {
 		leave();
 		dispatch(`/lattice new ${target ?? ""}`.trim());
@@ -191,6 +228,13 @@ function onPaneKey(data: string): void {
 		dispatch(`/lattice share ${target ?? ""}`.trim());
 	}
 	redraw();
+}
+
+/** The command that deals with a waiting item. */
+function itemCommand(item: InboxItem): string {
+	if (item.kind === "question") return `/lattice open ${item.nodeId ?? ""}`.trim();
+	if (item.kind === "message") return "/lattice approvals";
+	return `/lattice share ${item.nodeId ?? ""}`.trim();
 }
 
 export default function paneExtension(pi: ExtensionAPI): void {
@@ -252,7 +296,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 					ok: (text) => theme.fg("success", text),
 					warn: (text) => theme.fg("warning", text),
 					error: (text) => theme.fg("error", text),
-					inverse: (text) => theme.inverse(text),
+					select: (text) => theme.bg("selectedBg", text),
 				};
 				installPane(tui as Hooked);
 				queueMicrotask(redraw); // the side pane is in place: drop the compact list if it was shown meanwhile
@@ -309,7 +353,10 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			shared.focused = !shared.focused;
-			shared.selected = shared.focused ? (shared.current ?? paneOrder(shared.state)[0]) : undefined;
+			// Start on what is waiting, if anything is; otherwise on the session open here.
+			const order = paneOrder(view());
+			const first = order[0]?.startsWith("i:") ? order[0] : undefined;
+			shared.cursor = shared.focused ? (first ?? (shared.current ? nodeKey(shared.current) : order[0])) : undefined;
 			redraw();
 		},
 	});

@@ -9,13 +9,12 @@ It is one of the extensions in the pi-lattice bundle, and that is the usual way 
 Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 
 ```
- SESSIONS
-▸ ● checkout
-    you · shop · feature
- ├ ◐ payments  ✉1
- │   you · shop · task
- └ ○ impl
-     @sam · shop · task · offline
+ ◆ shop                3 sessions
+▸ ⠹ checkout              feature
+  ├ ● payments            ✉1 task
+  └ ○ impl           @sam offline
+──────────────────────────────────
+ alt+l to answer        1 waiting
 ```
 
 - **A project with sessions**: they are listed straight away, with nothing typed. A session you just opened joins the list with your first message, named after what you asked.
@@ -32,7 +31,9 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | `/lattice status` | List the whole tree |
 | `/lattice stop` | Stop the background host |
 
-Marks: `●` idle, `◐` working, `!` blocked, `○` asleep or offline, `▸` open in this terminal, `?n` questions waiting on you, `✉n` messages to approve.
+Marks: a spinner for working, `●` in the attention colour for waiting on you, dim `●` idle, `○` asleep or offline, `✓` finished, `✗` failed, `▸` open in this terminal, `?n` questions waiting on you, `✉n` messages to approve. The attention colour is used for nothing else.
+
+Each session is one line. The kind is on the right, or the owner when the session is someone else's. What is waiting on you is listed above the tree. The design, with drawings of every screen, is [ADR 0015](../../docs/decisions/0015-pane-design.md).
 
 ## What opening a session does
 

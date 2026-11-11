@@ -13,13 +13,12 @@ pi install /path/to/pi-lattice
 Then open `pi` in a project as you always do. A pane on the left lists the project's sessions:
 
 ```
- SESSIONS
-▸ ● checkout
-    you · shop · feature
- ├ ◐ payments  ✉1
- │   you · shop · task
- └ ○ impl
-     @sam · shop · task · offline
+ ◆ shop                3 sessions
+▸ ⠹ checkout              feature
+  ├ ● payments            ✉1 task
+  └ ○ impl           @sam offline
+──────────────────────────────────
+ alt+l to answer        1 waiting
 ```
 
 - The first time in a project, run `/lattice` once to start a tree. After that the pane is populated whenever Pi opens, and each new session joins with its first message.
