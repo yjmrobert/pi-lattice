@@ -3,16 +3,30 @@
   "version": "0.1.0",
   "description": "The pi-lattice host: owns the session tree, supervises Pi sessions, brokers their messages and shows the tree in a terminal UI.",
   "type": "module",
-  "keywords": ["pi", "multi-agent", "session-tree"],
+  "keywords": [
+    "pi",
+    "multi-agent",
+    "session-tree"
+  ],
   "license": "MIT",
-  "files": ["src", "README.md"],
-  "bin": { "pi-lattice": "./src/cli.ts" },
-  "exports": { ".": "./src/index.ts" },
-  "engines": { "node": ">=22.19" },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "bin": {
+    "pi-lattice": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^1.5.2",
     "@earendil-works/pi-tui": "^1.5.2",
     "@pi-lattice/a2a": "0.1.0",
+    "@pi-lattice/collab": "0.1.0",
     "@pi-lattice/graph": "0.1.0",
     "@pi-lattice/protocol": "0.1.0",
     "@pi-lattice/roles": "0.1.0"

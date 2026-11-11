@@ -53,6 +53,9 @@ export class Modal implements Component, Focusable {
 	}
 }
 
+/** Labels here are whole sentences ("Confirm release of ... to ..."), so give them room before descriptions. */
+const WIDE_LABELS = { minPrimaryColumnWidth: 16, maxPrimaryColumnWidth: 56 };
+
 export interface Choice {
 	value: string;
 	label: string;
@@ -62,7 +65,7 @@ export interface Choice {
 /** A select-one modal. `onDone` receives the chosen value, or undefined when cancelled. */
 export function selectModal(title: string, message: string, choices: readonly Choice[], onDone: (value: string | undefined) => void): Modal {
 	const items: SelectItem[] = choices.map((choice) => ({ value: choice.value, label: choice.label, ...(choice.description ? { description: choice.description } : {}) }));
-	const list = new SelectList(items, Math.min(12, Math.max(3, items.length)), getSelectListTheme());
+	const list = new SelectList(items, Math.min(12, Math.max(3, items.length)), getSelectListTheme(), WIDE_LABELS);
 	list.onSelect = (item) => onDone(item.value);
 	list.onCancel = () => onDone(undefined);
 	return new Modal(title, message, list, "↑↓ move · enter choose · esc cancel");
@@ -82,7 +85,7 @@ export function multiSelectModal(title: string, message: string, choices: readon
 				...(choice.description ? { description: choice.description } : {}),
 			})),
 		];
-		const list = new SelectList(items, Math.min(14, items.length), getSelectListTheme());
+		const list = new SelectList(items, Math.min(14, items.length), getSelectListTheme(), WIDE_LABELS);
 		list.setSelectedIndex(index);
 		list.onSelectionChange = (item) => {
 			index = items.findIndex((candidate) => candidate.value === item.value);

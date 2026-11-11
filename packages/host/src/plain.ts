@@ -1,5 +1,6 @@
 /** A line-based interface to the host, for terminals without full-screen support and for scripting. */
 import { createInterface } from "node:readline";
+import type { CollabSession } from "@pi-lattice/collab";
 import { formatTree } from "@pi-lattice/protocol";
 import type { LatticeHost } from "./host.ts";
 import type { RpcRecord } from "./pi-process.ts";
@@ -12,10 +13,14 @@ const HELP = `Type a message to send it to the current session. Commands:
   :dialogs           list dialogs blocking sessions
   :answer <n> <text> answer dialog n (for confirm: yes or no)
   :abort             stop the current session's work
-  :quit              stop all sessions and exit`;
+  :quit              stop all sessions and exit
+When the tree is shared (--share):
+  :people            who has joined, with key fingerprints   :trust <name>   believe that person's key
+  :handoffs          open ownership handoffs                 :sync           synchronise now
+  :offer <session> <person>   :accept <session>   :confirm <session>   :cancel <session>`;
 
-export async function runPlain(host: LatticeHost, rootId: string, input: NodeJS.ReadableStream, output: NodeJS.WritableStream): Promise<void> {
-	let current = rootId;
+export async function runPlain(host: LatticeHost, rootId: string | undefined, input: NodeJS.ReadableStream, output: NodeJS.WritableStream, collab?: CollabSession): Promise<void> {
+	let current = rootId ?? "";
 	const print = (text: string): void => void output.write(`${text}\n`);
 	const label = (id: string): string => host.node(id)?.name ?? id;
 	const openDialogs = () => host.nodes().flatMap((node) => host.dialogs(node.id).map((dialog) => ({ nodeId: node.id, dialog })));
@@ -29,6 +34,8 @@ export async function runPlain(host: LatticeHost, rootId: string, input: NodeJS.
 		for (const dialog of host.dialogs(nodeId)) print(`[blocked] ${label(nodeId)} asks: ${dialog.title}${dialog.options ? ` [${dialog.options.join(" / ")}]` : ""} (see :dialogs)`);
 	});
 	host.on("log", (level, message) => print(`[${level}] ${message}`));
+	collab?.on("log", (level, message) => print(`[sharing:${level}] ${message}`));
+	const find = (text: string) => host.nodes().find((node) => node.id === text || node.name === text);
 	host.on("session", (nodeId, event: RpcRecord) => {
 		if (event.type === "message_end" && event.message?.role === "assistant") {
 			const text = (event.message.content as RpcRecord[]).filter((part) => part.type === "text").map((part) => part.text).join("");
@@ -46,7 +53,9 @@ export async function runPlain(host: LatticeHost, rootId: string, input: NodeJS.
 		if (line === "") continue;
 		try {
 			if (!line.startsWith(":")) {
-				await host.prompt(current, line);
+				if (!host.node(current)) current = host.nodes()[0]?.id ?? "";
+				if (!current) print("There are no sessions yet.");
+				else await host.prompt(current, line);
 				continue;
 			}
 			const [command, ...rest] = line.slice(1).split(/\s+/);
@@ -78,6 +87,22 @@ export async function runPlain(host: LatticeHost, rootId: string, input: NodeJS.
 				else if (entry.dialog.method === "confirm") host.answerDialog(entry.nodeId, entry.dialog.id, { confirmed: /^(y|yes|true)$/i.test(text) });
 				else host.answerDialog(entry.nodeId, entry.dialog.id, text === "" ? { cancelled: true } : { value: text });
 			} else if (command === "abort") await host.abort(current);
+			else if (["people", "trust", "handoffs", "sync", "offer", "accept", "confirm", "cancel"].includes(command ?? "")) {
+				if (!collab) print("This tree is not shared. Start with --share <git url>.");
+				else if (command === "people") print(collab.people().map((p) => `${p.name}${p.self ? " (you)" : ""}  ${p.trust}  ${p.fingerprint}`).join("\n") || "Nobody has joined.");
+				else if (command === "trust") await collab.trustPerson(arg);
+				else if (command === "sync") await collab.sync();
+				else if (command === "handoffs") print(collab.handoffs().map((h) => `${h.nodeName}: ${h.from} -> ${h.to}, ${h.state} (you are the ${h.role})`).join("\n") || "No open handoffs.");
+				else {
+					const target = find(rest[0] ?? "");
+					if (!target) print(`No session "${rest[0] ?? ""}".`);
+					else if (command === "offer") await collab.offer(target.id, rest[1] ?? "");
+					else if (command === "accept") await collab.accept(target.id);
+					else if (command === "confirm") await collab.confirm(target.id);
+					else await collab.cancel(target.id);
+					print("Done.");
+				}
+			}
 			else print(`Unknown command :${command}. Try :help.`);
 		} catch (error) {
 			print(`[error] ${error instanceof Error ? error.message : String(error)}`);
