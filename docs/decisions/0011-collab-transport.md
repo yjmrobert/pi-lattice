@@ -1,5 +1,7 @@
 # 0011 Collab transport: a shared git repository, with signed records
 
+**Superseded by [0012](0012-peer-to-peer-collab.md).** Kept for the record of what was built first and why it was replaced. Identities, signed ownership logs and the lease state machine carried over; the shared repository, compare-and-swap and polling did not.
+
 **Decision**
 
 Two people share a tree through a private git repository that both can push to. Each person runs their own host; the hosts never talk to each other directly.
