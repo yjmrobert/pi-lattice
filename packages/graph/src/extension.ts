@@ -4,8 +4,8 @@
  * The tree belongs to a lattice host. Without one, the tools say so and do nothing.
  */
 import { connect, type Socket } from "node:net";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { childrenOf, emitEvent, formatTree, HOST_ENV, HostClient, isId, PROTOCOL_VERSION, WORKSPACE_MODES, type WorkspaceMode } from "@pi-lattice/protocol";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { assignmentFromEnv, childrenOf, emitEvent, formatTree, type HostAssignment, HostClient, onEvent, PROTOCOL_VERSION, sameAssignment, WORKSPACE_MODES, type WorkspaceMode } from "@pi-lattice/protocol";
 import { Type } from "typebox";
 
 const GRAPH_ENTRY = "lattice:graph";
@@ -21,27 +21,35 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		return client;
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
-		emitEvent(pi.events, "lattice:hello", { package: "graph", protocol: PROTOCOL_VERSION });
-		const socketPath = process.env[HOST_ENV.socket];
-		const token = process.env[HOST_ENV.token];
-		const assigned = process.env[HOST_ENV.nodeId];
-		if (!socketPath || !token || !isId(assigned)) return;
-		nodeId = assigned;
+	let context: ExtensionContext | undefined;
+	let assigned: HostAssignment | null | undefined;
+	let current: HostAssignment | undefined;
+	let linking: Promise<void> = Promise.resolve();
 
-		const meta = {
-			nodeId: assigned,
-			parentId: process.env[HOST_ENV.parentId] || null,
-			rootId: process.env[HOST_ENV.rootId] ?? assigned,
-			kind: process.env[HOST_ENV.kind] ?? "session",
-		};
+	const disconnect = (): void => {
+		client?.close();
+		client = undefined;
+		socket?.destroy();
+		socket = undefined;
+		nodeId = undefined;
+		current = undefined;
+	};
+
+	/** Join the tree of the host that assigned this session a node. */
+	const connectTo = async (assignment: HostAssignment | undefined): Promise<void> => {
+		disconnect();
+		const ctx = context;
+		if (!assignment || !ctx) return;
+		nodeId = assignment.nodeId;
+		current = assignment;
 		const recorded = ctx.sessionManager.getEntries().some((entry) => entry.type === "custom" && entry.customType === GRAPH_ENTRY);
-		if (!recorded) pi.appendEntry(GRAPH_ENTRY, meta);
+		if (!recorded) pi.appendEntry(GRAPH_ENTRY, { nodeId: assignment.nodeId, parentId: assignment.parentId, rootId: assignment.rootId, kind: assignment.kind });
 
-		socket = connect(socketPath);
-		socket.setEncoding("utf8");
+		const stream = connect(assignment.socket);
+		stream.setEncoding("utf8");
+		socket = stream;
 		const connecting = new HostClient({
-			stream: socket, token, nodeId: assigned, channel: "graph", pid: process.pid,
+			stream, token: assignment.token, nodeId: assignment.nodeId, channel: "graph", pid: process.pid,
 			sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(),
 		});
 		try {
@@ -49,19 +57,39 @@ export default function graphExtension(pi: ExtensionAPI): void {
 				connecting.ready(),
 				new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("timeout")), 3000).unref()),
 			]);
+			if (context !== ctx) throw new Error("session ended"); // connected too late: this session is gone
 			client = connecting;
 		} catch {
 			connecting.close();
-			socket.destroy();
+			stream.destroy();
 			socket = undefined;
 		}
+	};
+
+	const queue = (work: () => Promise<void>): Promise<void> => {
+		linking = linking.then(work, work).catch(() => {});
+		return linking;
+	};
+
+	pi.on("session_start", async (_event, ctx) => {
+		emitEvent(pi.events, "lattice:hello", { package: "graph", protocol: PROTOCOL_VERSION });
+		context = ctx;
+		await queue(() => connectTo(assigned !== undefined ? (assigned ?? undefined) : assignmentFromEnv(process.env)));
+	});
+
+	// Whoever opens a node in this session says so here, before or after our own start.
+	onEvent(pi.events, "lattice:host:assigned", ({ assignment }) => {
+		assigned = assignment;
+		if (!context) return;
+		void queue(async () => {
+			if (sameAssignment(current, assignment)) return;
+			await connectTo(assignment ?? undefined);
+		});
 	});
 
 	pi.on("session_shutdown", async () => {
-		client?.close();
-		client = undefined;
-		socket?.destroy();
-		socket = undefined;
+		context = undefined;
+		await queue(async () => disconnect());
 	});
 
 	pi.registerTool({

@@ -7,7 +7,7 @@
  */
 import { readFileSync } from "node:fs";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { emitEvent, onEvent, PROTOCOL_VERSION } from "@pi-lattice/protocol";
+import { assignmentFromEnv, emitEvent, HOST_ENV, type HostAssignment, onEvent, PROTOCOL_VERSION } from "@pi-lattice/protocol";
 import { Type } from "typebox";
 import { advisories, editRoles, INDEX_SECTION, type RoleEdit, roleSections, SECTION_PREFIX } from "./compose.ts";
 import { type Fragment, fragmentRoots, loadFragments } from "./fragments.ts";
@@ -41,6 +41,9 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 	let applied: string[] = [];
 	let available = new Map<string, Fragment>();
 	let context: ExtensionContext | undefined;
+	let assigned: HostAssignment | undefined;
+	/** Whether this session has ever had roles chosen for it, so a late assignment does not override them. */
+	let everSet = false;
 
 	const reload = (ctx: ExtensionContext): void => {
 		available = loadFragments(fragmentRoots({ cwd: ctx.cwd, agentDir: getAgentDir(), projectTrusted: ctx.isProjectTrusted() }));
@@ -63,6 +66,7 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 			};
 		}
 		if (result.changed) {
+			everSet = true;
 			applied = result.fragments;
 			pi.appendEntry(ROLES_ENTRY, { fragments: applied });
 			emitEvent(pi.events, "lattice:roles:changed", { fragments: [...applied] });
@@ -82,8 +86,13 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 		const recorded = rolesIn(ctx.sessionManager.getEntries());
 		// A new conversation in the same place keeps its roles; a spawned session takes the ones it was given.
 		const inherited = event.reason === "new" ? rolesInFile(event.previousSessionFile) : undefined;
-		const seeded = (process.env.LATTICE_FRAGMENTS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+		// A node created with roles brings them: from the host that started us, or from whoever opened it here.
+		// LATTICE_FRAGMENTS alone also works, for starting a plain session with roles.
+		const seeded =
+			(assigned ?? assignmentFromEnv(process.env))?.fragments ??
+			(process.env[HOST_ENV.fragments] ?? "").split(",").map((name) => name.trim()).filter(Boolean);
 		applied = recorded ?? inherited ?? seeded;
+		everSet = recorded !== undefined || applied.length > 0;
 		if (recorded === undefined && applied.length > 0) pi.appendEntry(ROLES_ENTRY, { fragments: applied });
 		refreshStatus();
 		emitEvent(pi.events, "lattice:roles:changed", { fragments: [...applied] });
@@ -97,8 +106,20 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 		Object.assign(sections, roleSections(applied, available));
 	});
 
+	// A session opened as a node after it started takes the node's roles, unless it already has its own.
+	onEvent(pi.events, "lattice:host:assigned", ({ assignment }) => {
+		assigned = assignment ?? undefined;
+		if (!context || everSet || !assignment || assignment.fragments.length === 0) return;
+		change("set", assignment.fragments);
+	});
+
 	onEvent(pi.events, "lattice:roles:set", (request) => {
-		change("set", request.fragments);
+		if (context) change("set", request.fragments);
+	});
+
+	// The event bus outlives a session switch, so this instance must go quiet once its session ends.
+	pi.on("session_shutdown", async () => {
+		context = undefined;
 	});
 
 	pi.registerTool({

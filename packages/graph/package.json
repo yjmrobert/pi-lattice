@@ -27,5 +27,8 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
+  },
+  "exports": {
+    "./package.json": "./package.json"
   }
 }
