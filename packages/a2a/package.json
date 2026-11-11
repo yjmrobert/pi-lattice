@@ -9,7 +9,6 @@
     "a2a",
     "multi-agent"
   ],
-  "license": "MIT",
   "files": [
     "src",
     "README.md"

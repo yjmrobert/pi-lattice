@@ -8,7 +8,6 @@
     "multi-agent",
     "session-tree"
   ],
-  "license": "MIT",
   "files": [
     "src",
     "README.md"

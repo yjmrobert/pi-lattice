@@ -9,7 +9,6 @@
     "roles",
     "multi-agent"
   ],
-  "license": "MIT",
   "files": [
     "src",
     "fragments",
