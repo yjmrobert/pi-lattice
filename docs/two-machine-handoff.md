@@ -55,6 +55,9 @@ There is no port to choose. If a firewall asks whether to let `node` accept conn
 ## Things to try on purpose
 
 - **Another repository.** On both machines, open `pi` in a second project both have. Expected: each sees the other's sessions there too, with no code and no setup.
+- **A repository only one of you has.** B opens `pi` in a project A does not have, and starts a session. Expected on A: the pane's first line names B; after A's own repositories there is the project's name with "not here"; with the pane focused, B's session is under it. A moves onto it: what it last did shows beside the pane, and changes as B's session works. A moves away, B's session works some more, A moves back: it has caught up.
+- **Take with a clone.** A presses `t` on that session. Expected: A is asked once which folder to clone into, shown the address B's checkout has as `origin`, and after confirming the project is cloned there and B sees A's request. B approves; the session is A's, in the clone. Note whether the clone needed credentials and how that went.
+- **A repository kept private.** B sets `network.share` off for one repository (`,` in the pane, on this repository's settings). Expected on A: that repository's sessions disappear from the pane, and B's other repositories stay.
 - **A third person.** C joins with the code A gave B, while A's machine is off. If C is on the same LAN as B they find each other anyway; over a VPN they do not until C has met someone, so C should use a code from someone who is online ("Show the join code").
 - **Open in a terminal.** A opens a session, B asks for it, A approves from another terminal's pane. Expected: A's pane says it goes when A leaves it, and it does.
 - **Decline and withdraw.** B asks; A presses `x`. B is told, and nothing moved. B asks again, then presses `t` again: the request disappears from A's pane.

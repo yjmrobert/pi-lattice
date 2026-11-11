@@ -38,7 +38,8 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | `?` | List every key |
 | `/lattice network` | Create a network or join a teammate's, once for every repository. Then: who is in it, the join code, what is being handed over, leaving |
 | `o` / `/lattice offer <name> [person]` | Offer one of your sessions to a teammate. It is theirs as soon as they accept. Outside a network, `o` opens `/lattice network` |
-| `t` / `/lattice take <name>` | Ask a teammate for one of their sessions. It is yours as soon as they approve. `t` again takes the request back |
+| `t` / `/lattice take <name>` | Ask a teammate for one of their sessions. It is yours as soon as they approve. `t` again takes the request back. For a session in a repository that is not on this machine, the repository is cloned first, after showing you where from and where to |
+| `enter` on a teammate's session | Read its conversation. While it is under the cursor, what it last did is shown beside the pane and kept up to date |
 | `/lattice approve <name> [person]` | Hand a session to the teammate who asked for it |
 | `/lattice release <name>` | Send a session its new owner accepted now, leaving it if it is open here |
 | `-` / `/lattice back` | Go back to the session you were in before, in any repository |

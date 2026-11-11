@@ -105,9 +105,9 @@ Details in [roles.md](roles.md). Each applied fragment becomes one system prompt
 
 Each person runs their own host, and the hosts connect directly, peer to peer. There is no server and no shared storage ([ADR 0012](decisions/0012-peer-to-peer-collab.md)); [leases.md](leases.md) describes the behaviour.
 
-A **network** is a name and a secret, kept in one file in the person's lattice home and followed by the host of every repository they have open ([ADR 0018](decisions/0018-networks.md)). Whoever holds the secret is a member, and proves it on every connection; the first key seen under a name is pinned. Hosts find each other by a port derived from the network and the repository, by beacons on the local network, and by telling each other who they know. Two hosts connect only when they work on the same repository.
+A **network** is a name and a secret, kept in one file in the person's lattice home and followed by the host of every repository they have open ([ADR 0018](decisions/0018-networks.md)). Whoever holds the secret is a member, and proves it on every connection; the first key seen under a name is pinned. Hosts find each other by a port derived from the network and the repository, by beacons on the local network, and by telling each other who they know. Hosts for the same repository share its tree and hand sessions over; hosts for different repositories connect only to look ([ADR 0019](decisions/0019-everything-everyone-is-running.md)).
 
-A teammate's nodes are fetched from them while they are online and shown as last seen, greyed out, when they are not. A teammate's conversation is fetched on demand, read-only. Nothing is streamed.
+A teammate's nodes are fetched from them while they are online and shown as last seen, greyed out, when they are not. That includes what they have running in repositories this person has no tree for: each host writes what it has running to the person's lattice home, so any one of their hosts answers for all. A teammate's conversation is fetched on demand, read-only. One thing is sent as it happens: a session someone is looking at, message by message, for as long as they look.
 
 Every node has an owner and a version. Ownership changes in two steps from either side: the owner offers and the other person accepts, or a teammate asks and the owner approves. The owner's host then releases the node by itself; only that release moves ownership and increments the version. Offers and requests expire, either side can take theirs back before the release, and every step is idempotent.
 
@@ -139,6 +139,7 @@ Each phase ends with something usable and a stop for review.
 | 5 | Lifecycle fragments, then a full feature run | **Done against a scripted model.** A feature goes through grilling, planning, implementation and verification. A run with a real model is still to do. |
 | 6 | `collab`: transport decision, handoff, cross-owner approvals, session transfer | **Done on one machine, peer to peer.** Two isolated hosts connect directly, share a tree, and a node changes owner with both confirming. A run across two real machines is still to do ([script](two-machine-handoff.md)). |
 | 7 | Networks: one join code, hosts that find each other, handoff in two steps from either side | **Done on one machine.** Two background hosts with separate homes create and join a network, see each other's sessions, and move one by request and by offer. Two real machines and a VPN are still to do. |
+| 8 | Everyone's sessions in every repository, watched while looked at, taken with a clone | **Done on one machine.** A real Pi creates a network from its prompts, reads a teammate's session in a repository it does not have, and takes it by cloning. Two real machines, a VPN and a remote that needs credentials are still to do. |
 
 ## Testing
 

@@ -1,6 +1,6 @@
 # 0018 A network you join once, and a session that moves in two steps
 
-Changes [0012](0012-peer-to-peer-collab.md): how people find and trust each other, and how many steps a handoff takes. Everything else in 0012 stands: no server, no shared storage, fetch on demand, one writer per ownership log, the release as the commit point.
+Changes [0012](0012-peer-to-peer-collab.md): how people find and trust each other, and how many steps a handoff takes. Its rule that hosts connect only for the same repository was relaxed by [0019](0019-everything-everyone-is-running.md), for looking only. Everything else in 0012 stands: no server, no shared storage, fetch on demand, one writer per ownership log, the release as the commit point.
 
 **Why**
 

@@ -12,11 +12,12 @@ What it provides:
 - **A secure channel** between two hosts, over any byte stream. TCP is the shipped transport.
 - **Signed ownership logs** with one writer each, replayed through the lease state machine from `@pi-lattice/protocol`.
 - **`CollabSession`**: fetches a teammate's nodes while they are online, reads a teammate's conversation on demand, carries mail between owners, and moves a session: `offer` and `accept`, or `ask` and `approve`.
+- **What everyone has running.** Hosts for different repositories connect as guests, which may only look. `elsewhere()` lists teammates' trees in other repositories, and `follow(nodeId)` keeps a teammate's conversation up to date for as long as it is called.
 
-Read [Ownership and handoff](../../docs/leases.md) for how it behaves, [ADR 0018](../../docs/decisions/0018-networks.md) and [ADR 0012](../../docs/decisions/0012-peer-to-peer-collab.md) for why it is built this way and what it does not do, and [the two-machine script](../../docs/two-machine-handoff.md) to check it across real machines.
+Read [Ownership and handoff](../../docs/leases.md) for how it behaves, [ADR 0019](../../docs/decisions/0019-everything-everyone-is-running.md), [ADR 0018](../../docs/decisions/0018-networks.md) and [ADR 0012](../../docs/decisions/0012-peer-to-peer-collab.md) for why it is built this way and what it does not do, and [the two-machine script](../../docs/two-machine-handoff.md) to check it across real machines.
 
 ```ts
-import { CollabSession, createNetwork, Identity, LanDiscovery, networkKey, parseJoinCode, PeerBook, sharedPort, TcpTransport } from "@pi-lattice/collab";
+import { CollabSession, createNetwork, Identity, LanDiscovery, lobbyPort, networkKey, parseJoinCode, PeerBook, sharedPort, TcpTransport } from "@pi-lattice/collab";
 
 const network = createNetwork("team");               // or parseJoinCode(theCodeATeammateGaveYou)
 const key = networkKey(network);
@@ -28,6 +29,9 @@ const collab = new CollabSession({
   peers: new PeerBook(peopleFile),                   // one file per person, for every repository
   transport: new TcpTransport({ port: sharedPort(key, scope), orAnyPort: true }),
   discovery: new LanDiscovery({ key, scope, name: host.owner }),
+  lobby: new TcpTransport({ port: lobbyPort(network) }), // where teammates with no repository in common first ask
+  directoryDir,                                      // shared by all of this person's hosts
+  repo: { name: "shop", url: "git@example.com:team/shop.git" },
   scope,
   dir: workDir,
   projectDir: process.cwd(),

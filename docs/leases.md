@@ -16,7 +16,9 @@ That is all. Nobody approves anybody, chooses a port or types an address. Everyo
 
 The hosts find each other by themselves: on a local network by announcing themselves, and otherwise at the machines they already know, on a port that every member's host for the same repository shares. Two machines that cannot reach each other at all, such as two home networks with no VPN between them, do not connect.
 
-Two people's hosts connect when they are working in the same repository, which is recognised by its first commit and not by what the checkout is called.
+A repository is recognised by its first commit, not by what the checkout is called. Hosts for the same repository share its tree and can hand sessions over. Hosts for different repositories still connect, but only to look ([ADR 0019](decisions/0019-everything-everyone-is-running.md)).
+
+To keep one repository to yourself, switch `network.share` off for it in the settings (`,` in the pane). Its sessions are then shown to nobody, and nobody's are shown in it.
 
 The first key seen under a person's name is theirs from then on. If someone later connects under that name with a different key, they are refused and you are asked: that is what a new machine looks like, and also what an impostor looks like.
 
@@ -24,9 +26,13 @@ To remove someone, everyone else leaves (`/lattice network`, "Leave") and joins 
 
 ## What you see of a teammate
 
-- Their sessions appear in your pane, marked `@name`. You cannot run them or type into them.
-- Opening one fetches its conversation from them and shows it read-only.
-- When they are offline, or not working in that repository, their sessions stay in your pane as last seen, marked offline, and cannot be opened until they are back.
+The first line of the pane names the network and who is around.
+
+- **In a repository you both have**, their sessions appear in its tree, marked `@name`.
+- **In a repository you do not have**, their sessions are listed after your own repositories, under the repository's name and "not here". The group is folded to one line until you give the pane the keyboard.
+- You cannot run their sessions or type into them. `enter` fetches the conversation and shows it read-only.
+- **While a teammate's session is under the cursor**, what it last did is shown beside the pane and kept up to date: its owner's machine sends each new message as it is written. It stops when you move away.
+- When they cannot be reached, their sessions stay as last seen, marked offline, and cannot be opened or asked for until they are back. The same goes for a session in a repository you both have when their host for that repository is not running.
 
 ## Handing a session over
 
@@ -39,6 +45,7 @@ A session changes hands in two steps, and it can start from either side.
 
 The owner acts once. That one act is their yes to the release, so it is where they are told what a release sends. When the second step happens, the owner's host stops the session, records the signed release and sends the conversation and branch straight to the new owner, without asking again.
 
+- **A session in a repository you do not have** can be asked for the same way. `t` first clones the repository from where its owner has it: you are shown the address and the folder, and asked once which folder clones go into (`network.cloneDir`). If its owner's checkout has no remote, there is nothing to clone from and you are told so.
 - An offer or a request nobody answers lapses after 24 hours. Either side can take theirs back before then (`x` on an offer, `t` again on a session you asked for).
 - Both people need to be online for the session to move. A yes given while the other is away takes effect when they are back.
 - A session that is open in its owner's terminal is not sent from under them. It goes when they leave it, and the pane says so.
@@ -82,6 +89,8 @@ An agent can message a node another person owns. It is delivered directly when t
 | Networks and join codes | `packages/collab/src/network.ts` |
 | The people of the network and their keys | `packages/collab/src/peers.ts` |
 | Finding teammates on the local network | `packages/collab/src/discovery.ts` |
+| What everyone has running, guests, and watching a session | `packages/collab/src/collab.ts` |
+| Repositories that are not here, in the pane; cloning to take | `packages/pane/src/view.ts`, `packages/pane/src/extension.ts` |
 | The encrypted channel | `packages/collab/src/channel.ts` |
 | Connections, fetching, mail, offers and requests | `packages/collab/src/collab.ts` |
 | Following the network file, one host per repository | `packages/app/src/daemon.ts` |

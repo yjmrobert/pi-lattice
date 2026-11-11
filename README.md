@@ -29,7 +29,7 @@ Then open `pi` in a project as you always do. A pane on the left lists the proje
 - `,` in the pane, or `/lattice config`, opens the settings: models, roles, limits and the pane itself, for this repository or for all of yours. `/lattice doctor` checks the setup.
 - Sessions are told how to talk to each other, and you can read and change all of it: `/lattice prompt` shows what a session has been told and the file each part comes from.
 - Work in several repositories shows in one pane. Opening a session from another repository moves this terminal there; `-` goes back.
-- `/lattice network` puts you and your teammates in one network, once: create it, pass on the join code, and from then on everyone's sessions show in everyone's pane, in every repository you share. `o` offers one of yours to a teammate; `t` asks for one of theirs. It is peer to peer, with no server.
+- `/lattice network` puts you and your teammates in one network, once: create it, pass on the join code, and from then on everyone's sessions show in everyone's pane, in every repository you share. The pane's first line says who is around. What teammates are running in repositories you do not have is listed too; a session under the cursor is kept up to date as it goes. `o` offers one of yours to a teammate; `t` asks for one of theirs, cloning the repository first if you do not have it. It is peer to peer, with no server.
 
 See the [pane readme](packages/pane/README.md) for keys, and [a feature through the full lifecycle](examples/feature-lifecycle/README.md) for a walkthrough.
 
