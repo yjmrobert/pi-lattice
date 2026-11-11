@@ -27,6 +27,7 @@ function statusLine(node: NodeMeta, repo: PaneRepo, view: PaneView, paint: Paint
 	if (node.status === "running" || node.status === "starting") return [[`${SPINNER[(view.frame ?? 0) % SPINNER.length]} `, paint.accent], ["working"], tail];
 	if (node.status === "failed") return [["✗ ", paint.error], ["failed"], tail];
 	if (node.status === "exited") return [["✓ ", paint.ok], ["finished"], tail];
+	if (node.done) return [["✓ ", paint.ok], ["done: it sent its result"], tail];
 	return [[node.status === "idle" ? "● " : "○ ", paint.dim], [node.status === "idle" ? "idle" : "asleep"], tail];
 }
 

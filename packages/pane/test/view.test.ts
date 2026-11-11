@@ -108,6 +108,44 @@ describe("renderPane", () => {
 	});
 });
 
+describe("finished work", () => {
+	const done = state({
+		nodes: [
+			node("r", null, { name: "checkout", kind: "feature" }),
+			node("p", "r", { name: "payments", done: true }),
+			node("p1", "p", { name: "stripe", done: true, status: "dormant" }),
+			node("p2", "p", { name: "refunds", status: "dormant" }),
+			node("q", "r", { name: "emails", status: "running" }),
+		],
+	});
+
+	it("marks a session that sent its result, and folds what is under it into one line", () => {
+		const lines = renderPane(view({}, done), 34);
+		expect(lines.find((line) => line.includes("payments"))).toBe("  ├ ✓ payments           +2 done ");
+		expect(lines.join("\n")).not.toContain("stripe");
+		expect(lines.join("\n")).not.toContain("refunds");
+		expect(lines.find((line) => line.includes("emails"))).toContain("emails");
+	});
+
+	it("unfolds it while the pane has the keyboard, so the cursor can reach every session", () => {
+		const lines = renderPane(view({ focused: true }, done), 34);
+		expect(lines.find((line) => line.includes("payments"))).toBe("  ├ ✓ payments              task ");
+		expect(lines.join("\n")).toContain("stripe");
+		expect(paneOrder(view({ focused: true }, done))).toContain(nodeKey("p1"));
+	});
+
+	it("keeps it open while anything under it is working or waiting on the person", () => {
+		const busy = { ...done, nodes: done.nodes.map((each) => (each.id === "p2" ? { ...each, status: "running" as const } : each)) };
+		expect(renderPane(view({}, busy), 34).join("\n")).toContain("refunds");
+		const asking = { ...done, attention: { p1: { dialogs: 1, pending: 0 } } };
+		expect(renderPane(view({}, asking), 34).join("\n")).toContain("stripe");
+	});
+
+	it("says in the inspector that it sent its result", () => {
+		expect(renderInspector(view({ focused: true, cursor: nodeKey("p"), now: Date.parse("2026-01-01T00:10:00Z") }, done), 60)[0]).toContain("✓ done: it sent its result");
+	});
+});
+
 describe("several repositories", () => {
 	const other = (over: Partial<UiState> = {}): UiState => state({ nodes: [node("x", null, { name: "invoices", kind: "feature" }), node("y", "x", { name: "pdf" })], foreground: [], ...over });
 

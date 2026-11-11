@@ -215,12 +215,14 @@ export function gone(node: NodeMeta, state: UiState): boolean {
 	return !person || (!person.online && !person.self);
 }
 
-function statusMark(status: NodeStatus, waiting: boolean, away: boolean, frame: number, paint: Paint): Seg {
+function statusMark(node: Pick<NodeMeta, "status" | "done">, waiting: boolean, away: boolean, frame: number, paint: Paint): Seg {
+	const status: NodeStatus = node.status;
 	if (away) return ["○", paint.dim];
 	if (waiting || status === "blocked") return ["●", paint.warn];
 	if (status === "running" || status === "starting") return [SPINNER[frame % SPINNER.length] as string, paint.accent];
 	if (status === "failed") return ["✗", paint.error];
-	if (status === "exited") return ["✓", paint.ok];
+	// It sent its parent the result of what it was given, and has been given nothing since.
+	if (status === "exited" || node.done) return ["✓", paint.ok];
 	return [status === "idle" ? "●" : "○", paint.dim];
 }
 
@@ -232,15 +234,16 @@ const guides = (prefix: string): string => (prefix.match(/.{3}/gu) ?? []).map((u
  * what is waiting and the kind (or the owner, when it is someone else's). When there is no room
  * the kind goes first, then the name is cut; what is waiting is never dropped.
  */
-function sessionRow(node: NodeMeta, prefix: string, repo: PaneRepo, view: PaneView, width: number, paint: Paint): Seg[] {
+function sessionRow(node: NodeMeta, prefix: string, repo: PaneRepo, view: PaneView, width: number, paint: Paint, folded = 0): Seg[] {
 	const state = repo.state;
 	const away = gone(node, state);
 	const attention = state.attention[node.id];
 	const marks = [attention?.dialogs ? `?${attention.dialogs}` : "", attention?.pending ? `✉${attention.pending}` : ""].filter(Boolean).join(" ");
 	const here = node.id === view.current;
 	const sending = state.sharing?.pendingTransfers.find((transfer) => transfer.nodeId === node.id);
-	const tag = sending ? `→ ${sending.to}…` : node.owner === state.owner ? node.kind : `@${node.owner}${away ? " offline" : ""}`;
-	const lead: Seg[] = [[here ? "▸" : " ", paint.accent], [` ${guides(prefix)}`, paint.dim], statusMark(node.status, (attention?.dialogs ?? 0) > 0, away, view.frame ?? 0, paint), [" "]];
+	// A finished session with finished work under it says how much is folded away, in place of its kind.
+	const tag = sending ? `→ ${sending.to}…` : folded > 0 ? `+${folded} done` : node.owner === state.owner ? node.kind : `@${node.owner}${away ? " offline" : ""}`;
+	const lead: Seg[] = [[here ? "▸" : " ", paint.accent], [` ${guides(prefix)}`, paint.dim], statusMark(node, (attention?.dialogs ?? 0) > 0, away, view.frame ?? 0, paint), [" "]];
 	const room = width - 1 - widthOf(lead);
 	const marksWidth = marks ? [...marks].length + 1 : 0;
 	const nameWidth = [...node.name].length;
@@ -248,9 +251,38 @@ function sessionRow(node: NodeMeta, prefix: string, repo: PaneRepo, view: PaneVi
 	// "@sam offline" may lose "offline" before it loses "@sam".
 	const shownTag = [tag, tag.split(" ")[0] as string, ""].find((text) => nameWidth + marksWidth + tagWidth(text) <= room) ?? "";
 	const name = fit(node.name, Math.max(4, room - marksWidth - tagWidth(shownTag) - (marks || shownTag ? 0 : 1)));
-	const quiet = away || node.status === "dormant";
+	const quiet = away || node.status === "dormant" || node.done === true;
 	const right: Seg[] = [[marks, paint.warn], [marks && shownTag ? " " : ""], [shownTag, paint.dim], [" "]];
 	return spread([...lead, [name, quiet ? paint.dim : here ? paint.bold : undefined]], right, width);
+}
+
+/**
+ * What is folded away while the pane is at rest: everything under a finished session, once all
+ * of it is finished or asleep too. Finished work stays one line until the pane has the keyboard,
+ * when every session shows so the cursor can reach it.
+ */
+export function foldedUnder(repo: PaneRepo, view: PaneView): { inside: Set<string>; under: Map<string, number> } {
+	const inside = new Set<string>();
+	const under = new Map<string, number>();
+	if (view.focused) return { inside, under };
+	const nodes = repo.state.nodes;
+	const kids = (id: string): NodeMeta[] => nodes.filter((node) => node.parentId === id);
+	const descendants = (id: string): NodeMeta[] => kids(id).flatMap((kid) => [kid, ...descendants(kid.id)]);
+	const settled = (node: NodeMeta): boolean => {
+		const attention = repo.state.attention[node.id];
+		const waiting = (attention?.dialogs ?? 0) > 0 || (attention?.pending ?? 0) > 0;
+		return !waiting && node.id !== view.current && (node.done === true || node.status === "dormant" || node.status === "idle" || node.status === "exited");
+	};
+	for (const node of nodes) {
+		if (!node.done || inside.has(node.id)) continue;
+		const below = descendants(node.id);
+		if (below.length === 0 || !settled(node) || !below.every(settled)) continue;
+		for (const each of below) inside.add(each.id);
+		under.set(node.id, below.length);
+	}
+	// A session folded inside another does not also report a count of its own.
+	for (const id of inside) under.delete(id);
+	return { inside, under };
 }
 
 /** A repository's header: its name, and how many sessions it has or what they are doing. */
@@ -355,7 +387,11 @@ export function renderPane(view: PaneView, width: number, paint: Paint = PLAIN):
 		const folded = !repo.here && !view.focused && counts.working === 0 && counts.waiting === 0;
 		push(repoHeader(repo, !several, folded, frame, inner, paint));
 		if (folded) continue;
-		for (const { node, prefix } of treeLines(repo.state.nodes)) push(sessionRow(node, prefix, repo, view, inner, paint), nodeKey(node.id), false);
+		const hidden = foldedUnder(repo, view);
+		for (const { node, prefix } of treeLines(repo.state.nodes)) {
+			if (hidden.inside.has(node.id)) continue;
+			push(sessionRow(node, prefix, repo, view, inner, paint, hidden.under.get(node.id) ?? 0), nodeKey(node.id), false);
+		}
 	}
 
 	for (const repo of asleep) push(spread([[` ◇ ${fit(repo.name, Math.max(4, inner - 11))}`, paint.dim]], [["asleep", paint.dim], [" "]], inner), repoKey(repo.key));
@@ -381,7 +417,7 @@ export function renderCompact(view: PaneView, limit = 8): string[] {
 	const rows = view.repos.flatMap((repo) =>
 		treeLines(repo.state.nodes).map(({ node, prefix }) => {
 			const owner = node.owner === repo.state.owner ? "you" : `@${node.owner}`;
-			const mark = statusMark(node.status, (repo.state.attention[node.id]?.dialogs ?? 0) > 0, gone(node, repo.state), view.frame ?? 0, PLAIN)[0];
+			const mark = statusMark(node, (repo.state.attention[node.id]?.dialogs ?? 0) > 0, gone(node, repo.state), view.frame ?? 0, PLAIN)[0];
 			return `${node.id === view.current ? "▸" : " "} ${prefix}${mark} ${node.name}  ${owner}${node.repo ? ` · ${node.repo}` : ""}`;
 		}),
 	);
@@ -422,7 +458,7 @@ export function renderStrip(view: PaneView, width: number, paint: Paint = PLAIN)
 			const cell: Seg[] = [
 				[shown > 0 ? " │ " : " ", paint.dim],
 				[open ? "▸" : "", paint.accent],
-				statusMark(node.status, (attention?.dialogs ?? 0) > 0, gone(node, here.state), frame, paint),
+				statusMark(node, (attention?.dialogs ?? 0) > 0, gone(node, here.state), frame, paint),
 				[` ${fit(node.name, 18)}`, open ? paint.bold : undefined],
 				[marks ? ` ${marks}` : "", paint.warn],
 			];
