@@ -6,18 +6,20 @@
  * lives in its own background host, started on demand; opening a session takes it over from
  * its host, and leaving it hands it back. See ADR 0013 and ADR 0015.
  */
+import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import { emitEvent, formatSetting, type HostAssignment, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, toggleSetting, type UiState } from "@pi-lattice/protocol";
+import { emitEvent, formatSetting, type HostAssignment, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState } from "@pi-lattice/protocol";
 import { type ChildForm, type FormKey, formKey, newChildForm, renderForm } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
 import { connectHost, hasTree, inRepository, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
 import { newSettingsScreen, renderSettings, type SettingsData, type SettingsLink, type SettingsScreen, settingsKey } from "./settings.ts";
 import { readSettings, readTemplate, type SettingsRead, templatePath, writeSetting, writeTemplate } from "./settings-io.ts";
-import { type InboxDetails, inboxItems, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, renderCompact, renderPane, renderStrip } from "./view.ts";
+import { type InboxDetails, inboxItems, networkLine, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane, renderStrip } from "./view.ts";
 
 const NODE_ENTRY = "lattice:node";
 const MIN_TERMINAL_WIDTH = 90;
@@ -98,8 +100,17 @@ const shared: Shared = (globals[KEY] ??= {
 
 /** The link to the repository this terminal is in, if it has a tree with a running host. */
 const homeLink = (): Link | undefined => (shared.home ? shared.links.get(shared.home) : undefined);
-/** The link whose tree a node belongs to. */
-const linkOf = (nodeId: string | undefined): Link | undefined => (nodeId ? [...shared.links.values()].find((link) => link.state?.nodes.some((node) => node.id === nodeId)) : undefined);
+/** A teammate's tree in a repository this machine has no tree for, by one of its sessions; and the link that heard of it. */
+const elsewhereOf = (nodeId: string | undefined): { link: Link; tree: SharingTree } | undefined => {
+	for (const link of shared.links.values()) {
+		const tree = link.state?.sharing?.elsewhere.find((candidate) => candidate.nodes.some((node) => node.id === nodeId));
+		if (tree) return { link, tree };
+	}
+	return undefined;
+};
+/** The link whose tree a node belongs to; for a session in a repository that is not here, the link that can read it. */
+const linkOf = (nodeId: string | undefined): Link | undefined =>
+	nodeId ? ([...shared.links.values()].find((link) => link.state?.nodes.some((node) => node.id === nodeId)) ?? elsewhereOf(nodeId)?.link) : undefined;
 /** The link that owns the node open here. Falls back to the directory recorded when it was opened, for a tree not yet fetched. */
 const currentLink = (): Link | undefined => linkOf(shared.current) ?? (shared.currentDir ? shared.links.get(shared.currentDir) : undefined);
 
@@ -118,7 +129,9 @@ function view(): PaneView {
 		// This terminal's repository first, then the others by name.
 		.sort((a, b) => Number(b.here) - Number(a.here) || a.name.localeCompare(b.name));
 	const base: PaneView = {
-		repos,
+		// Then the repositories teammates are working in that are not on this machine.
+		repos: [...repos, ...remoteRepos(repos, shared.asleep.flatMap((tree) => (tree.scope !== undefined ? [tree.scope] : [])))],
+		network: networkLine(repos),
 		asleep: shared.asleep.map((tree) => ({ key: tree.stateDir, name: basename(tree.root) })),
 		previous: shared.previous !== undefined && shared.previous !== shared.current,
 		current: shared.current,
@@ -391,6 +404,10 @@ async function scan(): Promise<void> {
 		const changed = asleep.length !== shared.asleep.length || asleep.some((tree, index) => tree.stateDir !== shared.asleep[index]?.stateDir);
 		shared.asleep = asleep;
 		if (changed) redraw();
+		// A teammate's session under the cursor is sent as it goes only while someone keeps looking: keep looking.
+		const watched = cursorNode(view());
+		const link = linkOf(watched);
+		if (watched && link && inspecting() && !link.state?.nodes.some((node) => node.id === watched && node.owner === link.state?.owner)) fetchTail();
 	} catch {
 		// Looking is best effort; the next pass tries again.
 	} finally {
@@ -620,7 +637,13 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	// Inside a session the host runs headless there is no person and no pane.
 	if (process.env.LATTICE_HEADLESS) return;
 
-	const everyNode = (): NodeMeta[] => [...shared.links.values()].flatMap((link) => link.state?.nodes ?? []);
+	/** Every session the pane shows: each repository's tree, then what teammates have running in repositories that are not here. */
+	const everyNode = (): NodeMeta[] => {
+		const here = [...shared.links.values()].flatMap((link) => link.state?.nodes ?? []);
+		const seen = new Set(here.map((node) => node.id));
+		const elsewhere = [...shared.links.values()].flatMap((link) => link.state?.sharing?.elsewhere.flatMap((tree) => tree.nodes) ?? []).filter((node) => !seen.has(node.id) && seen.add(node.id));
+		return [...here, ...elsewhere];
+	};
 	const name = (id: string): string => everyNode().find((node) => node.id === id)?.name ?? id;
 	/** A session by id, or by name: this repository's first, then any other's. */
 	const find = (text: string): NodeMeta | undefined =>
@@ -1104,7 +1127,70 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		if (!node || !link) return;
 		if (node.owner === link.state?.owner) return ctx.ui.notify(`"${node.name}" is already yours.`, "info");
 		if (!link.state?.sharing) return ctx.ui.notify(NO_NETWORK, "info");
+		const elsewhere = link.state.nodes.some((each) => each.id === node.id) ? undefined : elsewhereOf(node.id);
+		if (elsewhere) return takeElsewhere(ctx, node, elsewhere.tree);
 		await sharing(ctx, link.client, "ask", [node.id]);
+	};
+
+	const git = (args: string[]): Promise<void> =>
+		new Promise((done, failed) => execFile("git", args, { encoding: "utf8" }, (error, _out, stderr) => (error ? failed(new Error(stderr.trim().split("\n").pop() || error.message)) : done())));
+
+	/**
+	 * Ask for a session in a repository this machine has no tree for. The repository has to be
+	 * here for the session to work in, so it is cloned first, from where its owner has it, into
+	 * a folder the person chooses once. Then its host is started and the session asked for.
+	 */
+	const takeElsewhere = async (ctx: ExtensionCommandContext, node: NodeMeta, tree: SharingTree): Promise<void> => {
+		// It may be here already, with its host asleep.
+		let root = shared.asleep.find((known) => known.scope === tree.scope)?.root;
+		if (!root) {
+			if (!tree.url) {
+				ctx.ui.notify(`"${tree.repo}" has no remote on ${node.owner}'s machine, so it cannot be cloned from here. Clone it yourself, open pi in it, and ask for "${node.name}" there.`, "warning");
+				return;
+			}
+			let into = textSetting(settings().settings, "network.cloneDir");
+			if (!into) {
+				const answer = await ctx.ui.input("You do not have this repository. Which folder should teammates' repositories be cloned into? (asked once; /lattice config changes it)", dirname(projectRoot(ctx.cwd)));
+				if (!answer?.trim()) return;
+				into = answer.trim();
+				writeSetting("user", shared.home, "network.cloneDir", into);
+			}
+			const folder = resolve(into.replace(/^~(?=$|\/)/, homedir()));
+			const dest = join(folder, tree.repo.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+/, "") || "repository");
+			if (existsSync(dest)) {
+				// Something is there. If it is this repository it shows up here once pi has been opened in it.
+				ctx.ui.notify(`${dest} already exists. If it is ${tree.repo}, open pi there once and ask again; otherwise choose another folder with /lattice config user network.cloneDir.`, "warning");
+				return;
+			}
+			// The address comes from a teammate's machine, so the person sees it before anything is fetched.
+			const sure = await ctx.ui.confirm(`Clone ${tree.repo} to take "${node.name}"?`, `${node.owner} has it from\n  ${tree.url}\n\nIt will be cloned into\n  ${dest}\n\nCheck that this is the repository you expect.`);
+			if (!sure) return;
+			ctx.ui.notify(`Cloning ${tree.repo}…`, "info");
+			try {
+				await git(["clone", "--quiet", "--", tree.url, dest]);
+			} catch (error) {
+				ctx.ui.notify(`Could not clone ${tree.url}: ${error instanceof Error ? error.message : String(error)}`, "error");
+				return;
+			}
+			root = dest;
+		}
+		try {
+			const stateDir = stateDirFor(root);
+			const link = shared.links.get(stateDir) ?? addLink(await launchHost(pi.events, stateDir, root), stateDir);
+			// Its host finds the owner's host for this repository; then the session is in its tree and can be asked for.
+			for (const end = Date.now() + 30_000; Date.now() < end; ) {
+				await refreshLink(link);
+				if (link.state?.nodes.some((each) => each.id === node.id) && link.state.sharing?.people.some((person) => person.name === node.owner && person.here)) break;
+				await new Promise((wait) => setTimeout(wait, 300));
+			}
+			if (!link.state?.nodes.some((each) => each.id === node.id)) {
+				ctx.ui.notify(`${tree.repo} is at ${root}, but "${node.name}" has not shown up in it yet. Press t on it there once it does.`, "warning");
+				return;
+			}
+			await sharing(ctx, link.client, "ask", [node.id]);
+		} catch (error) {
+			fail(ctx, error);
+		}
 	};
 
 	/** Say yes to a teammate who asked for a session. This is the step that sends it. */

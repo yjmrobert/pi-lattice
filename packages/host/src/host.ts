@@ -89,8 +89,10 @@ export interface SharingPort {
 	state(): UiState["sharing"];
 	/** Run a sharing action named by the pane and return text to show. */
 	run(action: string, args: string[]): Promise<string>;
-	/** A peer's node's conversation. */
+	/** A teammate's session's conversation, in this repository or another. */
 	fetchMessages(nodeId: string): Promise<unknown[]>;
+	/** The same, kept up to date by its owner for as long as this keeps being called. */
+	follow(nodeId: string): Promise<unknown[]>;
 	/** Call the listener whenever sharing state changes. */
 	onChanged(listener: () => void): void;
 }
@@ -917,10 +919,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				await this.sleep(call("sleep").nodeId);
 				return {};
 			case "messages": {
-				const node = this.must(call("messages").nodeId);
-				if (node.owner === this.owner) return { messages: await this.readMessages(node.id) };
-				if (!this.sharing) throw new Error(`"${node.name}" belongs to ${node.owner}, and this tree is not being shared right now.`);
-				return { messages: await this.sharing.fetchMessages(node.id) };
+				// A session in a repository this host is not for is known only to sharing.
+				const node = this.store.getNode(call("messages").nodeId);
+				if (node?.owner === this.owner) return { messages: await this.readMessages(node.id) };
+				if (!this.sharing) throw new Error(node ? `"${node.name}" belongs to ${node.owner}, and this tree is not being shared right now.` : `No node ${call("messages").nodeId} in this tree.`);
+				return { messages: await this.sharing.fetchMessages(call("messages").nodeId) };
 			}
 			case "sharing":
 				return { text: await this.runSharing(call("sharing").action, call("sharing").args) };
@@ -1031,8 +1034,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	async tail(id: string, limit = 8): Promise<string[]> {
 		const runtime = this.runtimes.get(id);
 		if (runtime?.proc && runtime.recent.length > 0) return runtime.recent.slice(-limit);
-		const node = this.must(id);
-		if (node.owner !== this.owner) return [];
+		const node = this.store.getNode(id);
+		// A teammate's session: its owner sends what is new while someone here is looking.
+		if (node?.owner !== this.owner) return this.sharing ? tailOf((await this.sharing.follow(id).catch(() => [])) as RpcRecord[], limit) : [];
 		return tailOf(await this.readMessages(id), limit);
 	}
 

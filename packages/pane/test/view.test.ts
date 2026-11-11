@@ -1,6 +1,6 @@
 import type { NodeMeta, UiState } from "@pi-lattice/protocol";
 import { describe, expect, it } from "vitest";
-import { ago, ALL_KEYS, type ChildForm, cursorKeys, stopKey, usageText, formKey, newChildForm, renderForm, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
+import { ago, ALL_KEYS, type ChildForm, cursorKeys, stopKey, usageText, formKey, newChildForm, renderForm, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, networkLine, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane } from "../src/index.ts";
 
 const node = (id: string, parentId: string | null, over: Partial<NodeMeta> = {}): NodeMeta => ({
 	id, parentId, rootId: "r", kind: "task", name: id, brief: "", fragments: [], owner: "yan", version: 1, status: "idle",
@@ -10,7 +10,7 @@ const state = (over: Partial<UiState> = {}): UiState => ({
 	owner: "yan",
 	nodes: [node("r", null, { name: "checkout", kind: "feature" }), node("a", "r", { name: "grilling", status: "running" }), node("b", "r", { name: "impl", owner: "sam", status: "idle" })],
 	attention: {}, foreground: ["r"],
-	sharing: { network: "team", people: [{ name: "yan", fingerprint: "f", trust: "trusted", online: true, self: true }, { name: "sam", fingerprint: "g", trust: "trusted", online: true, self: false }], handoffs: [], requests: [], pendingTransfers: [] },
+	sharing: { network: "team", scope: "git:shop", people: [{ name: "yan", fingerprint: "f", trust: "trusted", online: true, here: true, self: true }, { name: "sam", fingerprint: "g", trust: "trusted", online: true, here: true, self: false }], handoffs: [], requests: [], pendingTransfers: [], elsewhere: [] },
 	...over,
 });
 const repo = (s: UiState = state(), over: Partial<PaneRepo> = {}): PaneRepo => ({ key: "/shop/.lattice", name: "shop", state: s, here: true, inbox: inboxItems(s), ...over });
@@ -32,7 +32,7 @@ describe("renderPane", () => {
 
 	it("names the owner only when the session is someone else's, and says when they are away", () => {
 		const s = state();
-		if (s.sharing) (s.sharing.people[1] as { online: boolean }).online = false;
+		if (s.sharing) Object.assign(s.sharing.people[1] as object, { online: false, here: false });
 		expect(renderPane(view({}, s), 34)[3]).toBe("  └ ○ impl          @sam offline ");
 		expect(renderPane(view({}, state({ sharing: null })), 34)[3]).toContain("offline");
 	});
@@ -174,13 +174,78 @@ describe("several repositories", () => {
 	});
 });
 
+describe("a network", () => {
+	const person = (name: string, online: boolean, here = online, self = false) => ({ name, fingerprint: "", trust: "trusted" as const, online, here, self });
+	/** Yan in shop, with sam here, kim away, and both of them working in repositories yan does not have. */
+	const team = (): UiState => {
+		const s = state({ nodes: [...state().nodes, node("c", "r", { name: "billing", owner: "kim" })] });
+		if (s.sharing) {
+			s.sharing.people = [person("yan", true, true, true), person("sam", true), person("kim", false)];
+			s.sharing.elsewhere = [
+				{ scope: "git:api", repo: "api", url: "git@example.com:team/api.git", owner: "sam", online: true, nodes: [node("x1", null, { name: "auth-rework", owner: "sam", status: "running", repo: "api" })] },
+				{ scope: "git:infra", repo: "infra", owner: "kim", online: false, nodes: [node("y1", null, { name: "terraform", owner: "kim", repo: "infra" })] },
+			];
+		}
+		return s;
+	};
+	const whole = (over: Partial<PaneView> = {}): PaneView => {
+		const repos = [repo(team())];
+		return { repos: [...repos, ...remoteRepos(repos)], network: networkLine(repos), current: "r", cursor: undefined, focused: false, ...over };
+	};
+
+	it("says who is around on the first line, and lists the repositories teammates work in that are not here", () => {
+		expect(renderPane(whole(), 34).slice(0, 8)).toEqual([
+			" team · sam · 1 away",
+			" ◆ shop                       ⠋1 ",
+			"▸ ● checkout             feature ",
+			"  ├ ⠋ grilling              task ",
+			"  ├ ● impl                  @sam ",
+			"  └ ○ billing       @kim offline ",
+			" ◌ api                  not here ",
+			" ◌ infra                not here ",
+		]);
+	});
+
+	it("opens those repositories when the person comes to look, with keys to read a session and to ask for it", () => {
+		const v = whole({ focused: true, cursor: nodeKey("x1") });
+		expect(renderPane(v, 34).slice(6, 10)).toEqual([" ◌ api                  not here ", "  ⠋ auth-rework             @sam ", " ◌ infra                not here ", "  ○ terraform       @kim offline "]);
+		expect(paneOrder(v)).toEqual(["n:r", "n:a", "n:b", "n:c", "n:x1", "n:y1"].map((key) => key));
+		expect(cursorKeys(v)).toEqual([["⏎", "read"], ["t", "take"], [",", "settings"], ["?", "keys"]]);
+		expect(interpretKey(v, "enter")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice open x1" }]);
+		expect(interpretKey(v, "t")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice take x1" }]);
+		expect(interpretKey(v, "n")).toEqual([]); // nothing is created in a repository that is not on this machine
+		// Its owner is away: it can be looked at as last seen, not asked for.
+		expect(cursorKeys(whole({ focused: true, cursor: nodeKey("y1") })).map(([key]) => key)).not.toContain("t");
+	});
+
+	it("counts someone as around when any of their hosts can be reached, and says so by count when names do not fit", () => {
+		const elsewhere = team();
+		if (elsewhere.sharing) elsewhere.sharing.people = [person("yan", true, true, true), person("sam", true, false)];
+		expect(networkLine([repo(elsewhere)])).toEqual({ name: "team", here: ["sam"], away: 0 });
+		// Sam is reachable, but not in this repository: his session here cannot be opened or asked for.
+		expect(renderPane(view({}, elsewhere), 34)[3]).toContain("@sam offline");
+		expect(networkLine([repo(state({ sharing: null }))])).toBeUndefined();
+		const crowd = { name: "platform-team", here: ["alexandra", "bartholomew", "christopher"], away: 2 };
+		expect(renderPane(whole({ network: crowd }), 34)[0]).toBe(" platform-team · 3 here · 2 away");
+		expect(renderPane(whole({ network: { name: "team", here: [], away: 0 } }), 34)[0]).toBe(" team · only you so far");
+	});
+
+	it("does not list a repository as elsewhere when it is here, awake or asleep", () => {
+		const shop = repo(team());
+		const api: PaneRepo = { ...repo(state({ nodes: [node("q", null, { repo: "api" })], sharing: { ...(state().sharing as NonNullable<UiState["sharing"]>), scope: "git:api" } })), key: "/api/.lattice", name: "api", here: false };
+		expect(remoteRepos([shop, api]).map((made) => made.name)).toEqual(["infra"]);
+		expect(remoteRepos([shop], ["git:infra"]).map((made) => made.name)).toEqual(["api"]);
+		expect(remoteRepos([shop])[0]).toMatchObject({ key: "net:git:api", remote: { scope: "git:api", url: "git@example.com:team/api.git", via: "/shop/.lattice" } });
+	});
+});
+
 describe("pane helpers", () => {
 	it("lists what is waiting on this person, one item per thing once the details are known", () => {
 		const s = state({
 			attention: { a: { dialogs: 2, pending: 1 } },
 			sharing: {
-				network: "team",
-				people: [{ name: "kim", fingerprint: "k", trust: "changed", online: false, self: false }],
+				network: "team", scope: "git:shop", elsewhere: [],
+				people: [{ name: "kim", fingerprint: "k", trust: "changed", online: false, here: false, self: false }],
 				handoffs: [
 					{ nodeId: "b", nodeName: "impl", from: "sam", to: "yan", state: "offered", role: "recipient" },
 					{ nodeId: "a", nodeName: "grilling", from: "yan", to: "sam", state: "accepted", role: "owner" },
@@ -272,7 +337,7 @@ describe("keys while the pane has the keyboard", () => {
 		expect(interpretKey(v, "t")).toEqual([{ do: "sharing", repo: "/shop/.lattice", action: "withdraw", args: ["b"] }]);
 		// A teammate who is away cannot be asked.
 		const away = state();
-		if (away.sharing) (away.sharing.people[1] as { online: boolean }).online = false;
+		if (away.sharing) Object.assign(away.sharing.people[1] as object, { online: false, here: false });
 		expect(cursorKeys({ ...view({}, away), focused: true, cursor: nodeKey("b") }).map(([key]) => key)).not.toContain("t");
 		// Outside a network the key leads to making or joining one.
 		const alone = { ...view({}, state({ sharing: null })), focused: true, cursor: nodeKey("a") };

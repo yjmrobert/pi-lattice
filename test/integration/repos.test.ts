@@ -92,7 +92,7 @@ describe("several repositories", () => {
 		await treeIn(shop, "saffron");
 		process.env.LATTICE_HOME = sandbox.home;
 		try {
-			expect(knownTrees()).toEqual([{ stateDir: join(shop, ".lattice"), root: shop }]);
+			expect(knownTrees()).toEqual([{ stateDir: join(shop, ".lattice"), root: shop, scope: expect.stringMatching(/^(git|dir):/) }]);
 		} finally {
 			delete process.env.LATTICE_HOME;
 		}

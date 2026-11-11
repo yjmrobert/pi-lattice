@@ -12,6 +12,8 @@ export interface KnownTree {
 	stateDir: string;
 	/** The directory the tree was started for, usually a repository's main checkout. */
 	root: string;
+	/** What identifies the repository to the person's network, the same for every clone of it. */
+	scope?: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -38,14 +40,15 @@ export function treeEntryName(stateDir: string): string {
 }
 
 export function encodeTree(tree: KnownTree): string {
-	return JSON.stringify({ stateDir: tree.stateDir, root: tree.root });
+	return JSON.stringify({ stateDir: tree.stateDir, root: tree.root, ...(tree.scope !== undefined ? { scope: tree.scope } : {}) });
 }
 
 /** Read an entry. A half-written or damaged one is nothing; its host rewrites it when it next starts. */
 export function decodeTree(text: string): KnownTree | undefined {
 	try {
 		const tree = JSON.parse(text) as Partial<KnownTree> | null;
-		return tree && typeof tree.stateDir === "string" && typeof tree.root === "string" ? { stateDir: tree.stateDir, root: tree.root } : undefined;
+		if (!tree || typeof tree.stateDir !== "string" || typeof tree.root !== "string") return undefined;
+		return { stateDir: tree.stateDir, root: tree.root, ...(typeof tree.scope === "string" ? { scope: tree.scope } : {}) };
 	} catch {
 		return undefined;
 	}

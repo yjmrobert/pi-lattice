@@ -70,6 +70,9 @@ export const SETTINGS: readonly Setting[] = [
 	limit("maxNodes", "Tree", "Sessions", "How many sessions one tree may hold.", "LATTICE_MAX_NODES", AT_ONCE),
 	limit("maxRunning", "Tree", "Running", "How many background sessions run at the same time. The least recently used idle one sleeps to make room.", "LATTICE_MAX_RUNNING", AT_ONCE),
 
+	{ key: "network.share", section: "Network", label: "Share this tree", help: "Show this tree to the people in your network, and theirs here. Off, set for one repository, keeps that repository to yourself.", kind: "toggle", default: true, applies: AT_ONCE },
+	{ key: "network.cloneDir", section: "Network", label: "Clone into", help: "The folder a teammate's repository is cloned into when you take a session from one you do not have. Asked for the first time it is needed.", kind: "text", applies: AT_ONCE },
+
 	{ key: "pane.autoStart", section: "Pane", label: "Start a tree", help: "In a git repository, the first message starts a session tree without anything being typed.", kind: "toggle", default: true, env: "LATTICE_AUTO_START", applies: AT_ONCE },
 	{ key: "pane.autoJoin", section: "Pane", label: "Join the tree", help: "A new session joins its repository's tree with its first message.", kind: "toggle", default: true, env: "LATTICE_AUTO_JOIN", applies: AT_ONCE },
 	{ key: "pane.bell", section: "Pane", label: "Bell", help: "Ring the terminal when one more thing starts waiting on you.", kind: "toggle", default: true, env: "LATTICE_BELL", applies: AT_ONCE },

@@ -54,12 +54,27 @@ export interface PaneRepo {
 	/** Whether this terminal is in this repository. */
 	here: boolean;
 	inbox: InboxItem[];
+	/**
+	 * Set for a repository this machine has no tree for: what is shown is what teammates have
+	 * running there. `via` is the repository whose host heard of it and can read it.
+	 */
+	remote?: { scope: string; url?: string; via: string };
+}
+
+/** Who is in the network, for the line at the top of the pane. */
+export interface NetworkLine {
+	name: string;
+	/** Teammates with a host that can be reached right now. */
+	here: string[];
+	away: number;
 }
 
 export interface PaneView {
 	repos: PaneRepo[];
 	/** Repositories with a tree whose host is not running. Each is one line; opening it starts its host. */
 	asleep?: Array<{ key: string; name: string }>;
+	/** The network this person is in, when they are in one. */
+	network?: NetworkLine | undefined;
 	/** Whether there is a session to go back to with `-`. */
 	previous?: boolean;
 	/** Whether the inspector is showing beside the pane. It then lists the keys that act, and the pane keeps the ones that move. */
@@ -220,7 +235,8 @@ function tally(repo: PaneRepo): Tally {
 export function gone(node: NodeMeta, state: UiState): boolean {
 	if (node.owner === state.owner) return false;
 	const person = state.sharing?.people.find((candidate) => candidate.name === node.owner);
-	return !person || (!person.online && !person.self);
+	// Reachable elsewhere is not enough: reading, asking and offering need their host for this repository.
+	return !person || (!person.here && !person.self);
 }
 
 function statusMark(node: Pick<NodeMeta, "status" | "done">, waiting: boolean, away: boolean, frame: number, paint: Paint): Seg {
@@ -310,6 +326,8 @@ function repoHeader(repo: PaneRepo, only: boolean, folded: boolean, frame: numbe
 					[!counts.working && !counts.waiting ? plural(counts.total, "session") : "", paint.dim],
 					[" "],
 				];
+	// A repository that is not on this machine says so in place of a count.
+	if (repo.remote) return spread([[" ◌ ", paint.dim], [fit(repo.name, Math.max(4, width - 13)), folded ? paint.dim : paint.bold]], [["not here", paint.dim], [" "]], width);
 	const mark = repo.here ? "◆" : "◇";
 	const name = fit(repo.name, Math.max(4, width - 4 - widthOf(right)));
 	const left: Seg[] = folded ? [[` ${mark} ${name}`, paint.dim]] : repo.here ? [[` ${mark} ${name}`, strong]] : [[` ${mark} `, paint.accent], [name, paint.bold]];
@@ -369,6 +387,14 @@ export function renderPane(view: PaneView, width: number, paint: Paint = PLAIN):
 	const asleep = view.asleep ?? [];
 	const groups = view.repos.filter((repo) => repo.state.nodes.length > 0);
 	const several = groups.length + asleep.length > 1;
+	if (view.network) {
+		const { name, here, away } = view.network;
+		const rest = (who: string): string => [who, away > 0 ? `${away} away` : ""].filter(Boolean).join(" · ");
+		const full = rest(here.join(" ")) || "only you so far";
+		// Names when they fit, a count when they do not.
+		const said = [...name].length + 3 + [...full].length + 2 <= inner ? full : rest(`${here.length} here`);
+		push([[" "], [fit(name, Math.max(4, inner - 2)), paint.accent], [` · ${said}`, paint.dim]]);
+	}
 	if (inbox.length > 0) {
 		push(spread([[" NEEDS YOU", (text) => paint.warn(paint.bold(text))]], [[String(inbox.length), paint.warn], [" "]], inner));
 		inbox.forEach(({ item, repo }, index) => {
@@ -394,7 +420,8 @@ export function renderPane(view: PaneView, width: number, paint: Paint = PLAIN):
 	for (const repo of groups) {
 		const counts = tally(repo);
 		// A repository this terminal is not in stays folded to one line while nothing in it is working or waiting.
-		const folded = !repo.here && !view.focused && counts.working === 0 && counts.waiting === 0;
+		// One that is not on this machine stays folded until the person comes to look: its work is someone else's.
+		const folded = !repo.here && !view.focused && (repo.remote !== undefined || (counts.working === 0 && counts.waiting === 0));
 		push(repoHeader(repo, !several, folded, frame, inner, paint));
 		if (folded) continue;
 		const hidden = foldedUnder(repo, view);
@@ -424,7 +451,7 @@ export function renderPane(view: PaneView, width: number, paint: Paint = PLAIN):
 
 /** One line per session, for terminals where the side pane cannot be shown. */
 export function renderCompact(view: PaneView, limit = 8): string[] {
-	const rows = view.repos.flatMap((repo) =>
+	const rows = view.repos.filter((repo) => !repo.remote).flatMap((repo) =>
 		treeLines(repo.state.nodes).map(({ node, prefix }) => {
 			const owner = node.owner === repo.state.owner ? "you" : `@${node.owner}`;
 			const mark = statusMark(node, (repo.state.attention[node.id]?.dialogs ?? 0) > 0, gone(node, repo.state), view.frame ?? 0, PLAIN)[0];
@@ -440,7 +467,7 @@ export function renderCompact(view: PaneView, limit = 8): string[] {
  * Sessions are placed by what matters most: the one open here, then waiting, then working.
  */
 export function renderStrip(view: PaneView, width: number, paint: Paint = PLAIN): string[] {
-	const groups = view.repos.filter((repo) => repo.state.nodes.length > 0);
+	const groups = view.repos.filter((repo) => repo.state.nodes.length > 0 && !repo.remote);
 	if (groups.length === 0 && (view.asleep ?? []).length === 0) return [];
 	const frame = view.frame ?? 0;
 	const here = groups.find((repo) => repo.here);
@@ -495,4 +522,48 @@ export function renderStrip(view: PaneView, width: number, paint: Paint = PLAIN)
 		lines.push(draw(spread([...lead, [title, paint.bold], [text ? `  ${text}` : "", paint.dim]], hint, width)));
 	}
 	return lines;
+}
+
+/** Who is in the network, from what each repository's host reports. Someone reachable from any of them is here. */
+export function networkLine(repos: readonly PaneRepo[]): NetworkLine | undefined {
+	const shared = repos.filter((repo) => !repo.remote && repo.state.sharing);
+	const name = shared[0]?.state.sharing?.network;
+	if (name === undefined) return undefined;
+	const online = new Map<string, boolean>();
+	for (const repo of shared) for (const person of repo.state.sharing?.people ?? []) if (!person.self) online.set(person.name, (online.get(person.name) ?? false) || person.online);
+	const here = [...online].filter(([, reachable]) => reachable).map(([who]) => who).sort();
+	return { name, here, away: online.size - here.length };
+}
+
+/**
+ * Repositories teammates have sessions running in and this machine has no tree for, each made
+ * into a repository the pane can draw. `have` lists the repositories that are here but asleep.
+ * Nothing in them can be run from here: they can be read, watched, and asked for.
+ */
+export function remoteRepos(repos: readonly PaneRepo[], have: readonly string[] = []): PaneRepo[] {
+	const here = new Set<string>(have);
+	for (const repo of repos) if (repo.state.sharing) here.add(repo.state.sharing.scope);
+	const made = new Map<string, PaneRepo>();
+	for (const repo of repos) {
+		const sharing = repo.state.sharing;
+		for (const tree of sharing?.elsewhere ?? []) {
+			if (!sharing || here.has(tree.scope)) continue;
+			let remote = made.get(tree.scope);
+			if (!remote) {
+				const self = sharing.people.filter((person) => person.self);
+				remote = {
+					key: `net:${tree.scope}`, name: tree.repo || "a repository", here: false, inbox: [], remote: { scope: tree.scope, via: repo.key },
+					state: { owner: repo.state.owner, nodes: [], attention: {}, foreground: [], sharing: { network: sharing.network, scope: tree.scope, people: [...self], handoffs: [], requests: [], pendingTransfers: [], elsewhere: [] } },
+				};
+				made.set(tree.scope, remote);
+			}
+			if (tree.url && remote.remote && !remote.remote.url) remote.remote.url = tree.url;
+			const people = remote.state.sharing?.people ?? [];
+			const known = people.find((person) => person.name === tree.owner);
+			if (known) known.online = known.here = known.online || tree.online;
+			else people.push({ name: tree.owner, fingerprint: "", trust: "trusted", online: tree.online, here: tree.online, self: false });
+			for (const node of tree.nodes) if (!remote.state.nodes.some((each) => each.id === node.id)) remote.state.nodes.push(node);
+		}
+	}
+	return [...made.values()].sort((a, b) => a.name.localeCompare(b.name));
 }

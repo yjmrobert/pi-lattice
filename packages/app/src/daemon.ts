@@ -12,9 +12,9 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CollabSession, createNetwork, formatJoinCode, Identity, LanDiscovery, loadNetwork, type Network, networkKey, parseJoinCode, PeerBook, removeNetwork, saveNetwork, sharedPort, TcpTransport } from "@pi-lattice/collab";
-import { encodeTree, latticeHome, TREES_DIR, treeEntryName, type UiState } from "@pi-lattice/protocol";
-import { type HostOptions, LatticeHost, type SharingPort } from "@pi-lattice/host";
+import { CollabSession, createNetwork, formatJoinCode, Identity, LanDiscovery, loadNetwork, lobbyPort, type Network, networkKey, parseJoinCode, PeerBook, removeNetwork, saveNetwork, sharedPort, TcpTransport } from "@pi-lattice/collab";
+import { encodeTree, latticeHome, type NodeMeta, toggleSetting, TREES_DIR, treeEntryName, type UiState } from "@pi-lattice/protocol";
+import { type HostOptions, LatticeHost, repoName, type SharingPort } from "@pi-lattice/host";
 
 export interface DaemonOptions {
 	stateDir: string;
@@ -58,6 +58,15 @@ export function repoScope(cwd: string): string {
 	return `dir:${basename(resolve(cwd))}`;
 }
 
+/** Where a teammate can clone a repository from: its `origin`, when it has one. */
+function cloneUrl(cwd: string): string | undefined {
+	try {
+		return execFileSync("git", ["remote", "get-url", "origin"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Sharing with the person's network. The network is one file in the lattice home, used by
  * the host of every repository: this host follows it, so creating, joining or leaving a
@@ -66,6 +75,7 @@ export function repoScope(cwd: string): string {
 class Sharing implements SharingPort {
 	private collab: CollabSession | undefined;
 	private network: Network | undefined;
+	private scope = "";
 	private stamp: string | undefined;
 	private chain: Promise<void> = Promise.resolve();
 	private readonly listeners: Array<() => void> = [];
@@ -98,9 +108,12 @@ class Sharing implements SharingPort {
 			} catch {
 				// No network.
 			}
+			// A repository can be kept out of the network; that is a setting, read each time.
+			const share = toggleSetting(this.host.settings(), "network.share");
+			stamp = `${stamp}|${share}`;
 			if (stamp === this.stamp) return;
 			this.stamp = stamp;
-			const network = loadNetwork(this.networkPath);
+			const network = share ? loadNetwork(this.networkPath) : undefined;
 			if (network?.secret === this.network?.secret && network?.seeds.join() === this.network?.seeds.join()) return;
 			await this.collab?.stop().catch(() => {});
 			this.collab = undefined;
@@ -117,6 +130,7 @@ class Sharing implements SharingPort {
 	private async start(network: Network): Promise<void> {
 		const cwd = resolve(this.options.cwd);
 		const scope = repoScope(cwd);
+		this.scope = scope;
 		const key = networkKey(network);
 		const advertise = this.options.advertise ?? process.env.LATTICE_ADVERTISE;
 		const collab = new CollabSession({
@@ -127,6 +141,10 @@ class Sharing implements SharingPort {
 			// Every member's host for this repository tries the same port, so a teammate's machine is all anyone needs to know.
 			transport: new TcpTransport({ port: sharedPort(key, scope), orAnyPort: true }),
 			scope,
+			// Whichever of this person's hosts gets this port answers teammates who share no repository with them.
+			lobby: new TcpTransport({ port: lobbyPort(network) }),
+			directoryDir: join(this.home, "summaries"),
+			repo: { name: repoName(cwd), ...(cloneUrl(cwd) ? { url: cloneUrl(cwd) as string } : {}) },
 			...((this.options.discovery ?? process.env.LATTICE_DISCOVERY !== "off") ? { discovery: new LanDiscovery({ key, scope, name: this.host.owner }) } : {}),
 			dir: join(this.host.stateDir, "collab"),
 			projectDir: cwd,
@@ -145,6 +163,12 @@ class Sharing implements SharingPort {
 		await this.collab?.stop();
 	}
 
+	/** Whether a session is on its way between people: a host stays up until that is settled. */
+	busy(): boolean {
+		const collab = this.collab;
+		return collab !== undefined && collab.handoffs().length + collab.requests().length + collab.pendingTransfers().length > 0;
+	}
+
 	onChanged(listener: () => void): void {
 		this.listeners.push(listener);
 	}
@@ -152,9 +176,17 @@ class Sharing implements SharingPort {
 	state(): UiState["sharing"] {
 		const collab = this.collab;
 		if (!collab || !this.network) return null;
+		// Enough of a node for the pane to draw a teammate's session it can only look at.
+		const shown = (owner: string, meta: ReturnType<CollabSession["elsewhere"]>[number]["nodes"][number]): NodeMeta => ({
+			...meta, owner, version: 0, sessionId: null, sessionFile: null, cwd: "", updatedAt: "",
+		});
 		return {
 			network: this.network.name,
-			people: collab.people().map((person) => ({ name: person.name, fingerprint: person.fingerprint, trust: person.trust, online: person.online, self: person.self })),
+			scope: this.scope,
+			elsewhere: collab.elsewhere().map((tree) => ({
+				scope: tree.scope, repo: tree.repo, ...(tree.url ? { url: tree.url } : {}), owner: tree.owner, online: tree.online, nodes: tree.nodes.map((node) => shown(tree.owner, node)),
+			})),
+			people: collab.people().map((person) => ({ name: person.name, fingerprint: person.fingerprint, trust: person.trust, online: person.online, here: person.here, self: person.self })),
 			handoffs: collab.handoffs().map((handoff) => ({
 				nodeId: handoff.nodeId, nodeName: handoff.nodeName, from: handoff.from, to: handoff.to, state: handoff.state, role: handoff.role,
 			})),
@@ -166,6 +198,11 @@ class Sharing implements SharingPort {
 	fetchMessages(nodeId: string): Promise<unknown[]> {
 		if (!this.collab) throw new Error("You are not in a network.");
 		return this.collab.fetchMessages(nodeId);
+	}
+
+	follow(nodeId: string): Promise<unknown[]> {
+		if (!this.collab) throw new Error("You are not in a network.");
+		return this.collab.follow(nodeId);
 	}
 
 	private join(code: string): Network {
@@ -326,7 +363,7 @@ export async function runDaemon(options: DaemonOptions): Promise<Daemon> {
 		// A network created, joined or left from another repository's terminal.
 		void sharing.sync().catch(() => {});
 		const { terminals, working } = host.activity();
-		if (terminals > 0 || working > 0) idleSince = Date.now();
+		if (terminals > 0 || working > 0 || sharing.busy()) idleSince = Date.now();
 		else if (idleExitMs > 0 && Date.now() - idleSince >= idleExitMs) {
 			log("info", "Nobody is connected and nothing is working; stopping.");
 			void stop();
@@ -336,7 +373,7 @@ export async function runDaemon(options: DaemonOptions): Promise<Daemon> {
 	try {
 		const trees = join(options.home ?? latticeHome(process.env, homedir()), TREES_DIR);
 		mkdirSync(trees, { recursive: true });
-		writeFileSync(join(trees, treeEntryName(stateDir)), encodeTree({ stateDir, root: resolve(options.cwd) }));
+		writeFileSync(join(trees, treeEntryName(stateDir)), encodeTree({ stateDir, root: resolve(options.cwd), scope: repoScope(resolve(options.cwd)) }));
 	} catch (error) {
 		log("error", `Could not record this tree for other terminals: ${error instanceof Error ? error.message : String(error)}`);
 	}

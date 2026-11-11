@@ -48,6 +48,13 @@ A setting takes its value from the first of these that has one:
 | `limits.maxNodes` | How many sessions one tree may hold. Applies at once. | a whole number from 1 | 40 | `LATTICE_MAX_NODES` |
 | `limits.maxRunning` | How many background sessions run at the same time. The least recently used idle one sleeps to make room. Applies at once. | a whole number from 1 | 8 | `LATTICE_MAX_RUNNING` |
 
+## Network
+
+| Setting | What it does | Takes | Default | Environment |
+|---|---|---|---|---|
+| `network.share` | Show this tree to the people in your network, and theirs here. Off, set for one repository, keeps that repository to yourself. Applies at once. | on \| off | on |  |
+| `network.cloneDir` | The folder a teammate's repository is cloned into when you take a session from one you do not have. Asked for the first time it is needed. Applies at once. | text | not set |  |
+
 ## Pane
 
 | Setting | What it does | Takes | Default | Environment |

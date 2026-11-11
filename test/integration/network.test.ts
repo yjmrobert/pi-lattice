@@ -93,8 +93,23 @@ describe("a network of teammates, through the background host", () => {
 		git(elsewhere, "-c", "user.email=sam@example.com", "-c", "user.name=sam", "commit", "-q", "--allow-empty", "-m", "another project");
 		const other = await machine("sam", samBox, elsewhere);
 		await eventually(() => sharing(other)?.network === "team", "sam's other host to follow the network file");
-		expect(sharing(other)?.people.map((p) => [p.name, p.online])).toEqual([["sam", true], ["yan", false]]); // yan is known, but not working there
 		expect(other.daemon.host.nodes()).toEqual([]);
+
+		// From that other repository sam still sees what yan has running, as a repository that is not here, with where to clone it.
+		await eventually(() => sharing(other)?.elsewhere.length === 1, "sam's other host to hear what yan has running");
+		expect(sharing(other)?.people.find((p) => p.name === "yan")).toMatchObject({ online: true, here: false }); // reachable, not working there
+		expect(sharing(other)?.elsewhere[0]).toMatchObject({ repo: "work", url: origin, owner: "yan", online: true });
+		expect(sharing(other)?.elsewhere[0]?.nodes.map((n) => [n.name, n.owner]).sort()).toEqual([["checkout", "yan"], ["impl", "yan"]]);
+		expect(sharing(sam)?.elsewhere).toEqual([]); // from sam's clone of the same repository, nothing of yan's is elsewhere
+		// And can watch one of those sessions: what it last did is fetched from yan's host for that repository.
+		const seen = await eventually(async () => {
+			const lines = await other.daemon.host.tail(kid.id);
+			return lines.length > 0 && lines;
+		}, "the session's recent activity to arrive from yan");
+		expect(seen.join("\n")).toContain('as its child "impl"');
+		// It keeps coming while sam looks: yan's session does something more, and sam sees it without asking yan's host again.
+		await yan.daemon.host.prompt(kid.id, "say saffron");
+		await eventually(async () => (await other.daemon.host.tail(kid.id)).join("\n").includes("saffron"), "what the session did next to reach sam");
 
 		// Sam asks for yan's session; yan approves; it is sam's.
 		await run(sam, "ask", kid.id);

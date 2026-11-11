@@ -47,9 +47,24 @@ export interface SharingPerson {
 	fingerprint: string;
 	/** `changed`: someone used this name with a key other than the one they are known by. */
 	trust: "trusted" | "changed";
-	/** Their host for this repository is connected right now. */
+	/** One of their hosts is reachable right now, in whatever repository. */
 	online: boolean;
+	/** Their host for this repository is connected: their sessions here can be read, asked for and offered to. */
+	here: boolean;
 	self: boolean;
+}
+
+/** A teammate's sessions in a repository this host is not for. They can be read and watched, and asked for once the repository is here. */
+export interface SharingTree {
+	/** What identifies the repository, the same for every clone of it. */
+	scope: string;
+	/** What its owner calls it. */
+	repo: string;
+	/** Where it can be cloned from, when its owner's checkout has a remote. */
+	url?: string;
+	owner: string;
+	online: boolean;
+	nodes: NodeMeta[];
 }
 
 /** Someone asking to take a session over. `owner`: they ask you. `asker`: you asked. */
@@ -81,7 +96,17 @@ export interface UiState {
 	/** Per node running in the background: the last thing its agent did, and when. */
 	activity?: Record<string, { text: string; at: number }>;
 	/** Present when this person is in a network: the tree is shared with its other members, peer to peer. */
-	sharing: null | { network: string; people: SharingPerson[]; handoffs: SharingHandoff[]; requests: SharingRequest[]; pendingTransfers: Array<{ nodeId: string; to: string }> };
+	sharing: null | {
+		network: string;
+		/** What identifies this host's repository to the network. */
+		scope: string;
+		people: SharingPerson[];
+		handoffs: SharingHandoff[];
+		requests: SharingRequest[];
+		pendingTransfers: Array<{ nodeId: string; to: string }>;
+		/** What teammates have running in other repositories. */
+		elsewhere: SharingTree[];
+	};
 }
 
 /** The control API a person's Pi uses to drive the host. Carried by the `ui` request. */
@@ -107,7 +132,7 @@ export interface UiApi {
 	dialogs: { params: { nodeId: string }; result: { dialogs: DialogInfo[] } };
 	answerDialog: { params: { nodeId: string; dialogId: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }; result: Record<string, never> };
 	sleep: { params: { nodeId: string }; result: Record<string, never> };
-	/** A node's conversation, for reading. Fetched from its owner when it is someone else's. */
+	/** A node's conversation, for reading. Fetched from its owner when it is someone else's, in this repository or another. */
 	messages: { params: { nodeId: string }; result: { messages: unknown[] } };
 	/**
 	 * Network and handoff actions. Returns text to show.
@@ -124,7 +149,10 @@ export interface UiApi {
 	archived: { params: Record<string, never>; result: { nodes: NodeMeta[] } };
 	/** Stop what a background session's agent is doing. The session stays, idle. */
 	interrupt: { params: { nodeId: string }; result: Record<string, never> };
-	/** The last few things a session said and did, one line each, oldest first. */
+	/**
+	 * The last few things a session said and did, one line each, oldest first. For a teammate's
+	 * session, asking keeps it coming: its owner sends what is new for as long as this is called.
+	 */
 	tail: { params: { nodeId: string }; result: { lines: string[] } };
 	/** Add what a turn in a foreground session used; the host cannot see those turns itself. */
 	usage: { params: { nodeId: string; tokens: number; cost: number }; result: Record<string, never> };
