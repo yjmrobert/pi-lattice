@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import {
 	type Channel,
 	childrenOf,
+	type DialogInfo,
 	DEFAULT_LIMITS,
 	depthOf,
 	type Envelope,
@@ -20,6 +21,7 @@ import {
 	isRelativeAddress,
 	type Limits,
 	newNodeId,
+	type NodeEnv,
 	type NodeMeta,
 	type NodeStatus,
 	type PeerInfo,
@@ -27,6 +29,9 @@ import {
 	type RequestOp,
 	type SpawnSpec,
 	treeOf,
+	type UiApi,
+	type UiMethod,
+	type UiState,
 	validateEnvelope,
 	WORKSPACE_MODES,
 } from "@pi-lattice/protocol";
@@ -34,7 +39,7 @@ import { buildSessionContext, parseSessionEntries } from "@earendil-works/pi-cod
 import { type ExitInfo, PiProcess, type RpcRecord } from "./pi-process.ts";
 import { type Connection, type Hello, SocketServer } from "./socket-server.ts";
 import { type JournalRecord, SqliteStore, type Store } from "./store.ts";
-import { createWorktree } from "./workspace.ts";
+import { createWorktree, repoName } from "./workspace.ts";
 
 export interface HostOptions {
 	/** Directory for the database, sessions and child mailboxes. One host per directory. */
@@ -57,14 +62,18 @@ export interface HostOptions {
 }
 
 /** A dialog a session is blocked on until a human answers. */
-export interface Dialog {
-	id: string;
-	method: "select" | "confirm" | "input" | "editor";
-	title: string;
-	message?: string;
-	options?: string[];
-	placeholder?: string;
-	prefill?: string;
+export type Dialog = DialogInfo;
+
+/** What the host needs from sharing, when the tree is shared. Supplied by whoever composes host and collab. */
+export interface SharingPort {
+	/** Null while sharing is switched off. */
+	state(): UiState["sharing"];
+	/** Run a sharing action named by the pane and return text to show. */
+	run(action: string, args: string[]): Promise<string>;
+	/** A peer's node's conversation. */
+	fetchMessages(nodeId: string): Promise<unknown[]>;
+	/** Call the listener whenever sharing state changes. */
+	onChanged(listener: () => void): void;
 }
 
 export interface RootSpec {
@@ -90,7 +99,10 @@ export interface HostEvents {
 }
 
 interface Runtime {
-	proc: PiProcess;
+	/** The headless Pi process. Absent when the node is open in a person's own terminal. */
+	proc?: PiProcess;
+	/** The `ui` connection that has this node open in the foreground. */
+	foreground?: string;
 	token: string;
 	channels: Map<Channel, Connection>;
 	dialogs: Map<string, Dialog>;
@@ -130,6 +142,10 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private readonly starting = new Map<string, Promise<void>>();
 	private readonly pinned = new Set<string>();
 	private remoteRouter: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined;
+	private readonly uiToken = randomBytes(24).toString("hex");
+	private readonly uiClients = new Map<string, Connection>();
+	private sharing: SharingPort | undefined;
+	private notifyTimer: NodeJS.Timeout | undefined;
 	private stopped = false;
 
 	private constructor(options: HostOptions) {
@@ -147,7 +163,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 
 		this.store = new SqliteStore(join(this.stateDir, "host.db"));
 		this.server = new SocketServer(this.socketPath, {
-			authenticate: (token, nodeId) => this.runtimes.get(nodeId)?.token === token,
+			authenticate: (hello) => (hello.channel === "ui" ? hello.token === this.uiToken : this.runtimes.get(hello.nodeId)?.token === hello.token),
 			onHello: (connection, hello) => this.onHello(connection, hello),
 			onRequest: (connection, op, params) => this.onRequest(connection, op, params),
 			onAck: (connection, envelopeId) => {
@@ -159,6 +175,12 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				this.emit("mail", connection.nodeId, envelope, state);
 			},
 			onClose: (connection) => {
+				if (connection.channel === "ui") {
+					this.uiClients.delete(connection.id);
+					// A terminal that goes away gives its nodes back.
+					for (const [id, runtime] of this.runtimes) if (runtime.foreground === connection.id) this.detachForeground(id, connection.id);
+					return;
+				}
 				const runtime = this.runtimes.get(connection.nodeId);
 				if (runtime?.channels.get(connection.channel) === connection) runtime.channels.delete(connection.channel);
 			},
@@ -182,6 +204,15 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			if (node.status !== "dormant" && node.status !== "exited" && node.status !== "failed") host.store.updateNode(node.id, { status: "dormant" });
 		}
 		await host.server.listen();
+		// A person's own Pi proves it is the same user by reading this file.
+		writeFileSync(join(host.stateDir, "ui.token"), host.uiToken, { mode: 0o600 });
+		chmodSync(join(host.stateDir, "ui.token"), 0o600);
+		writeFileSync(join(host.stateDir, "host.json"), JSON.stringify({ socket: host.socketPath, pid: process.pid, owner: host.owner }));
+		for (const name of ["node", "mail", "dialog", "envelope"] as const) host.on(name, () => host.notifyUi());
+		host.on("log", (level, message) => {
+			if (level === "info") return;
+			for (const client of host.uiClients.values()) client.send({ t: "event", kind: "log", message });
+		});
 		return host;
 	}
 
@@ -273,7 +304,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 
 	private insert(fields: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "cwd" | "workspace" | "branch">): NodeMeta {
 		const now = new Date().toISOString();
-		const node: NodeMeta = { ...fields, owner: this.owner, version: 1, status: "dormant", sessionId: null, sessionFile: null, createdAt: now, updatedAt: now };
+		const node: NodeMeta = {
+			...fields, owner: this.owner, version: 1, status: "dormant", sessionId: null, sessionFile: null, createdAt: now, updatedAt: now, repo: repoName(fields.cwd),
+		};
 		this.store.insertNode(node);
 		this.emit("node", node);
 		return node;
@@ -337,20 +370,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			command: this.options.piCommand ?? (process.env.LATTICE_PI_BIN ? [process.env.LATTICE_PI_BIN] : ["pi"]),
 			args,
 			cwd: existsSync(node.cwd) ? node.cwd : process.cwd(),
-			env: {
-				...process.env,
-				...this.options.env,
-				[HOST_ENV.socket]: this.socketPath,
-				[HOST_ENV.token]: token,
-				[HOST_ENV.nodeId]: node.id,
-				[HOST_ENV.parentId]: node.parentId ?? "",
-				[HOST_ENV.rootId]: node.rootId,
-				[HOST_ENV.kind]: node.kind,
-				[HOST_ENV.name]: node.name,
-				[HOST_ENV.fragments]: node.fragments.join(","),
-				[HOST_ENV.owner]: node.owner,
-				[HOST_ENV.home]: join(this.stateDir, "home"),
-			},
+			// LATTICE_HEADLESS tells the pane extension it is inside a host-run session and must stay out of the way.
+			env: { ...process.env, ...this.options.env, ...this.nodeEnv(node, token), LATTICE_HEADLESS: "1" },
 		});
 		let markConnected!: () => void;
 		let failConnect!: (error: Error) => void;
@@ -383,11 +404,28 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 	}
 
+	/** The environment that lets a session speak as a node, whether the host started it or a person opened it. */
+	private nodeEnv(node: NodeMeta, token: string): NodeEnv {
+		return {
+			[HOST_ENV.socket]: this.socketPath,
+			[HOST_ENV.token]: token,
+			[HOST_ENV.nodeId]: node.id,
+			[HOST_ENV.parentId]: node.parentId ?? "",
+			[HOST_ENV.rootId]: node.rootId,
+			[HOST_ENV.kind]: node.kind,
+			[HOST_ENV.name]: node.name,
+			[HOST_ENV.fragments]: node.fragments.join(","),
+			[HOST_ENV.owner]: node.owner,
+			[HOST_ENV.home]: join(this.stateDir, "home"),
+		};
+	}
+
 	/** Enforce the cap on running sessions by putting the least recently active idle one to sleep. */
 	private async makeRoom(forId: string): Promise<void> {
-		while (this.runtimes.size >= this.limits.maxRunning) {
+		const headless = (): number => [...this.runtimes.values()].filter((runtime) => runtime.proc).length;
+		while (headless() >= this.limits.maxRunning) {
 			const idle = [...this.runtimes.entries()]
-				.filter(([id, runtime]) => id !== forId && !this.pinned.has(id) && !runtime.streaming && runtime.dialogs.size === 0 && this.store.unacked(id).length === 0)
+				.filter(([id, runtime]) => runtime.proc && id !== forId && !this.pinned.has(id) && !runtime.streaming && runtime.dialogs.size === 0 && this.store.unacked(id).length === 0)
 				.sort(([, a], [, b]) => a.lastActive - b.lastActive)[0];
 			if (!idle) {
 				throw new Error(`${this.limits.maxRunning} sessions are already running and none is idle. Wait for one to finish, or raise the limit.`);
@@ -398,8 +436,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 
 	/** Stop a node's process. The node stays in the tree as dormant and resumes on demand. */
 	async sleep(id: string): Promise<void> {
-		const runtime = this.runtimes.get(id);
-		if (runtime) await runtime.proc.stop();
+		await this.runtimes.get(id)?.proc?.stop();
 	}
 
 	private status(runtime: Runtime): NodeStatus {
@@ -438,13 +475,13 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private onExit(id: string, runtime: Runtime, info: ExitInfo): void {
 		if (this.runtimes.get(id) === runtime) this.runtimes.delete(id);
 		for (const connection of runtime.channels.values()) connection.close();
-		const detail = info.error ?? runtime.proc.stderrTail.trim().slice(-400);
+		const detail = info.error ?? runtime.proc?.stderrTail.trim().slice(-400) ?? "";
 		runtime.failConnect(new Error(`Pi exited before the session connected${detail ? `: ${detail}` : "."}`));
 		const hadDialogs = runtime.dialogs.size > 0;
 		runtime.dialogs.clear();
 		if (hadDialogs) this.emit("dialog", id);
 		if (!this.store.getNode(id)) return;
-		if (runtime.proc.stopRequested) {
+		if (runtime.proc?.stopRequested) {
 			this.update(id, { status: "dormant" });
 		} else if (info.code === 0) {
 			this.update(id, { status: "exited" });
@@ -471,6 +508,187 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 	}
 
+	// --- foreground: nodes open in a person's own Pi ----------------------------
+
+	private foregroundRuntime(clientId: string): Runtime {
+		let markConnected!: () => void;
+		let failConnect!: (error: Error) => void;
+		const connected = new Promise<void>((resolveConnected, rejectConnected) => {
+			markConnected = resolveConnected;
+			failConnect = rejectConnected;
+		});
+		connected.catch(() => {});
+		return {
+			foreground: clientId, token: randomBytes(24).toString("hex"), channels: new Map(), dialogs: new Map(), streaming: false, inflight: new Set(),
+			lastActive: Date.now(), connected, markConnected, failConnect,
+		};
+	}
+
+	/**
+	 * Hand a node to a person's terminal. A headless copy is stopped first, because one
+	 * session file can only be driven by one process. Returns what that terminal needs to
+	 * open the session and speak as the node.
+	 */
+	async attachForeground(id: string, clientId: string): Promise<{ node: NodeMeta; sessionFile: string; env: NodeEnv }> {
+		let node = this.must(id);
+		if (node.owner !== this.owner) throw new Error(`"${node.name}" is owned by ${node.owner} and runs on their machine.`);
+		await this.starting.get(id)?.catch(() => {});
+		let runtime = this.runtimes.get(id);
+		if (runtime?.foreground && runtime.foreground !== clientId) throw new Error(`"${node.name}" is already open in another terminal.`);
+		if (runtime?.proc) {
+			await runtime.proc.request({ type: "abort" }).catch(() => {});
+			await runtime.proc.stop();
+			runtime = undefined;
+		}
+		node = this.must(id);
+		if (!node.sessionFile || !existsSync(node.sessionFile)) {
+			// The node has never run here (new, or just taken over from a peer): run it once so its session exists.
+			await this.ensureRunning(id);
+			await this.sleep(id);
+			node = this.must(id);
+			if (!node.sessionFile) throw new Error(`"${node.name}" has no session to open yet.`);
+		}
+		if (!runtime) {
+			runtime = this.foregroundRuntime(clientId);
+			this.runtimes.set(id, runtime);
+			this.update(id, { status: "starting" });
+		}
+		return { node: this.must(id), sessionFile: node.sessionFile, env: this.nodeEnv(node, runtime.token) };
+	}
+
+	/** A terminal gives a node back. The host runs it headless again when it has mail waiting. */
+	detachForeground(id: string, clientId: string): void {
+		const runtime = this.runtimes.get(id);
+		if (!runtime || runtime.foreground !== clientId) return;
+		this.runtimes.delete(id);
+		for (const connection of runtime.channels.values()) connection.close();
+		if (this.store.getNode(id)) this.update(id, { status: "dormant" });
+		this.wakeQueued();
+	}
+
+	/** Make a session that is already open in a person's terminal the root of a new tree. */
+	adoptSession(spec: UiApi["adopt"]["params"], clientId: string): { node: NodeMeta; env: NodeEnv } {
+		const id = newNodeId();
+		const now = new Date().toISOString();
+		const cwd = resolve(spec.cwd);
+		const node: NodeMeta = {
+			id, parentId: null, rootId: id, kind: "feature", name: clean(spec.name, id), brief: "", fragments: spec.fragments ?? [], owner: this.owner, version: 1,
+			status: "starting", sessionId: spec.sessionId, sessionFile: spec.sessionFile, cwd, workspace: "shared", branch: null, createdAt: now, updatedAt: now, repo: repoName(cwd),
+		};
+		this.store.insertNode(node);
+		const runtime = this.foregroundRuntime(clientId);
+		this.runtimes.set(id, runtime);
+		this.emit("node", node);
+		return { node, env: this.nodeEnv(node, runtime.token) };
+	}
+
+	/** Supply sharing, so the pane can show people and run handoffs. */
+	setSharing(sharing: SharingPort | undefined): void {
+		this.sharing = sharing;
+		sharing?.onChanged(() => this.notifyUi());
+	}
+
+	/** Run a sharing action by name, as the pane does. */
+	async runSharing(action: string, args: string[]): Promise<string> {
+		if (!this.sharing) throw new Error("Sharing is not available in this host.");
+		return this.sharing.run(action, args);
+	}
+
+	/** How busy the host is, for deciding when a background host may exit. */
+	activity(): { terminals: number; working: number } {
+		return { terminals: this.uiClients.size, working: [...this.runtimes.values()].filter((runtime) => runtime.proc && (runtime.streaming || runtime.dialogs.size > 0)).length };
+	}
+
+	/** Tell every connected terminal that what the pane shows has changed. Coalesced. */
+	private notifyUi(): void {
+		if (this.notifyTimer || this.stopped) return;
+		this.notifyTimer = setTimeout(() => {
+			this.notifyTimer = undefined;
+			for (const client of this.uiClients.values()) client.send({ t: "event", kind: "changed" });
+		}, 40);
+		this.notifyTimer.unref();
+	}
+
+	uiState(): UiState {
+		const attention: UiState["attention"] = {};
+		const bump = (id: string, key: "dialogs" | "pending", by: number): void => {
+			const entry = attention[id] ?? { dialogs: 0, pending: 0 };
+			entry[key] += by;
+			attention[id] = entry;
+		};
+		for (const [id, runtime] of this.runtimes) if (runtime.dialogs.size > 0) bump(id, "dialogs", runtime.dialogs.size);
+		for (const record of this.pendingMail()) bump(record.recipient, "pending", 1);
+		return {
+			owner: this.owner,
+			nodes: this.store.listNodes(),
+			attention,
+			foreground: [...this.runtimes].filter(([, runtime]) => runtime.foreground).map(([id]) => id),
+			sharing: this.sharing?.state() ?? null,
+		};
+	}
+
+	private async onUi<K extends UiMethod>(connection: Connection, method: K, params: UiApi[K]["params"]): Promise<UiApi[UiMethod]["result"]> {
+		const p = params as never;
+		const call = <M extends UiMethod>(_method: M): UiApi[M]["params"] => p;
+		switch (method) {
+			case "state":
+				return this.uiState();
+			case "attach":
+				return this.attachForeground(call("attach").nodeId, connection.id);
+			case "detach":
+				this.detachForeground(call("detach").nodeId, connection.id);
+				return {};
+			case "adopt":
+				return this.adoptSession(call("adopt"), connection.id);
+			case "spawn":
+				return { node: await this.spawnChild(call("spawn").parentId, call("spawn").spec) };
+			case "status": {
+				const { nodeId, streaming } = call("status");
+				const runtime = this.runtimes.get(nodeId);
+				if (runtime?.foreground === connection.id) {
+					runtime.streaming = streaming;
+					runtime.lastActive = Date.now();
+					this.refresh(nodeId, runtime);
+				}
+				return {};
+			}
+			case "pendingMail":
+				return { mail: this.pendingMail().map((record) => ({ nodeId: record.recipient, envelope: record.envelope })) };
+			case "decideMail": {
+				const { nodeId, envelopeId, action } = call("decideMail");
+				await this.decideMail(nodeId, envelopeId, action);
+				return {};
+			}
+			case "dialogs":
+				return { dialogs: this.dialogs(call("dialogs").nodeId) };
+			case "answerDialog": {
+				const { nodeId, dialogId, answer } = call("answerDialog");
+				this.answerDialog(nodeId, dialogId, answer);
+				return {};
+			}
+			case "sleep":
+				await this.sleep(call("sleep").nodeId);
+				return {};
+			case "messages": {
+				const node = this.must(call("messages").nodeId);
+				if (node.owner === this.owner) return { messages: await this.readMessages(node.id) };
+				if (!this.sharing) throw new Error(`"${node.name}" belongs to ${node.owner}, and this tree is not being shared right now.`);
+				return { messages: await this.sharing.fetchMessages(node.id) };
+			}
+			case "sharing":
+				return { text: await this.runSharing(call("sharing").action, call("sharing").args) };
+			case "shutdown":
+				setTimeout(() => this.emit("log", "info", "shutdown requested"), 0);
+				this.shutdownRequested = true;
+				return {};
+			default:
+				throw new Error(`Unknown request "${String(method)}".`);
+		}
+	}
+
+	/** Set when a terminal asked the host to stop. Whoever runs the host acts on it. */
+	shutdownRequested = false;
+
 	// --- human interaction -----------------------------------------------------
 
 	/**
@@ -479,11 +697,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	 */
 	async prompt(id: string, message: string, whenBusy: "steer" | "followUp" = "followUp"): Promise<void> {
 		await this.ensureRunning(id);
+		const proc = this.headless(id);
 		const runtime = this.runtimes.get(id);
-		if (!runtime) throw new Error(`Session ${id} is not running.`);
-		const result = await runtime.proc.request<{ disposition?: string } | undefined>({ type: "prompt", message, streamingBehavior: whenBusy });
+		const result = await proc.request<{ disposition?: string } | undefined>({ type: "prompt", message, streamingBehavior: whenBusy });
 		// A run has been accepted; reflect it now instead of waiting for the agent_start event.
-		if (result?.disposition === "started" && this.runtimes.get(id) === runtime) {
+		if (result?.disposition === "started" && runtime && this.runtimes.get(id) === runtime) {
 			runtime.streaming = true;
 			this.refresh(id, runtime);
 		}
@@ -491,14 +709,20 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 
 	/** Stop the agent's current work in a node. */
 	async abort(id: string): Promise<void> {
-		await this.runtimes.get(id)?.proc.request({ type: "abort" });
+		await this.runtimes.get(id)?.proc?.request({ type: "abort" });
+	}
+
+	/** The headless process of a node, or a clear error when it is not running or is open in a terminal. */
+	private headless(id: string): PiProcess {
+		const runtime = this.runtimes.get(id);
+		if (!runtime) throw new Error(`Session ${id} is not running.`);
+		if (!runtime.proc) throw new Error(`"${this.store.getNode(id)?.name ?? id}" is open in a terminal. Talk to it there.`);
+		return runtime.proc;
 	}
 
 	/** Send any Pi RPC command to a running node, for example `get_messages` or `get_state`. */
 	async rpc<T = unknown>(id: string, command: RpcRecord): Promise<T> {
-		const runtime = this.runtimes.get(id);
-		if (!runtime) throw new Error(`Session ${id} is not running.`);
-		return runtime.proc.request<T>(command);
+		return this.headless(id).request<T>(command);
 	}
 
 	/**
@@ -507,9 +731,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	 * live event stream without losing or repeating anything.
 	 */
 	async rpcMarked<T = unknown>(id: string, command: RpcRecord): Promise<{ data: T; mark: number }> {
-		const runtime = this.runtimes.get(id);
-		if (!runtime) throw new Error(`Session ${id} is not running.`);
-		return runtime.proc.requestMarked<T>(command);
+		return this.headless(id).requestMarked<T>(command);
 	}
 
 	/**
@@ -518,7 +740,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	 */
 	async readMessages(id: string): Promise<RpcRecord[]> {
 		const runtime = this.runtimes.get(id);
-		if (runtime?.channels.has("a2a")) {
+		if (runtime?.proc && runtime.channels.has("a2a")) {
 			const { messages } = await runtime.proc.request<{ messages: RpcRecord[] }>({ type: "get_messages" });
 			return messages;
 		}
@@ -531,7 +753,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	/** Answer a dialog a node is blocked on. Nothing answers dialogs automatically. */
 	answerDialog(id: string, dialogId: string, answer: { value?: string; confirmed?: boolean; cancelled?: boolean }): void {
 		const runtime = this.runtimes.get(id);
-		if (!runtime?.dialogs.has(dialogId)) throw new Error(`No open dialog ${dialogId} on session ${id}.`);
+		if (!runtime?.proc || !runtime.dialogs.has(dialogId)) throw new Error(`No open dialog ${dialogId} on session ${id}.`);
 		runtime.proc.respondUI(dialogId, answer);
 		runtime.dialogs.delete(dialogId);
 		this.refresh(id, runtime);
@@ -549,6 +771,10 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	// --- broker ----------------------------------------------------------------
 
 	private onHello(connection: Connection, hello: Hello): void {
+		if (connection.channel === "ui") {
+			this.uiClients.set(connection.id, connection);
+			return;
+		}
 		const runtime = this.runtimes.get(connection.nodeId);
 		if (!runtime) {
 			connection.close();
@@ -587,6 +813,12 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	}
 
 	private async onRequest(connection: Connection, op: RequestOp, params: unknown): Promise<unknown> {
+		if (connection.channel === "ui") {
+			if (op !== "ui") throw new Error(`Unknown request "${String(op)}".`);
+			const call = params as { method: UiMethod; params: unknown };
+			return this.onUi(connection, call.method, call.params as never);
+		}
+		if (op === "ui") throw new Error("That request is only for a person's own terminal.");
 		const self = this.must(connection.nodeId);
 		switch (op) {
 			case "send":
@@ -673,7 +905,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	}
 
 	/** Record or refresh a node that someone else owns. It appears in the tree but cannot be run here. */
-	importRemoteNode(remote: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt">): void {
+	importRemoteNode(remote: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt" | "repo">): void {
 		if (remote.owner === this.owner) throw new Error("importRemoteNode is for nodes owned by someone else.");
 		const existing = this.store.getNode(remote.id);
 		if (!existing) {
@@ -689,6 +921,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			this.update(remote.id, {
 				parentId: remote.parentId, kind: remote.kind, name: remote.name, brief: remote.brief, fragments: remote.fragments, owner: remote.owner,
 				version: remote.version, status: remote.status, workspace: remote.workspace, branch: remote.branch,
+				...(remote.repo !== undefined ? { repo: remote.repo } : {}),
 			});
 		}
 	}
@@ -728,7 +961,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 		return this.update(id, {
 			owner: this.owner, version: options.version, cwd: resolve(options.cwd), branch: options.branch, workspace: options.workspace,
-			sessionFile: null, sessionId: null, status: "dormant",
+			sessionFile: null, sessionId: null, status: "dormant", repo: repoName(options.cwd),
 		});
 	}
 
@@ -738,13 +971,16 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	async stop(): Promise<void> {
 		if (this.stopped) return;
 		this.stopped = true;
-		await Promise.all([...this.runtimes.values()].map((runtime) => runtime.proc.stop()));
+		if (this.notifyTimer) clearTimeout(this.notifyTimer);
+		await Promise.all([...this.runtimes.values()].map((runtime) => runtime.proc?.stop()));
 		await this.server.close();
 		this.store.close();
-		try {
-			unlinkSync(join(this.stateDir, "host.lock"));
-		} catch {
-			// Already gone.
+		for (const name of ["host.lock", "ui.token", "host.json"]) {
+			try {
+				unlinkSync(join(this.stateDir, name));
+			} catch {
+				// Already gone.
+			}
 		}
 	}
 }

@@ -4,6 +4,8 @@ import { createServer, type Server, type Socket } from "node:net";
 import { type Channel, type ClientFrame, type Envelope, encodeFrame, FrameDecoder, type HostFrame, type InboundState, type RequestOp } from "@pi-lattice/protocol";
 
 export interface Connection {
+	/** Unique per connection. */
+	readonly id: string;
 	readonly nodeId: string;
 	readonly channel: Channel;
 	send(frame: HostFrame): void;
@@ -13,8 +15,8 @@ export interface Connection {
 export type Hello = Extract<ClientFrame, { t: "hello" }>;
 
 export interface SocketHandlers {
-	/** Whether this token belongs to this node. Anything else is dropped without a reply. */
-	authenticate(token: string, nodeId: string): boolean;
+	/** Whether this hello carries a valid token for what it claims to be. Anything else is dropped without a reply. */
+	authenticate(hello: Hello): boolean;
 	onHello(connection: Connection, hello: Hello): void;
 	onRequest(connection: Connection, op: RequestOp, params: unknown): Promise<unknown>;
 	onAck(connection: Connection, envelopeId: string): void;
@@ -29,6 +31,7 @@ export class SocketServer {
 	private readonly handlers: SocketHandlers;
 	private server: Server | undefined;
 	private readonly sockets = new Set<Socket>();
+	private counter = 0;
 
 	constructor(path: string, handlers: SocketHandlers) {
 		this.path = path;
@@ -64,12 +67,13 @@ export class SocketServer {
 			for (const raw of frames) {
 				const frame = raw as ClientFrame;
 				if (!connection) {
-					if (frame?.t !== "hello" || typeof frame.token !== "string" || typeof frame.nodeId !== "string" || !this.handlers.authenticate(frame.token, frame.nodeId)) {
+					if (frame?.t !== "hello" || typeof frame.token !== "string" || typeof frame.nodeId !== "string" || !this.handlers.authenticate(frame)) {
 						socket.destroy();
 						return;
 					}
 					clearTimeout(helloTimer);
 					const established: Connection = {
+						id: `c${++this.counter}`,
 						nodeId: frame.nodeId,
 						channel: frame.channel,
 						send: (out) => {

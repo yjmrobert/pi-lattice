@@ -1,7 +1,7 @@
 /** Workspaces for nodes: the parent's directory, or a git worktree of the node's own (ADR 0010). */
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const git = (cwd: string, ...args: string[]): string =>
 	execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -57,4 +57,14 @@ export function createWorktree(parentCwd: string, nodeId: string, name: string):
 	const inside = relative(top, parentCwd);
 	const cwd = inside && !inside.startsWith("..") ? join(path, inside) : path;
 	return { cwd: existsSync(cwd) ? cwd : path, branch };
+}
+
+/** A short name for the repository a directory belongs to: the main checkout's folder name, else the directory's own. */
+export function repoName(cwd: string): string {
+	try {
+		const common = git(cwd, "rev-parse", "--git-common-dir");
+		return basename(dirname(isAbsolute(common) ? common : resolve(cwd, common)));
+	} catch {
+		return basename(resolve(cwd));
+	}
 }

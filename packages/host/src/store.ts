@@ -65,6 +65,7 @@ const MIGRATIONS: string[] = [
 		PRIMARY KEY (envelope_id, recipient)
 	);
 	CREATE INDEX journal_recipient ON journal (recipient, acked);`,
+	"ALTER TABLE nodes ADD COLUMN repo TEXT;",
 ];
 
 type Row = Record<string, string | number | null>;
@@ -87,6 +88,7 @@ const toNode = (row: Row): NodeMeta => ({
 	branch: row.branch as string | null,
 	createdAt: row.created_at as string,
 	updatedAt: row.updated_at as string,
+	...(typeof row.repo === "string" ? { repo: row.repo } : {}),
 });
 
 export class SqliteStore implements Store {
@@ -118,12 +120,12 @@ export class SqliteStore implements Store {
 	insertNode(node: NodeMeta): void {
 		this.db
 			.prepare(
-				`INSERT INTO nodes (id, parent_id, root_id, kind, name, brief, fragments, owner, version, status, session_id, session_file, cwd, workspace, branch, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO nodes (id, parent_id, root_id, kind, name, brief, fragments, owner, version, status, session_id, session_file, cwd, workspace, branch, created_at, updated_at, repo)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				node.id, node.parentId, node.rootId, node.kind, node.name, node.brief, JSON.stringify(node.fragments), node.owner, node.version,
-				node.status, node.sessionId, node.sessionFile, node.cwd, node.workspace, node.branch, node.createdAt, node.updatedAt,
+				node.status, node.sessionId, node.sessionFile, node.cwd, node.workspace, node.branch, node.createdAt, node.updatedAt, node.repo ?? null,
 			);
 	}
 
@@ -134,11 +136,11 @@ export class SqliteStore implements Store {
 		this.db
 			.prepare(
 				`UPDATE nodes SET parent_id = ?, root_id = ?, kind = ?, name = ?, brief = ?, fragments = ?, owner = ?, version = ?, status = ?,
-				 session_id = ?, session_file = ?, cwd = ?, workspace = ?, branch = ?, updated_at = ? WHERE id = ?`,
+				 session_id = ?, session_file = ?, cwd = ?, workspace = ?, branch = ?, updated_at = ?, repo = ? WHERE id = ?`,
 			)
 			.run(
 				next.parentId, next.rootId, next.kind, next.name, next.brief, JSON.stringify(next.fragments), next.owner, next.version, next.status,
-				next.sessionId, next.sessionFile, next.cwd, next.workspace, next.branch, next.updatedAt, id,
+				next.sessionId, next.sessionFile, next.cwd, next.workspace, next.branch, next.updatedAt, next.repo ?? null, id,
 			);
 		return next;
 	}
