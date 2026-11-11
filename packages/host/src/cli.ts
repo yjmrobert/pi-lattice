@@ -4,6 +4,7 @@ import { basename, join, resolve } from "node:path";
 import { parseArgs, USAGE } from "./args.ts";
 import { LatticeHost } from "./host.ts";
 import { runPlain } from "./plain.ts";
+import { TreeApp } from "./ui/app.ts";
 
 async function main(): Promise<number> {
 	let options: ReturnType<typeof parseArgs>;
@@ -38,7 +39,13 @@ async function main(): Promise<number> {
 				...(options.kind !== undefined ? { kind: options.kind } : {}),
 				...(options.brief !== undefined ? { brief: options.brief } : {}),
 			}));
-		await runPlain(host, root.id, process.stdin, process.stdout);
+		if (options.plain || !process.stdout.isTTY || !process.stdin.isTTY) {
+			await runPlain(host, root.id, process.stdin, process.stdout);
+		} else {
+			const app = new TreeApp({ host, rootId: root.id });
+			app.start();
+			await app.done;
+		}
 		return 0;
 	} finally {
 		await shutdown();
