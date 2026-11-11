@@ -1,0 +1,19 @@
+{
+  "name": "@pi-lattice/pane",
+  "version": "0.1.0",
+  "description": "The pi-lattice session tree inside Pi: a left pane listing sessions with owner and repository, and commands to open, create, approve and share.",
+  "type": "module",
+  "keywords": ["pi-package", "pi", "multi-agent", "session-tree"],
+  "files": ["src", "README.md"],
+  "exports": { ".": "./src/index.ts", "./package.json": "./package.json" },
+  "pi": { "extensions": ["./src/extension.ts"] },
+  "dependencies": {
+    "@pi-lattice/host": "0.1.0",
+    "@pi-lattice/protocol": "0.1.0"
+  },
+  "bundledDependencies": ["@pi-lattice/protocol", "@pi-lattice/host"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
