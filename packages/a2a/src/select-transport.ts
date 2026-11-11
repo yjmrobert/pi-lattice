@@ -1,20 +1,16 @@
-import { HOST_ENV } from "@pi-lattice/protocol";
+import type { HostAssignment } from "@pi-lattice/protocol";
 import { FileTransport } from "./file-transport.ts";
 import { HostTransport } from "./host-transport.ts";
 import type { SelfInfo, Transport } from "./transport.ts";
 
-type Env = Record<string, string | undefined>;
-
 /**
- * Choose the transport for this session. Decided once at session start (ADR 0009):
- * the host broker when a host spawned us and is reachable, otherwise the local file spool.
+ * Choose the transport for a node (ADR 0009): the host's broker when a host has assigned
+ * this session a node and is reachable, otherwise the local file spool.
  */
-export async function selectTransport(home: string, self: SelfInfo, env: Env = process.env): Promise<Transport> {
-	const socketPath = env[HOST_ENV.socket];
-	const token = env[HOST_ENV.token];
-	if (socketPath && token) {
+export async function selectTransport(home: string, self: SelfInfo, assignment: HostAssignment | undefined): Promise<Transport> {
+	if (assignment) {
 		try {
-			return await HostTransport.connect({ socketPath, token, self, sessionId: self.sessionId, sessionFile: self.sessionFile });
+			return await HostTransport.connect({ socketPath: assignment.socket, token: assignment.token, self, sessionId: self.sessionId, sessionFile: self.sessionFile });
 		} catch {
 			// Host unreachable: fall back to the file spool so local messaging keeps working.
 		}

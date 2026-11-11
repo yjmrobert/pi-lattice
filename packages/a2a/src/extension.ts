@@ -11,9 +11,11 @@ import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	type ApprovalPolicy,
+	assignmentFromEnv,
 	createEnvelope,
 	emitEvent,
 	type Envelope,
+	type HostAssignment,
 	isAddress,
 	isApprovalPolicy,
 	isId,
@@ -21,6 +23,7 @@ import {
 	onEvent,
 	PROTOCOL_VERSION,
 	requiresApproval,
+	sameAssignment,
 	transitionInbound,
 	validateEnvelope,
 } from "@pi-lattice/protocol";
@@ -37,6 +40,10 @@ const MESSAGE_TYPE = "lattice-a2a";
 const NODE_ENTRY = "lattice:node";
 
 interface Active {
+	/** Where this node's mailbox lives. */
+	home: string;
+	/** The host assignment in effect, when a host owns this node. */
+	assignment: HostAssignment | undefined;
 	nodeId: string;
 	owner: string;
 	name: string;
@@ -78,7 +85,6 @@ interface SendInput {
 }
 
 export default function a2aExtension(pi: ExtensionAPI): void {
-	const home = latticeHome();
 	const limits = limitsFromEnv(process.env);
 	const rate = new RateLimiter(limits.maxSendsPerMinute);
 
@@ -220,9 +226,18 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 
 	// --- lifecycle -------------------------------------------------------------
 
-	pi.on("session_start", async (event, ctx) => {
-		emitEvent(pi.events, "lattice:hello", { package: "a2a", protocol: PROTOCOL_VERSION });
+	/** The session this instance serves, once it has started. */
+	let session: { ctx: ExtensionContext; reason: "startup" | "reload" | "new" | "resume" | "fork"; previous: string | undefined } | undefined;
+	/** A host assignment received by event. Undefined means nobody has said; null means released. */
+	let assigned: HostAssignment | null | undefined;
+	/** Binding and unbinding never overlap. */
+	let binding: Promise<void> = Promise.resolve();
 
+	/** Start speaking as a node: the host's, when assigned one, otherwise this session's own. */
+	const bind = async (assignment: HostAssignment | undefined): Promise<void> => {
+		const current = session;
+		if (!current) return;
+		const { ctx } = current;
 		let recorded: string | undefined;
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type === "custom" && entry.customType === NODE_ENTRY) {
@@ -230,20 +245,27 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 				if (typeof id === "string") recorded = id;
 			}
 		}
-		// /new and /fork keep the worker's address (ADR 0004): prefer the id of the session being left.
-		const previous = recordedIn(event.previousSessionFile) ?? held[HELD];
-		const identity = resolveIdentity({ home, assigned: process.env.LATTICE_NODE_ID, held: previous, recorded, reason: event.reason });
+		// A node's mailbox lives with whoever owns the tree, so every session speaking as it shares one.
+		const home = assignment?.home ?? latticeHome();
+		const identity = resolveIdentity({ home, assigned: assignment?.nodeId, held: current.previous, recorded, reason: current.reason });
 		held[HELD] = identity.nodeId;
 		if (recorded !== identity.nodeId) pi.appendEntry(NODE_ENTRY, { nodeId: identity.nodeId });
 
-		const owner = process.env.LATTICE_OWNER ?? userInfo().username;
-		const name = process.env.LATTICE_NODE_NAME ?? pi.getSessionName() ?? basename(ctx.cwd);
+		const owner = assignment?.owner ?? process.env.LATTICE_OWNER ?? userInfo().username;
+		const name = assignment?.name ?? process.env.LATTICE_NODE_NAME ?? pi.getSessionName() ?? basename(ctx.cwd);
 		const store = new MailStore(nodeDir(home, identity.nodeId));
-		const transport = await selectTransport(home, {
-			id: identity.nodeId, name, owner, cwd: ctx.cwd,
-			sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile(),
-		});
-		active = { nodeId: identity.nodeId, owner, name, store, transport, ctx };
+		const transport = await selectTransport(
+			home,
+			{ id: identity.nodeId, name, owner, cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), sessionFile: ctx.sessionManager.getSessionFile() },
+			assignment,
+		);
+		if (session !== current) {
+			// The session ended while we were connecting. Its objects are stale; let go and stop.
+			await transport.close();
+			releaseNode(home, identity.nodeId);
+			return;
+		}
+		active = { nodeId: identity.nodeId, owner, name, store, transport, ctx, home, assignment };
 		cause = undefined;
 
 		// Finish deliveries a crash interrupted between approval and delivery.
@@ -255,14 +277,46 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 		await transport.subscribe(handleInbound);
 		refreshStatus();
 		emitEvent(pi.events, "lattice:node:ready", { nodeId: identity.nodeId, owner, name, hosted: transport.kind === "host" });
-	});
+	};
 
-	pi.on("session_shutdown", async () => {
+	const unbind = async (): Promise<void> => {
 		const state = active;
 		active = undefined;
 		if (!state) return;
 		await state.transport.close();
-		releaseNode(home, state.nodeId);
+		releaseNode(state.home, state.nodeId);
+	};
+
+	const queue = (work: () => Promise<void>): Promise<void> => {
+		// A failed bind must not poison later ones, nor surface as an unhandled rejection.
+		binding = binding.then(work, work).catch(() => {});
+		return binding;
+	};
+
+	pi.on("session_start", async (event, ctx) => {
+		emitEvent(pi.events, "lattice:hello", { package: "a2a", protocol: PROTOCOL_VERSION });
+		// /new and /fork keep the worker's address (ADR 0004): prefer the id of the session being left.
+		session = { ctx, reason: event.reason, previous: recordedIn(event.previousSessionFile) ?? held[HELD] };
+		// An assignment may already have arrived by event; otherwise a host that started us put one in the environment.
+		await queue(() => bind(assigned !== undefined ? (assigned ?? undefined) : assignmentFromEnv(process.env)));
+	});
+
+	// Whoever opens a node in this session says so here. It can arrive before or after our own start.
+	onEvent(pi.events, "lattice:host:assigned", ({ assignment }) => {
+		assigned = assignment;
+		if (!session) return; // not started yet: session_start will use it
+		void queue(async () => {
+			if (active && sameAssignment(active.assignment, assignment)) return;
+			await unbind();
+			if (!session) return;
+			session = { ...session, previous: held[HELD] };
+			await bind(assignment ?? undefined);
+		});
+	});
+
+	pi.on("session_shutdown", async () => {
+		session = undefined;
+		await queue(unbind);
 	});
 
 	pi.on("before_agent_start", async (event) => {
@@ -283,6 +337,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 	});
 
 	onEvent(pi.events, "lattice:a2a:send", (request) => {
+		if (!session) return; // the bus outlives a session switch; a finished instance stays quiet
 		void send({ to: request.to, text: request.text, intent: request.intent, replyTo: request.inReplyTo, data: request.data }).then((result) => {
 			emitEvent(
 				pi.events,
