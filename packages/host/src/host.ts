@@ -16,6 +16,7 @@ import {
 	DEFAULT_LIMITS,
 	depthOf,
 	type Envelope,
+	HANDOVER_NOTE,
 	HOST_ENV,
 	type HostAssignment,
 	type InboundState,
@@ -517,13 +518,15 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	 * session file can only be driven by one process. Returns what that terminal needs to
 	 * open the session and speak as the node.
 	 */
-	async attachForeground(id: string, clientId: string): Promise<{ node: NodeMeta; sessionFile: string; assignment: HostAssignment }> {
+	async attachForeground(id: string, clientId: string): Promise<{ node: NodeMeta; sessionFile: string; assignment: HostAssignment; wasWorking: boolean }> {
 		let node = this.must(id);
 		if (node.owner !== this.owner) throw new Error(`"${node.name}" is owned by ${node.owner} and runs on their machine.`);
 		await this.starting.get(id)?.catch(() => {});
 		let runtime = this.runtimes.get(id);
 		if (runtime?.foreground && runtime.foreground !== clientId) throw new Error(`"${node.name}" is already open in another terminal.`);
+		let wasWorking = false;
 		if (runtime?.proc) {
+			wasWorking = runtime.streaming;
 			await runtime.proc.request({ type: "abort" }).catch(() => {});
 			await runtime.proc.stop();
 			runtime = undefined;
@@ -541,16 +544,27 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			this.runtimes.set(id, runtime);
 			this.update(id, { status: "starting" });
 		}
-		return { node: this.must(id), sessionFile: node.sessionFile, assignment: this.assignment(node, runtime.token) };
+		return { node: this.must(id), sessionFile: node.sessionFile, assignment: this.assignment(node, runtime.token), wasWorking };
 	}
 
-	/** A terminal gives a node back. The host runs it headless again when it has mail waiting. */
-	detachForeground(id: string, clientId: string): void {
+	/**
+	 * A terminal gives a node back. Normally it sleeps until it has mail. With `resume`, its
+	 * agent was mid-turn when the person left, so the host runs it headless at once and tells
+	 * it to carry on: switching away from a working session does not stop the work.
+	 */
+	detachForeground(id: string, clientId: string, resume = false): void {
 		const runtime = this.runtimes.get(id);
 		if (!runtime || runtime.foreground !== clientId) return;
 		this.runtimes.delete(id);
 		for (const connection of runtime.channels.values()) connection.close();
 		if (this.store.getNode(id)) this.update(id, { status: "dormant" });
+		if (resume && this.store.getNode(id) && !this.stopped) {
+			this.ensureRunning(id)
+				.then(() => this.prompt(id, HANDOVER_NOTE))
+				.catch((error: unknown) => {
+					this.emit("log", "warn", `"${this.store.getNode(id)?.name ?? id}" could not carry on in the background: ${error instanceof Error ? error.message : String(error)}`);
+				});
+		}
 		this.wakeQueued();
 	}
 
@@ -560,7 +574,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const now = new Date().toISOString();
 		const cwd = resolve(spec.cwd);
 		const node: NodeMeta = {
-			id, parentId: null, rootId: id, kind: "feature", name: clean(spec.name, id), brief: "", fragments: spec.fragments ?? [], owner: this.owner, version: 1,
+			id, parentId: null, rootId: id, kind: spec.kind?.trim() || "session", name: clean(spec.name, id), brief: "", fragments: spec.fragments ?? [], owner: this.owner, version: 1,
 			status: "starting", sessionId: spec.sessionId, sessionFile: spec.sessionFile, cwd, workspace: "shared", branch: null, createdAt: now, updatedAt: now, repo: repoName(cwd),
 		};
 		this.store.insertNode(node);
@@ -624,7 +638,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			case "attach":
 				return this.attachForeground(call("attach").nodeId, connection.id);
 			case "detach":
-				this.detachForeground(call("detach").nodeId, connection.id);
+				this.detachForeground(call("detach").nodeId, connection.id, call("detach").resume === true);
 				return {};
 			case "adopt":
 				return this.adoptSession(call("adopt"), connection.id);
