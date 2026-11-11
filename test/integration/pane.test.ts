@@ -350,6 +350,15 @@ describe("the tree inside Pi", () => {
 		const seen = pi.notifications().length;
 		await pi.command("/lattice peers");
 		await pi.waitFor(() => pi.notifications().length > seen, "the forwarded command to answer");
+
+		// Every command the help lists is one the completions offer, and none fails without a word.
+		for (const usage of help.split("\n").slice(1, -1)) expect(help).toContain(usage.trim().split(" ")[0] as string);
+		await pi.command("/lattice sleep nobody");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes('No session "nobody" in any tree here.')), "the word about a session that does not exist");
+		await pi.command("/lattice answer work");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes('"work" is not waiting on a question.')), "the word about there being nothing to answer");
+		await pi.command("/lattice nonsense");
+		await pi.waitFor(() => pi.notifications().filter((text) => text.startsWith("/lattice, then:")).length === 2, "the command list for a command that does not exist");
 	}, 120_000);
 
 	it("creates a child through Pi's own dialogs", async () => {

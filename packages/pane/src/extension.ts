@@ -1325,37 +1325,94 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		ctx.ui.notify(lines.join("\n"), failed ? "warning" : "info");
 	};
 
-	const COMMANDS: ReadonlyArray<readonly [name: string, does: string]> = [
-		["open <session>", "open a session here, from any repository"],
-		["back", "return to the session you were in before"],
-		["new [session]", "create a child session"],
-		["rename <session> [name]", "rename a session"],
-		["interrupt <session>", "stop what a session's agent is doing"],
-		["sleep <session>", "stop a background session's process until it has work"],
-		["archive <session>", "hide a session and everything under it"],
-		["restore [session]", "bring archived sessions back"],
-		["answer <session>", "answer the questions a session is waiting on"],
-		["approvals", "review messages waiting for approval"],
-		["share", "pair with someone, offer or accept a session"],
-		["status", "list the tree"],
-		["config [user] [setting] [value]", "show or change the settings, for this repository or for all of yours"],
-		["prompt", "show what this session is told beyond what you type, and where each part comes from"],
-		["template [name] [user|repo]", "list or edit the texts pi-lattice writes: the brief, the handover note, the reminders"],
-		["doctor", "check that everything the pane needs is working"],
-		["restart", "restart this repository's background host"],
-		["stop", "stop this repository's background host"],
-		["inbox · role · peers · node · children", "the other lattice commands, also reachable here"],
+	/** Show the tree as text, for a terminal where the pane cannot be shown. */
+	const status = async (ctx: ExtensionCommandContext): Promise<void> => {
+		await refresh();
+		const state = homeLink()?.state;
+		ctx.ui.notify(
+			state
+				? [`Tree of ${state.nodes.length} session${state.nodes.length === 1 ? "" : "s"}, as ${state.owner}. Open here: ${shared.current ? name(shared.current) : "none"}.`, ...renderCompact(view(), 30), "alt+l focuses the pane · /lattice new · /lattice approvals · /lattice share"].join("\n")
+				: "No session tree here yet. Run /lattice to start one.",
+			"info",
+		);
+	};
+
+	/** Stop this repository's host. Its sessions are kept and come back when it next starts. */
+	const stop = async (ctx: ExtensionCommandContext): Promise<void> => {
+		const client = need(ctx);
+		if (!client) return;
+		await attach(undefined);
+		emitEvent(pi.events, "lattice:host:assigned", { assignment: null });
+		await client.ui("shutdown", {}).catch(() => {});
+		client.close();
+		if (shared.home) shared.links.delete(shared.home);
+		redraw();
+		ctx.ui.notify("The lattice host is stopping. Sessions are saved and come back with /lattice.", "info");
+	};
+
+	/**
+	 * Everything `/lattice` does, in the order `/lattice help` lists it. The completions, the help
+	 * and what runs all come from this one table, so a command cannot be in one and not another.
+	 */
+	const COMMANDS: ReadonlyArray<{ name: string; usage?: string; does: string; run(ctx: ExtensionCommandContext, arg: string): Promise<void> | void }> = [
+		{ name: "open", usage: "open <session>", does: "open a session here, from any repository", run: (ctx, arg) => open(ctx, arg) },
+		{
+			name: "back", does: "return to the session you were in before",
+			run: (ctx) => (shared.previous ? open(ctx, shared.previous) : ctx.ui.notify("There is no earlier session to go back to.", "info")),
+		},
+		{ name: "new", usage: "new [session]", does: "create a child session", run: (ctx, arg) => create(ctx, arg) },
+		{ name: "rename", usage: "rename <session> [name]", does: "rename a session", run: (ctx, arg) => rename(ctx, arg) },
+		{ name: "interrupt", usage: "interrupt <session>", does: "stop what a session's agent is doing", run: (ctx, arg) => interrupt(ctx, arg) },
+		{
+			name: "sleep", usage: "sleep <session>", does: "stop a background session's process until it has work",
+			run: async (ctx, arg) => {
+				await refresh();
+				const node = named(ctx, arg);
+				if (!node) return;
+				await linkOf(node.id)?.client.ui("sleep", { nodeId: node.id });
+				ctx.ui.notify(`"${node.name}" is asleep. It wakes when it has work, or when you open it.`, "info");
+			},
+		},
+		{ name: "archive", usage: "archive <session>", does: "hide a session and everything under it", run: (ctx, arg) => archive(ctx, arg) },
+		{ name: "restore", usage: "restore [session]", does: "bring archived sessions back", run: (ctx, arg) => restore(ctx, arg) },
+		{
+			name: "answer", usage: "answer <session>", does: "answer the questions a session is waiting on",
+			run: async (ctx, arg) => {
+				await refresh();
+				const node = named(ctx, arg);
+				if (!node) return;
+				const waiting = linkOf(node.id)?.state?.attention[node.id]?.dialogs ?? 0;
+				if (waiting === 0) ctx.ui.notify(`"${node.name}" is not waiting on a question.`, "info");
+				else await answer(ctx, node);
+			},
+		},
+		{ name: "approvals", does: "review messages waiting for approval", run: (ctx) => approvals(ctx) },
+		{ name: "share", does: "pair with someone, offer or accept a session", run: (ctx, arg) => share(ctx, arg) },
+		{ name: "status", does: "list the tree", run: (ctx) => status(ctx) },
+		{ name: "config", usage: "config [user] [setting] [value]", does: "open the settings, or show or change one, for this repository or for all of yours", run: (ctx, arg) => configure(ctx, arg) },
+		{ name: "prompt", does: "show what this session is told beyond what you type, and where each part comes from", run: (ctx) => prompt(ctx) },
+		{ name: "template", usage: "template [name] [user|repo]", does: "list or edit the texts pi-lattice writes: the brief, the handover note, the reminders", run: (ctx, arg) => template(ctx, arg) },
+		{ name: "doctor", does: "check that everything the pane needs is working", run: (ctx) => doctor(ctx) },
+		{ name: "restart", does: "restart this repository's background host", run: (ctx) => restart(ctx) },
+		{ name: "stop", does: "stop this repository's background host", run: (ctx) => stop(ctx) },
+		// The other lattice commands answer here too, so there is one name to remember.
+		...(["inbox", "role", "peers", "node", "children"] as const).map((other) => ({
+			name: other, usage: `${other} …`, does: `the same as /${other}`,
+			run: (_ctx: ExtensionCommandContext, arg: string) => dispatch(`/${other} ${arg}`.trim()),
+		})),
 	];
-	const FORWARDED = ["inbox", "role", "peers", "node", "children"];
-	const SUBCOMMANDS = ["open", "back", "new", "rename", "interrupt", "sleep", "archive", "restore", "answer", "approvals", "share", "status", "config", "prompt", "template", "doctor", "restart", "stop", "help", ...FORWARDED];
+	const help = (ctx: ExtensionCommandContext, level: "info" | "warning"): void => {
+		const width = Math.max(...COMMANDS.map((command) => (command.usage ?? command.name).length));
+		ctx.ui.notify(["/lattice, then:", ...COMMANDS.map((command) => `  ${(command.usage ?? command.name).padEnd(width)}  ${command.does}`), "With the pane focused (alt+l), ? lists its keys."].join("\n"), level);
+	};
 
 	pi.registerCommand("lattice", {
 		description: "Session tree. /lattice help lists everything it does",
 		getArgumentCompletions: (prefix) => {
 			const words = prefix.split(/\s+/);
 			if (words.length <= 1) {
-				const matches = SUBCOMMANDS.filter((sub) => sub.startsWith(words[0] ?? ""));
-				return matches.length > 0 ? matches.map((sub) => ({ value: sub, label: sub })) : null;
+				const matches = [...COMMANDS, { name: "help", does: "list every command" }].filter((command) => command.name.startsWith(words[0] ?? ""));
+				return matches.length > 0 ? matches.map((command) => ({ value: command.name, label: command.name, description: command.does })) : null;
 			}
 			const matches = everyNode().filter((node) => node.name.startsWith(words[1] ?? ""));
 			return matches.length > 0 ? matches.map((node) => ({ value: `${words[0]} ${node.id}`, label: node.name, description: `${node.owner} · ${node.kind}` })) : null;
@@ -1368,58 +1425,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			try {
 				// A first message may be starting a tree right now; let it finish so the session is not adopted twice.
 				for (const end = Date.now() + 25_000; shared.starting && Date.now() < end; ) await new Promise((resolve) => setTimeout(resolve, 50));
+				const command = COMMANDS.find((candidate) => candidate.name === sub);
 				// With no argument: bring this session into the tree if it is not in it yet; otherwise show the tree.
-				if (sub === "" && !shared.current) await begin(ctx);
-				else if (sub === "" || sub === "status") {
-					await refresh();
-					const state = homeLink()?.state;
-					ctx.ui.notify(
-						state
-							? [`Tree of ${state.nodes.length} session${state.nodes.length === 1 ? "" : "s"}, as ${state.owner}. Open here: ${shared.current ? name(shared.current) : "none"}.`, ...renderCompact(view(), 30), "alt+l focuses the pane · /lattice new · /lattice approvals · /lattice share"].join("\n")
-							: "No session tree here yet. Run /lattice to start one.",
-						"info",
-					);
-				} else if (sub === "open") await open(ctx, arg);
-				else if (sub === "back") {
-					if (shared.previous) await open(ctx, shared.previous);
-					else ctx.ui.notify("There is no earlier session to go back to.", "info");
-				}
-				else if (sub === "new") await create(ctx, arg);
-				else if (sub === "answer") {
-					await refresh();
-					const node = find(arg);
-					if (node) await answer(ctx, node);
-				}
-				else if (sub === "approvals") await approvals(ctx);
-				else if (sub === "share") await share(ctx, arg);
-				else if (sub === "sleep") {
-					const node = find(arg);
-					if (node) await linkOf(node.id)?.client.ui("sleep", { nodeId: node.id });
-				} else if (sub === "stop") {
-					const client = need(ctx);
-					if (!client) return;
-					await attach(undefined);
-					emitEvent(pi.events, "lattice:host:assigned", { assignment: null });
-					await client.ui("shutdown", {}).catch(() => {});
-					client.close();
-					if (shared.home) shared.links.delete(shared.home);
-					redraw();
-					ctx.ui.notify("The lattice host is stopping. Sessions are saved and come back with /lattice.", "info");
-				} else if (sub === "rename") await rename(ctx, arg);
-				else if (sub === "archive") await archive(ctx, arg);
-				else if (sub === "restore") await restore(ctx, arg);
-				else if (sub === "interrupt") await interrupt(ctx, arg);
-				else if (sub === "config") await configure(ctx, arg);
-				else if (sub === "prompt") await prompt(ctx);
-				else if (sub === "template") await template(ctx, arg);
-				else if (sub === "restart") await restart(ctx);
-				else if (sub === "doctor") await doctor(ctx);
-				// The other lattice commands answer here too, so there is one name to remember.
-				else if (FORWARDED.includes(sub)) dispatch(`/${sub} ${arg}`.trim());
-				else {
-					const width = Math.max(...COMMANDS.map(([usage]) => usage.length));
-					ctx.ui.notify(["/lattice, then:", ...COMMANDS.map(([usage, does]) => `  ${usage.padEnd(width)}  ${does}`), "With the pane focused (alt+l), ? lists its keys."].join("\n"), sub === "help" ? "info" : "warning");
-				}
+				if (sub === "") await (shared.current ? status(ctx) : begin(ctx));
+				else if (command) await command.run(ctx, arg);
+				else help(ctx, sub === "help" ? "info" : "warning");
 			} catch (error) {
 				fail(ctx, error);
 			}
