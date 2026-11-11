@@ -18,3 +18,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0011 | Collab transport: a shared git repository, with signed records | superseded by 0012 |
 | 0012 | Collab is peer to peer, with no server and no shared storage | accepted |
 | 0013 | The tree lives inside Pi, as a pane | accepted |
+| 0014 | Package seams | accepted |
