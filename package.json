@@ -15,7 +15,10 @@
     "test": "vitest --run --passWithNoTests",
     "spike:phase0": "node spikes/phase0/run.mjs",
     "check": "npm run typecheck && npm test",
-    "lattice": "node packages/app/src/cli.ts"
+    "lattice": "node packages/app/src/cli.ts",
+    "dev": "node scripts/dev.mjs",
+    "docs": "node scripts/settings-doc.ts",
+    "eval": "node scripts/eval.ts"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.5.2",
