@@ -16,3 +16,13 @@ Only importability is verified (spike S10). Driving those components from RPC ev
 **Known limits**
 
 Extension custom components, widgets, footers and custom editors do not exist over RPC. Extension-defined message renderers run in the child, not the host, so custom messages fall back to plain rendering in the attached view.
+
+**Phase 4 result: the risk did not materialise**
+
+`spikes/phase4/render.mjs` and the shipped UI drive `UserMessageComponent`, `AssistantMessageComponent`, `ToolExecutionComponent` and `CustomMessageComponent` directly from `get_messages` and the live event stream, on `TuiAltScreen` with a `ScrollView`. Nothing from `InteractiveMode` was needed.
+
+What did need working around:
+
+- Pi does not export its theme instance or `getEditorTheme`, so the host styles its own chrome with plain ANSI attributes that follow the terminal palette, and builds the editor theme from `getSelectListTheme()`.
+- Tool calls render with the generic renderer, because the built-in tool definitions (and their specialised renderers) live in the session process. Output is complete but plainer than in Pi itself.
+- Stack layouts only allocate space inside a viewport frame. Rendering a layout root directly produces an unbounded document, so the UI tests assert on the content of each region instead of on the laid-out frame; a pseudo-terminal smoke run covers the real frame.
