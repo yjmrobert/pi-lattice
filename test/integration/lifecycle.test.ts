@@ -41,15 +41,15 @@ describe("feature lifecycle", () => {
 			const { messages } = await h.rpc<{ messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }> }>(root.id, { type: "get_messages" });
 			return messages.filter((m) => m.role === "assistant").flatMap((m) => m.content).map((p) => p.text ?? "").find((text) => text.startsWith("FEATURE COMPLETE"));
 		}, "the coordinator to finish the lifecycle", 60_000);
-		expect(final).toContain("verification done roles=worker+verification");
+		expect(final).toContain("verification done roles=protocol+reporting+worker+verification");
 
 		// One child per phase, in order, each with the roles and scope the coordinator chose.
 		const children = childrenOf(h.nodes(), root.id);
 		expect(children.map((node) => [node.kind, node.fragments.join("+"), node.workspace])).toEqual([
-			["grilling", "worker+grilling+story", "shared"],
-			["planning", "worker+planning", "shared"],
-			["implementation", "worker+implementation+task", "worktree"],
-			["verification", "worker+verification", "shared"],
+			["grilling", "protocol+reporting+worker+grilling+story", "shared"],
+			["planning", "protocol+reporting+worker+planning", "shared"],
+			["implementation", "protocol+reporting+worker+implementation+task", "worktree"],
+			["verification", "protocol+reporting+worker+verification", "shared"],
 		]);
 
 		// Every phase reported to the coordinator through the broker, as a result, with its roles applied.
@@ -59,10 +59,10 @@ describe("feature lifecycle", () => {
 			.map((record) => [record.envelope.intent, record.envelope.payload.text, record.mailState])
 			.reverse();
 		expect(reports).toEqual([
-			["result", "grilling done roles=worker+grilling+story", "delivered"],
-			["result", "planning done roles=worker+planning", "delivered"],
-			["result", "implementation done roles=worker+implementation+task wrote feature.txt", "delivered"],
-			["result", "verification done roles=worker+verification", "delivered"],
+			["result", "grilling done roles=protocol+reporting+worker+grilling+story", "delivered"],
+			["result", "planning done roles=protocol+reporting+worker+planning", "delivered"],
+			["result", "implementation done roles=protocol+reporting+worker+implementation+task wrote feature.txt", "delivered"],
+			["result", "verification done roles=protocol+reporting+worker+verification", "delivered"],
 		]);
 
 		// Each phase's output was carried into the next brief.

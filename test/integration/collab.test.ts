@@ -124,7 +124,7 @@ describe("two people sharing a tree, peer to peer", () => {
 		await eventually(async () => (await assistantTexts(sam.host, kid.id)).includes("what do you remember?"), "the adopted session to answer");
 		const history = await assistantTexts(sam.host, kid.id);
 		expect(history).toContain("heliotrope"); // yan's conversation came along
-		expect(history).toContain("roles=[lattice-role-worker]"); // and so did the roles
+		expect(history).toContain("roles=[lattice-role-protocol,lattice-role-reporting,lattice-role-worker]"); // and so did the roles
 
 		// The previous owner can still read it, now from sam.
 		await eventually(async () => JSON.stringify(await yan.collab.fetchMessages(kid.id)).includes("what do you remember?"), "yan to read the session from sam");

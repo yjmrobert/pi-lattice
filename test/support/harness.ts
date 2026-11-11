@@ -1,5 +1,5 @@
 /** Spawn real Pi processes in RPC mode for integration tests, isolated from the developer's Pi config. */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,9 @@ export function createSandbox(): Sandbox {
 		cleanup: () => rmSync(root, { recursive: true, force: true }),
 	};
 	for (const dir of [sandbox.agentDir, sandbox.home, sandbox.work, sandbox.sessions]) mkdirSync(dir, { recursive: true });
+	// The scripted model only reports to its parent when a test tells it to, so the reminder a quiet
+	// child gets would add turns to every test. Tests about the reminder switch it back on.
+	writeFileSync(join(sandbox.home, "config.json"), JSON.stringify({ reports: { remind: false } }));
 	return sandbox;
 }
 

@@ -12,10 +12,10 @@ import {
 	assignmentToEnv,
 	type Channel,
 	childrenOf,
+	createEnvelope,
 	type DialogInfo,
 	depthOf,
 	type Envelope,
-	HANDOVER_NOTE,
 	HOST_ENV,
 	type HostAssignment,
 	type InboundState,
@@ -26,11 +26,17 @@ import {
 	newNodeId,
 	parseSettings,
 	repoConfigPath,
+	renderTemplate,
 	resolveSettings,
+	rolesFor,
 	SETTINGS,
 	type Settings,
 	type SettingsFile,
+	type TemplateName,
+	TEMPLATES,
+	templatePaths,
 	textSetting,
+	toggleSetting,
 	userConfigPath,
 	type NodeMeta,
 	type NodeStatus,
@@ -122,6 +128,8 @@ interface Runtime {
 	channels: Map<Channel, Connection>;
 	dialogs: Map<string, Dialog>;
 	streaming: boolean;
+	/** A person stopped the agent, so the end of this turn is not the agent going quiet by itself. */
+	interrupted?: boolean;
 	/** Envelope ids sent on the current a2a connection and not yet acknowledged. */
 	inflight: Set<string>;
 	lastActive: number;
@@ -213,6 +221,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private readonly uiClients = new Map<string, Connection>();
 	/** Terminals that only watch this tree from another repository. They do not keep the host awake. */
 	private readonly watchers = new Set<string>();
+	/**
+	 * Children that have been given work and have not answered their parent since. `reminded`
+	 * says the child has already been told once that its parent is waiting.
+	 */
+	private readonly owing = new Map<string, { reminded: boolean }>();
 	private sharing: SharingPort | undefined;
 	private notifyTimer: NodeJS.Timeout | undefined;
 	private stopped = false;
@@ -344,6 +357,25 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	/** The last problem reported about the settings, so it is said once and not at every session start. */
 	private settingsComplaint = "";
 
+	/**
+	 * A text pi-lattice writes into a session, filled in. A person's own version of it, in this
+	 * repository's templates folder or their own, is used in place of the built-in one.
+	 */
+	template(name: TemplateName, values: Record<string, string | undefined | null> = {}): string {
+		let text: string = TEMPLATES[name].text;
+		for (const { path } of templatePaths(name, { stateDir: this.stateDir, userDir: this.userDir })) {
+			try {
+				const own = readFileSync(path, "utf8");
+				if (own.trim() === "") continue;
+				text = own;
+				break;
+			} catch {
+				// Not replaced there.
+			}
+		}
+		return renderTemplate(text, values);
+	}
+
 	/** The limits in effect now. */
 	get limits(): Limits {
 		return { ...limitsOf(this.settings()), ...this.options.limits };
@@ -371,7 +403,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const id = newNodeId();
 		const node = this.insert({
 			id, parentId: null, rootId: id, kind: spec.kind ?? "feature", name: clean(spec.name, id), brief: spec.brief ?? "",
-			fragments: spec.fragments ?? [], cwd: resolve(spec.cwd), workspace: "shared", branch: null,
+			fragments: rolesFor(this.settings(), "root", spec.fragments), cwd: resolve(spec.cwd), workspace: "shared", branch: null,
 		});
 		await this.ensureRunning(node.id);
 		if (node.brief.trim() !== "") await this.prompt(node.id, node.brief);
@@ -397,7 +429,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 		const workspace = spec.workspace ?? "shared";
 		if (!(WORKSPACE_MODES as readonly string[]).includes(workspace)) throw new Error(`Unknown workspace "${workspace}". Use shared or worktree.`);
-		const fragments = (spec.fragments ?? []).filter((name) => typeof name === "string" && name.trim() !== "").map((name) => name.trim());
+		const chosen = (spec.fragments ?? []).filter((name) => typeof name === "string" && name.trim() !== "").map((name) => name.trim());
+		// Every child is told how to talk to the tree and how to answer its parent, whatever else it was given.
+		const fragments = rolesFor(this.settings(), "child", chosen);
 		const model = typeof spec.model === "string" && spec.model.trim() !== "" ? spec.model.trim() : undefined;
 
 		const id = newNodeId();
@@ -413,9 +447,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			id, parentId, rootId: parent.rootId, kind: (spec.kind ?? "task").trim() || "task", name, brief: spec.brief, fragments, cwd, workspace, branch,
 			...(model ? { model } : {}),
 		});
+		// It owes its parent an answer from the moment it has the brief.
+		this.owing.set(node.id, { reminded: false });
 		try {
 			await this.ensureRunning(node.id);
-			await this.prompt(node.id, briefPrompt(parent, node));
+			await this.prompt(node.id, this.template("brief", { "parent.name": parent.name, "parent.id": parent.id, name: node.name, kind: node.kind, branch: node.branch, brief: node.brief }));
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new Error(`The child "${name}" (${id}) was created but could not be started: ${message}`);
@@ -574,6 +610,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			runtime.streaming = false;
 			this.refresh(id, runtime);
 			this.wakeQueued();
+			this.afterTurn(id, runtime);
 		} else if (event.type === "extension_ui_request" && DIALOG_METHODS.has(event.method)) {
 			const dialog: Dialog = { id: String(event.id), method: event.method, title: String(event.title ?? "") };
 			if (typeof event.message === "string") dialog.message = event.message;
@@ -622,11 +659,64 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			this.update(id, { status: "dormant" });
 		} else if (info.code === 0) {
 			this.update(id, { status: "exited" });
+			this.tellParent(id, "its session ended", runtime);
 		} else {
 			this.update(id, { status: "failed" });
 			this.emit("log", "error", `Session ${id} exited unexpectedly (code ${info.code ?? "none"}${info.signal ? `, signal ${info.signal}` : ""}). ${detail}`);
+			this.tellParent(id, `its process failed (exit code ${info.code ?? "none"}${info.signal ? `, signal ${info.signal}` : ""})`, runtime, detail, true);
 		}
 		this.wakeQueued();
+	}
+
+	// --- children that go quiet --------------------------------------------------
+
+	/**
+	 * A background child's turn has ended. If it still owes its parent an answer and is not
+	 * waiting on anything itself, remind it once; if it ends another turn the same way, tell
+	 * its parent, which would otherwise wait for ever.
+	 */
+	private afterTurn(id: string, runtime: Runtime): void {
+		if (runtime.interrupted) {
+			runtime.interrupted = false;
+			return;
+		}
+		const owed = this.owing.get(id);
+		const node = this.store.getNode(id);
+		if (!owed || !node?.parentId || this.stopped || !runtime.proc || this.runtimes.get(id) !== runtime) return;
+		if (!toggleSetting(this.settings(), "reports.remind")) return;
+		// It may be waiting itself: on a person, on mail not yet delivered, or on its own children.
+		if (runtime.dialogs.size > 0 || this.store.unacked(id).length > 0) return;
+		const waitingOn = childrenOf(this.store.listNodes(), id).some((kid) => this.owing.has(kid.id) || kid.status === "running" || kid.status === "starting" || kid.status === "blocked");
+		if (waitingOn) return;
+		if (!owed.reminded) {
+			owed.reminded = true;
+			const parent = this.store.getNode(node.parentId);
+			this.prompt(id, this.template("reminder", { "parent.name": parent?.name ?? node.parentId })).catch(() => {
+				// It could not be reminded; its parent hears about it at the next turn end or exit.
+			});
+			return;
+		}
+		this.tellParent(id, "it ended its turn twice without sending a report", runtime);
+	}
+
+	/**
+	 * Tell a child's parent that the child stopped without answering it. A child that owes
+	 * nothing is passed over, unless it crashed before ever reporting.
+	 */
+	private tellParent(id: string, reason: string, runtime: Runtime, detail = "", crashed = false): void {
+		const node = this.store.getNode(id);
+		const owed = this.owing.delete(id);
+		if (!node?.parentId || this.stopped) return;
+		if (!owed && (!crashed || node.done)) return;
+		const last = detail || runtime.recent.filter((line) => !line.startsWith("→ ")).at(-1) || "";
+		try {
+			this.route(node, createEnvelope({
+				from: node.id, fromOwner: node.owner, fromName: node.name, to: "parent", intent: "stopped", seq: 1,
+				text: this.template("child-stopped", { name: node.name, id: node.id, reason, last }),
+			}));
+		} catch (error) {
+			this.emit("log", "warn", `"${node.name}" stopped without reporting, and its parent could not be told: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	/**
@@ -675,6 +765,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		let wasWorking = false;
 		if (runtime?.proc) {
 			wasWorking = runtime.streaming;
+			runtime.interrupted = true;
 			await runtime.proc.request({ type: "abort" }).catch(() => {});
 			await runtime.proc.stop();
 			runtime = undefined;
@@ -708,7 +799,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (this.store.getNode(id)) this.update(id, { status: "dormant" });
 		if (resume && this.store.getNode(id) && !this.stopped) {
 			this.ensureRunning(id)
-				.then(() => this.prompt(id, HANDOVER_NOTE))
+				.then(() => this.prompt(id, this.template("handover")))
 				.catch((error: unknown) => {
 					this.emit("log", "warn", `"${this.store.getNode(id)?.name ?? id}" could not carry on in the background: ${error instanceof Error ? error.message : String(error)}`);
 				});
@@ -722,7 +813,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const now = new Date().toISOString();
 		const cwd = resolve(spec.cwd);
 		const node: NodeMeta = {
-			id, parentId: null, rootId: id, kind: spec.kind?.trim() || "session", name: clean(spec.name, id), brief: "", fragments: spec.fragments ?? [], owner: this.owner, version: 1,
+			id, parentId: null, rootId: id, kind: spec.kind?.trim() || "session", name: clean(spec.name, id), brief: "", fragments: rolesFor(this.settings(), "root", spec.fragments), owner: this.owner, version: 1,
 			status: "starting", sessionId: spec.sessionId, sessionFile: spec.sessionFile, cwd, workspace: "shared", branch: null, createdAt: now, updatedAt: now, repo: repoName(cwd),
 		};
 		this.store.insertNode(node);
@@ -896,6 +987,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const runtime = this.runtimes.get(id);
 		if (runtime && !runtime.proc) throw new Error(`"${node.name}" is open in a terminal. Stop it there.`);
 		if (!runtime?.streaming) throw new Error(`"${node.name}" is not working.`);
+		runtime.interrupted = true;
 		await this.abort(id);
 	}
 
@@ -1110,6 +1202,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (remote.length > 0 && !this.remoteRouter) {
 			throw new Error(`Not sent: ${remote.map((node) => `"${node.name}"`).join(", ")} belongs to ${remote[0]?.owner}, and this tree is not being shared right now.`);
 		}
+		this.noteReport(sender, envelope, recipients);
 		const local = recipients.filter((id) => !remote.some((node) => node.id === id));
 		for (const recipient of local) this.store.journal(envelope, recipient);
 		for (const node of remote) this.remoteRouter?.(envelope, node);
@@ -1123,6 +1216,22 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			}
 		}
 		return { recipients };
+	}
+
+	/** Keep track of who owes whom an answer, and which sessions have finished what they were given. */
+	private noteReport(sender: NodeMeta, envelope: Envelope, recipients: string[]): void {
+		if (sender.parentId && recipients.includes(sender.parentId) && envelope.intent !== "stopped") {
+			// Anything a child says to its parent is an answer of a kind; a result is the end of the work.
+			this.owing.delete(sender.id);
+			if (envelope.intent === "result" && !sender.done) this.update(sender.id, { done: true });
+		}
+		for (const id of recipients) {
+			const recipient = this.store.getNode(id);
+			if (recipient?.parentId !== sender.id || recipient.owner !== this.owner) continue;
+			// More work from its parent: it owes an answer again.
+			this.owing.set(id, { reminded: false });
+			if (recipient.done) this.update(id, { done: false });
+		}
 	}
 
 	// --- shared trees ----------------------------------------------------------
@@ -1219,16 +1328,4 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 
 function clean(name: string, fallback: string): string {
 	return name.replace(/\s+/g, " ").trim().slice(0, 60) || fallback;
-}
-
-/** The first prompt a spawned child receives. It comes from an agent, and says so. */
-function briefPrompt(parent: NodeMeta, node: NodeMeta): string {
-	return [
-		`[pi-lattice] This session was created by another agent session, "${parent.name}" (${parent.id}), as its child "${node.name}" (kind: ${node.kind}).`,
-		"The brief below is from that agent, not typed by the user. The user can see this session and may join it at any time; their instructions take priority.",
-		node.branch ? `You are working in your own git worktree on branch ${node.branch}. Commit your work there.` : "",
-		"",
-		"Brief:",
-		node.brief,
-	].filter((line, index) => line !== "" || index >= 3).join("\n");
 }

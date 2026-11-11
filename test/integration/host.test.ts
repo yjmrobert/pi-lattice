@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { childrenOf, formatTree, type NodeMeta } from "@pi-lattice/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -43,7 +43,7 @@ describe("host tree", () => {
 
 		await h.prompt(root.id, spawnTool({ name: "payments", kind: "task", fragments: ["worker"], brief: sendTool("parent", "payments done") }));
 		const kid = await child(h, root.id, "payments");
-		expect(kid).toMatchObject({ kind: "task", fragments: ["worker"], rootId: root.id, workspace: "shared", cwd: root.cwd });
+		expect(kid).toMatchObject({ kind: "task", fragments: ["protocol", "reporting", "worker"], rootId: root.id, workspace: "shared", cwd: root.cwd });
 
 		// The child ran its brief and reported to "parent"; the coordinator's model saw it.
 		await eventually(async () => (await assistantTexts(h, root.id)).includes("payments done"), "report to reach the coordinator");
@@ -53,7 +53,7 @@ describe("host tree", () => {
 
 		await settled(h, kid.id);
 		expect(formatTree(h.nodes())).toBe(
-			[`checkout  [feature]  ${root.id}  idle  roles=coordinator`, `└─ payments  [task]  ${kid.id}  idle  roles=worker`].join("\n"),
+			[`checkout  [feature]  ${root.id}  idle  roles=protocol+coordinator`, `└─ payments  [task]  ${kid.id}  idle  roles=protocol+reporting+worker`].join("\n"),
 		);
 		// Both sessions carry the roles they were given.
 		expect(await assistantTexts(h, kid.id)).toContain("tool-result: Sent");
@@ -218,8 +218,90 @@ describe("host persistence", () => {
 		await eventually(async () => (await assistantTexts(h as LatticeHost, kid.id)).includes("which roles?"), "resumed child to answer");
 		const text = await assistantTexts(h, kid.id);
 		expect(text).toContain("heliotrope");
-		expect(text).toContain("roles=[lattice-role-worker]");
+		expect(text).toContain("roles=[lattice-role-protocol,lattice-role-reporting,lattice-role-worker]");
 		expect(h.node(kid.id)?.sessionFile).toBe(restored[1]?.sessionFile);
+	});
+});
+
+describe("sessions that know how to talk to each other", () => {
+	const userMessages = async (h: LatticeHost, id: string): Promise<string> => {
+		const { messages } = await h.rpc<{ messages: Array<{ role: string; content: unknown }> }>(id, { type: "get_messages" });
+		return messages.filter((m) => m.role !== "assistant").map((m) => (typeof m.content === "string" ? m.content : (m.content as Array<{ text?: string }>).map((p) => p.text ?? "").join(""))).join("\n");
+	};
+	const result = (text: string) => `!tool send_message ${JSON.stringify({ to: "parent", text, intent: "result" })}`;
+
+	it("gives every session the protocol, every child how to report, and a child with no roles the default ones", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		expect(root.fragments).toEqual(["protocol"]);
+		expect((await h.spawnChild(root.id, { name: "plain", brief: "x" })).fragments).toEqual(["protocol", "reporting", "worker"]);
+		expect((await h.spawnChild(root.id, { name: "chosen", brief: "x", fragments: ["planning"] })).fragments).toEqual(["protocol", "reporting", "planning"]);
+		// The child's model is told all of it, in that order.
+		await eventually(async () => (await assistantTexts(h, childrenOf(h.nodes(), root.id)[0]?.id ?? "")).includes("roles=[lattice-role-protocol,lattice-role-reporting,lattice-role-worker]"), "the child to see its roles");
+
+		// The settings say which; a repository can change or empty them.
+		writeFileSync(join(h.stateDir, "config.json"), JSON.stringify({ roles: { tree: [], children: [], child: ["implementation"], root: ["coordinator"] } }));
+		expect((await h.spawnChild(root.id, { name: "later", brief: "x" })).fragments).toEqual(["implementation"]);
+		expect((await h.createRoot({ name: "second", cwd: sandbox.work })).fragments).toEqual(["coordinator"]);
+	});
+
+	it("writes a brief from the person's own template when there is one, this repository's first", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		mkdirSync(join(sandbox.home, "templates"), { recursive: true });
+		writeFileSync(join(sandbox.home, "templates", "brief.md"), "MINE for {{name}} from {{parent.name}}:\n{{brief}}\n");
+		const first = await h.spawnChild(root.id, { name: "one", brief: "count {{name}} sheep" });
+		await settled(h, first.id);
+		// What the brief itself says is never read as template text.
+		expect(await userMessages(h, first.id)).toContain("MINE for one from root:\ncount {{name}} sheep");
+
+		mkdirSync(join(h.stateDir, "templates"), { recursive: true });
+		writeFileSync(join(h.stateDir, "templates", "brief.md"), "OURS: {{brief}}");
+		const second = await h.spawnChild(root.id, { name: "two", brief: "again" });
+		await settled(h, second.id);
+		expect(await userMessages(h, second.id)).toContain("OURS: again");
+		expect(h.template("handover")).toContain("moved between the background and a terminal");
+	});
+
+	it("reminds a child that ends its turn without reporting, then tells its parent", async () => {
+		const h = await startHost();
+		writeFileSync(join(h.stateDir, "config.json"), JSON.stringify({ reports: { remind: true } }));
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const quiet = await h.spawnChild(root.id, { name: "quiet", brief: "think about it" });
+		await eventually(async () => (await assistantTexts(h, root.id)).includes("stopped without reporting"), "the parent to be told");
+		expect(await userMessages(h, quiet.id)).toContain('[pi-lattice] You ended your turn without reporting to your parent, "root"');
+		const told = await userMessages(h, root.id);
+		expect(told).toContain(`from="${quiet.id}"`);
+		expect(told).toContain('intent="stopped"');
+		expect(told).toContain(`Your child session "quiet" (${quiet.id}) stopped without reporting: it ended its turn twice without sending a report.`);
+		// It is told once, not at every turn the child ends after that.
+		await settled(h, quiet.id);
+		expect(h.traffic({ node: root.id }).filter((record) => record.envelope.intent === "stopped")).toHaveLength(1);
+	});
+
+	it("leaves a child alone that has reported, and marks it done until it is given more", async () => {
+		const h = await startHost();
+		writeFileSync(join(h.stateDir, "config.json"), JSON.stringify({ reports: { remind: true } }));
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const kid = await h.spawnChild(root.id, { name: "kid", brief: result("all done") });
+		await eventually(() => h.node(kid.id)?.done === true, "the child to be done");
+		await settled(h, kid.id);
+		await eventually(async () => (await assistantTexts(h, root.id)).includes("all done"), "the result to arrive");
+		expect(await userMessages(h, kid.id)).not.toContain("You ended your turn without reporting");
+		expect(h.traffic({ node: root.id }).some((record) => record.envelope.intent === "stopped")).toBe(false);
+
+		// More work from its parent: it is not done any more, until it sends another result.
+		await h.prompt(root.id, sendTool(kid.id, "!reply noted"));
+		await eventually(async () => (await assistantTexts(h, root.id)).includes("noted"), "the answer to the extra work");
+		expect(h.node(kid.id)?.done).toBeUndefined();
+	});
+
+	it("tells a parent when its child's process dies before it reported", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const kid = await h.spawnChild(root.id, { name: "doomed", brief: '!tool bash {"command":"kill -9 $PPID"}' });
+		await eventually(() => h.node(kid.id)?.status === "failed", "the child to fail");
+		await eventually(async () => (await assistantTexts(h, root.id)).includes("stopped without reporting: its process failed"), "the parent to be told");
 	});
 });
 
@@ -313,7 +395,7 @@ describe("keeping the tree tidy", () => {
 	it("takes the person's own settings for every repository, and the repository's over them", async () => {
 		const h = await startHost();
 		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
-		writeFileSync(join(sandbox.home, "config.json"), JSON.stringify({ limits: { maxChildren: 1, maxDepth: 1 } }));
+		writeFileSync(join(sandbox.home, "config.json"), JSON.stringify({ reports: { remind: false }, limits: { maxChildren: 1, maxDepth: 1 } }));
 		expect(h.limits.maxChildren).toBe(1);
 		await h.spawnChild(root.id, { name: "one", brief: "x" });
 		await expect(h.spawnChild(root.id, { name: "two", brief: "x" })).rejects.toThrow("already has 1 children");

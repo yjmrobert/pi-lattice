@@ -99,7 +99,7 @@ describe("the tree inside Pi", () => {
 
 		// Type into the child. It answers with its own roles, and can still reach its parent.
 		await pi.prompt("who are you?");
-		await pi.waitForAssistant("echo[user] roles=[lattice-role-worker] who are you?");
+		await pi.waitForAssistant("echo[user] roles=[lattice-role-protocol,lattice-role-reporting,lattice-role-worker] who are you?");
 		await pi.prompt(sendTool("parent", "sent while open in the terminal"));
 
 		// The root is not open anywhere, so the host wakes it headless to receive the message.
@@ -210,7 +210,7 @@ describe("the tree inside Pi", () => {
 		await pi.command(`/lattice open ${kid.id}`);
 		await until((s) => s.foreground.includes(kid.id), "the child to be open here");
 		await pi.prompt("which roles?");
-		await pi.waitForAssistant("echo[user] roles=[lattice-role-worker] which roles?");
+		await pi.waitForAssistant("echo[user] roles=[lattice-role-protocol,lattice-role-reporting,lattice-role-worker] which roles?");
 		await pi.prompt(sendTool("parent", "still connected"));
 		await until((s) => s.nodes.find((n) => n.id === root.id)?.status === "idle", "the root to wake for its mail");
 	}, 120_000);
@@ -312,7 +312,7 @@ describe("the tree inside Pi", () => {
 		await pi.waitFor(() => pi.notifications().find((text) => text.includes("This repository sets its own")), "the note that the repository wins");
 		await pi.command("/lattice config user limits.maxDepth 6");
 		await pi.waitFor(() => pi.notifications().find((text) => text.includes("limits.maxDepth set to 6")), "the limit set");
-		expect(JSON.parse(readFileSync(join(sandbox.home, "config.json"), "utf8"))).toEqual({ approval: "never", limits: { maxDepth: 6 } });
+		expect(JSON.parse(readFileSync(join(sandbox.home, "config.json"), "utf8"))).toMatchObject({ approval: "never", limits: { maxDepth: 6 } });
 		await pi.command("/lattice config");
 		await pi.waitFor(() => pi.notifications().find((text) => /approval\s+always\s+\(this repository\)/.test(text) && /model\s+not set/.test(text) && /limits\.maxDepth\s+6\s+\(yours\)/.test(text)), "the settings listed with where each is from");
 
@@ -339,7 +339,7 @@ describe("the tree inside Pi", () => {
 		await pi.command("/lattice doctor");
 		const report = await pi.waitFor(() => pi.notifications().find((text) => text.includes("Host running as tester")), "the report");
 		expect(report).toContain("✓ Tree: ");
-		expect(report).toContain("✓ Settings: defaults");
+		expect(report).toContain("✓ Settings: reports.remind off");
 		expect(report).toContain("in the tree");
 		expect(report).toMatch(/✓ Roles: \d+ available/);
 
@@ -376,6 +376,6 @@ describe("the tree inside Pi", () => {
 		}
 		await flow;
 		const child = await until((s) => childrenOf(s.nodes, root.id)[0], "the child created from the dialogs");
-		expect(child).toMatchObject({ name: "grilling", kind: "grilling", fragments: ["worker", "grilling"], workspace: "shared", brief: "find the gaps in the checkout story" });
+		expect(child).toMatchObject({ name: "grilling", kind: "grilling", fragments: ["protocol", "reporting", "worker", "grilling"], workspace: "shared", brief: "find the gaps in the checkout story" });
 	}, 120_000);
 });
