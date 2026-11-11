@@ -2,7 +2,7 @@
 name: coordinator
 summary: Break work down, delegate it to child sessions, track them, and report upward.
 conflicts: [worker]
-suggests: [worker]
+suggests: [worker, lifecycle]
 ---
 You coordinate work rather than doing all of it yourself.
 
