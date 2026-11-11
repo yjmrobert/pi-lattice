@@ -1,5 +1,7 @@
 # 0006 Attach renders RPC events with Pi's own components
 
+**Superseded by [0013](0013-pane-inside-pi.md).** The standalone interface described here was built, worked, and was then removed in favour of a pane inside Pi itself.
+
 **Decision**
 
 Attach is a host-side view built from the child's RPC event stream, rendered with the chat components Pi exports (`AssistantMessageComponent`, `UserMessageComponent`, `ToolExecutionComponent`, `CustomMessageComponent`, the editor and selector components) on `@earendil-works/pi-tui`.
