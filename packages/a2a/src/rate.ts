@@ -1,6 +1,7 @@
 /** Sliding-window rate limit: at most `limit` events in any `windowMs`. */
 export class RateLimiter {
-	private readonly limit: number;
+	/** May be changed between events, when the setting behind it changes. */
+	limit: number;
 	private readonly windowMs: number;
 	private stamps: number[] = [];
 

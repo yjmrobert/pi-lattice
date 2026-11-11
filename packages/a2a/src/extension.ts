@@ -19,6 +19,7 @@ import {
 	isAddress,
 	isApprovalPolicy,
 	isId,
+	type Limits,
 	limitsFromEnv,
 	onEvent,
 	PROTOCOL_VERSION,
@@ -85,8 +86,23 @@ interface SendInput {
 }
 
 export default function a2aExtension(pi: ExtensionAPI): void {
-	const limits = limitsFromEnv(process.env);
-	const rate = new RateLimiter(limits.maxSendsPerMinute);
+	/** The settings in effect, from whoever here reads the settings files; nothing when nobody does. */
+	const asked = (): Record<string, unknown> => {
+		const request: { values?: Record<string, unknown> } = {};
+		emitEvent(pi.events, "lattice:settings:query", request);
+		return request.values ?? {};
+	};
+	/** The limits in effect now: the settings when someone here knows them, otherwise the environment. */
+	const currentLimits = (): Limits => {
+		const limits = limitsFromEnv(process.env);
+		const values = asked();
+		for (const name of Object.keys(limits) as Array<keyof Limits>) {
+			const value = values[`limits.${name}`];
+			if (typeof value === "number" && Number.isInteger(value) && value > 0) limits[name] = value;
+		}
+		return limits;
+	};
+	const rate = new RateLimiter(currentLimits().maxSendsPerMinute);
 
 	let active: Active | undefined;
 	/** The inbound envelope with the most hops delivered since the human last spoke. */
@@ -98,12 +114,12 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 	});
 
 	const policy = (): ApprovalPolicy => {
-		const own = pi.getFlag("lattice-approval") ?? process.env.LATTICE_APPROVAL;
-		if (isApprovalPolicy(own)) return own;
-		// Nothing was said for this session: use what the tree it is in has been set to, if anyone here knows.
-		const request: { policy?: string } = {};
-		emitEvent(pi.events, "lattice:approval:query", request);
-		return isApprovalPolicy(request.policy) ? request.policy : "cross-owner";
+		const flag = pi.getFlag("lattice-approval");
+		if (isApprovalPolicy(flag)) return flag;
+		// Nothing was said for this session: use the settings, if anyone here knows them, else the environment.
+		const set = asked().approval;
+		if (isApprovalPolicy(set)) return set;
+		return isApprovalPolicy(process.env.LATTICE_APPROVAL) ? process.env.LATTICE_APPROVAL : "cross-owner";
 	};
 
 	const refreshStatus = (): void => {
@@ -137,7 +153,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 	const handleInbound = async (value: unknown): Promise<void> => {
 		const state = active;
 		if (!state) throw new Error("no active session");
-		const checked = validateEnvelope(value, limits);
+		const checked = validateEnvelope(value, currentLimits());
 		if (!checked.ok) {
 			notify(`Dropped a malformed lattice message: ${checked.errors[0] ?? "invalid"}`, "warning");
 			return;
@@ -195,6 +211,8 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 			inReplyTo = state.store.findInbound(input.replyTo)?.envelope;
 			if (!inReplyTo) return { ok: false, error: `No received message ${input.replyTo} to reply to.` };
 		}
+		const limits = currentLimits();
+		rate.limit = limits.maxSendsPerMinute;
 		const envelope = createEnvelope({
 			from: state.nodeId,
 			fromOwner: state.owner,

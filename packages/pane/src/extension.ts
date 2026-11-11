@@ -6,19 +6,19 @@
  * lives in its own background host, started on demand; opening a session takes it over from
  * its host, and leaving it hands it back. See ADR 0013 and ADR 0015.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import { CONFIG_FILE, CONFIG_KEYS, type ConfigKey, configProblem, emitEvent, onEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type KnownTree, type NodeMeta, parseConfig, type TreeConfig, type UiState, withSetting } from "@pi-lattice/protocol";
+import { emitEvent, formatSetting, HANDOVER_NOTE, type HostAssignment, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, toggleSetting, type UiState } from "@pi-lattice/protocol";
 import { type ChildForm, type FormKey, formKey, newChildForm, renderForm } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
 import { connectHost, hasTree, inRepository, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
+import { readSettings, type SettingsRead, writeSetting } from "./settings-io.ts";
 import { type InboxDetails, inboxItems, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, renderCompact, renderPane, renderStrip } from "./view.ts";
 
 const NODE_ENTRY = "lattice:node";
-const PANE_WIDTH = 34;
 const MIN_TERMINAL_WIDTH = 90;
 const SPINNER_MS = 120;
 /** How often to look for hosts of other repositories starting or stopping. */
@@ -135,25 +135,19 @@ function view(): PaneView {
 /** The id of the row that stands for a session the form has not created yet. */
 const GHOST = "lattice-new-session";
 
+/** The settings in effect in this terminal: the repository's file, when it has a tree, over the person's own. */
+function settings(): SettingsRead {
+	return readSettings(shared.home && hasTree(shared.home) ? shared.home : undefined);
+}
+
 /** Whether a first message here starts a tree by itself: in a git repository, unless switched off. */
 function autoStarts(): boolean {
-	if (process.env.LATTICE_AUTO_JOIN === "0" || process.env.LATTICE_AUTO_START === "0") return false;
+	const { settings: current } = settings();
+	if (!toggleSetting(current, "pane.autoJoin") || !toggleSetting(current, "pane.autoStart")) return false;
 	try {
 		return shared.ctx !== undefined && inRepository(shared.ctx.cwd);
 	} catch {
 		return false;
-	}
-}
-
-/** The settings of the tree this terminal is in. A file that cannot be read counts as empty, and says why. */
-function homeConfig(): { config: TreeConfig; problems: string[]; text: string | undefined } {
-	const path = shared.home ? join(shared.home, CONFIG_FILE) : undefined;
-	if (!path || !existsSync(path)) return { config: {}, problems: [], text: undefined };
-	const text = readFileSync(path, "utf8");
-	try {
-		return { ...parseConfig(text), text };
-	} catch (error) {
-		return { config: {}, problems: [`${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`], text };
 	}
 }
 
@@ -168,7 +162,7 @@ function attention(): void {
 	try {
 		const ctx = shared.ctx;
 		if (ctx?.mode === "tui") {
-			if (count > shared.waiting && process.env.LATTICE_BELL !== "0") shared.tui?.terminal.write("\x07");
+			if (count > shared.waiting && toggleSetting(settings().settings, "pane.bell")) shared.tui?.terminal.write("\x07");
 			if (count !== shared.titled) {
 				const usual = [shared.pi?.getSessionName(), basename(ctx.cwd)].filter(Boolean).join(" - ");
 				ctx.ui.setTitle(count > 0 ? `● ${count} waiting - ${usual}` : `pi - ${usual}`);
@@ -378,7 +372,7 @@ function installPane(tui: Hooked): void {
 		new HStack([
 			// Always there, so opening pi shows the sessions without typing anything.
 			// In a narrow terminal it appears only while it has the keyboard.
-			{ component: pane, basis: PANE_WIDTH, shrink: 0, visible: (viewport) => viewport.width >= MIN_TERMINAL_WIDTH || shared.focused },
+			{ component: pane, basis: numberSetting(settings().settings, "pane.width", 34), shrink: 0, visible: (viewport) => viewport.width >= MIN_TERMINAL_WIDTH || shared.focused },
 			{ component: inspector, basis: 0, grow: 1, minSize: 20, visible: () => inspecting() },
 			{ component: inner, basis: 0, grow: 1, minSize: 20, visible: () => !inspecting() },
 		]);
@@ -557,10 +551,9 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		return { sessionFile: result.sessionFile, wasWorking: result.wasWorking };
 	};
 
-	// The messaging extension asks which approval policy the tree has been set to; the settings are ours to read.
-	onEvent(pi.events, "lattice:approval:query", (request) => {
-		const approval = homeConfig().config.approval;
-		if (approval) request.policy = approval;
+	// The other extensions ask what the settings are; the files are ours to read.
+	onEvent(pi.events, "lattice:settings:query", (request) => {
+		if (shared.pi === pi) request.values = { ...settings().settings.values };
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -628,7 +621,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	// that message, so every real session shows in the pane without anyone asking.
 	pi.on("before_agent_start", async (event, ctx) => {
 		const home = homeLink();
-		if (shared.current || event.messageType !== "user" || process.env.LATTICE_AUTO_JOIN === "0") return;
+		if (shared.current || event.messageType !== "user" || !toggleSetting(settings().settings, "pane.autoJoin")) return;
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		if (!sessionFile) return;
 		const title = pi.getSessionName() ?? (event.prompt.replace(/\s+/g, " ").trim().slice(0, 40) || basename(ctx.cwd));
@@ -1046,45 +1039,69 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		ctx.ui.notify(`Stopped "${node.name}".`, "info");
 	};
 
-	/** Show the tree's settings, or change one. */
+	/**
+	 * Show the settings, or change one. `/lattice config <setting> <value>` writes this repository's
+	 * file; `/lattice config user <setting> <value>` writes the person's own, which every repository
+	 * uses; `-` as the value clears it.
+	 */
 	const configure = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
-		if (!shared.home || !need(ctx)) return;
-		const path = join(shared.home, CONFIG_FILE);
-		const [key = "", ...rest] = arg.split(/\s+/).filter(Boolean);
+		const words = arg.split(/\s+/).filter(Boolean);
+		const scope: SettingScope = words[0] === "user" ? "user" : "repo";
+		if (words[0] === "user" || words[0] === "repo") words.shift();
+		const [key = "", ...rest] = words;
 		const value = rest.join(" ");
-		const current = homeConfig();
+		const current = settings();
+		const from = (name: string): string => ({ default: "default", user: "yours", repo: "this repository", env: "environment" })[current.settings.sources[name] ?? "default"];
 		if (!key) {
-			const names = Object.keys(current.config.env ?? {});
+			const width = Math.max(...SETTINGS.map((setting) => setting.key.length));
+			const lines: string[] = [];
+			let section = "";
+			for (const setting of SETTINGS) {
+				if (setting.section !== section) lines.push("", `${setting.section}`);
+				section = setting.section;
+				lines.push(`  ${setting.key.padEnd(width)}  ${formatSetting(current.settings.values[setting.key])}${current.settings.sources[setting.key] === "default" ? "" : `  (${from(setting.key)})`}`);
+			}
+			const names = Object.keys(current.settings.env);
 			ctx.ui.notify(
 				[
-					`Settings for this tree (${path}):`,
-					...(Object.keys(CONFIG_KEYS) as ConfigKey[]).map((name) => `  ${name.padEnd(9)} ${current.config[name] ?? "not set"}`),
-					...(names.length > 0 ? [`  ${"env".padEnd(9)} ${names.join(", ")}`] : []),
+					"Settings. Each comes from the environment, else this repository's file, else yours, else the default.",
+					`  yours            ${current.paths.user}`,
+					`  this repository  ${current.paths.repo ?? "(no session tree here yet)"}`,
+					...lines,
+					...(names.length > 0 ? ["", `  env for background sessions: ${names.join(", ")}`] : []),
 					...current.problems.map((problem) => `  ! ${problem}`),
-					"Change one with /lattice config <setting> <value>; clear it with /lattice config <setting> -",
-					"A change applies to sessions started from now on. /lattice restart applies it to the ones already running.",
+					"",
+					"/lattice config <setting> <value> sets it for this repository; /lattice config user <setting> <value> for all of yours; - as the value clears it.",
 				].join("\n"),
 				current.problems.length > 0 ? "warning" : "info",
 			);
 			return;
 		}
-		if (!(key in CONFIG_KEYS)) {
-			ctx.ui.notify(configProblem(key, value) ?? `Unknown setting "${key}".`, "warning");
+		const setting = settingOf(key);
+		if (!setting) {
+			const problem = parseSettingInput(key, value);
+			ctx.ui.notify("problem" in problem ? problem.problem : `Unknown setting "${key}".`, "warning");
 			return;
 		}
-		const setting = key as ConfigKey;
 		if (!value) {
-			ctx.ui.notify(`${setting} is ${current.config[setting] ?? "not set"}. It takes ${CONFIG_KEYS[setting]}.`, "info");
+			ctx.ui.notify(`${setting.key} is ${formatSetting(current.settings.values[setting.key])} (${from(setting.key)}). It takes ${settingAccepts(setting)}.\n${setting.help}`, "info");
+			return;
+		}
+		if (scope === "repo" && !current.paths.repo) {
+			ctx.ui.notify(`There is no session tree here yet to keep a repository setting in. /lattice config user ${setting.key} ${value} sets it for all your repositories.`, "warning");
 			return;
 		}
 		const clear = value === "-";
-		const problem = clear ? undefined : configProblem(setting, value);
-		if (problem) {
-			ctx.ui.notify(problem, "warning");
+		const parsed = clear ? { value: undefined } : parseSettingInput(setting.key, value);
+		if ("problem" in parsed) {
+			ctx.ui.notify(parsed.problem, "warning");
 			return;
 		}
-		writeFileSync(path, withSetting(current.text, setting, clear ? undefined : value));
-		ctx.ui.notify(`${setting} ${clear ? "cleared" : `set to ${value}`}. It applies to sessions started from now on${setting === "approval" ? ", and to this one" : ""}.`, "info");
+		const path = writeSetting(scope, shared.home, setting.key, parsed.value);
+		const now = settings();
+		const shadowed = now.settings.sources[setting.key] === "env" ? ` ${setting.env} is set in the environment and wins.` : scope === "user" && now.settings.sources[setting.key] === "repo" ? " This repository sets its own, which wins here." : "";
+		ctx.ui.notify(`${setting.key} ${clear ? "cleared" : `set to ${formatSetting(parsed.value)}`} in ${path}.${shadowed} ${setting.applies}`, "info");
+		redraw();
 	};
 
 	/** Stop the host of this repository and start it again, keeping this terminal's session where it is. */
@@ -1129,9 +1146,9 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		const link = homeLink();
 		if (tree) check(link !== undefined && !link.client.isClosed, link?.state ? `Host running as ${link.state.owner}, ${link.state.nodes.length} session${link.state.nodes.length === 1 ? "" : "s"}` : "The host is not running", `Run /lattice to start it. Its log is ${join(stateDir, "daemon.log")}.`);
 		if (tree) check(shared.current ? true : "warn", shared.current ? `This session is "${name(shared.current)}" in the tree` : "This session is not in the tree yet", "It joins with its first message, or with /lattice.");
-		const settings = homeConfig();
-		const set = (Object.keys(CONFIG_KEYS) as ConfigKey[]).filter((key) => settings.config[key]).map((key) => `${key} ${settings.config[key]}`);
-		check(settings.problems.length === 0, `Settings: ${set.length > 0 ? set.join(", ") : "defaults"}`, settings.problems.join(" "));
+		const read = settings();
+		const set = SETTINGS.filter((setting) => read.settings.sources[setting.key] !== "default").map((setting) => `${setting.key} ${formatSetting(read.settings.values[setting.key])}`);
+		check(read.problems.length === 0, `Settings: ${set.length > 0 ? set.join(", ") : "defaults"}`, read.problems.join(" "));
 		const roles = { names: [] as string[] };
 		emitEvent(pi.events, "lattice:roles:available", roles);
 		check(roles.names.length > 0 ? true : "warn", `Roles: ${roles.names.length} available`, "The roles extension is not loaded, so sessions cannot be given roles.");
@@ -1160,7 +1177,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		["approvals", "review messages waiting for approval"],
 		["share", "pair with someone, offer or accept a session"],
 		["status", "list the tree"],
-		["config [setting] [value]", "show or change this tree's settings: model, thinking, approval"],
+		["config [user] [setting] [value]", "show or change the settings, for this repository or for all of yours"],
 		["doctor", "check that everything the pane needs is working"],
 		["restart", "restart this repository's background host"],
 		["stop", "stop this repository's background host"],

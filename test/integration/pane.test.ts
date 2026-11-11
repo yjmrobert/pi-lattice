@@ -301,14 +301,20 @@ describe("the tree inside Pi", () => {
 		const root = await until((s) => s.nodes[0]?.status === "idle" && s.nodes[0], "the root");
 
 		await pi.command("/lattice config thinking loud");
-		await pi.waitFor(() => pi.notifications().find((text) => text.includes("thinking is one of")), "the complaint");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes("thinking takes off | minimal")), "the complaint");
 		expect(existsSync(join(stateDir, "config.json"))).toBe(false);
 
 		await pi.command("/lattice config approval always");
 		await pi.waitFor(() => pi.notifications().find((text) => text.includes("approval set to always")), "the confirmation");
 		expect(JSON.parse(readFileSync(join(stateDir, "config.json"), "utf8"))).toEqual({ approval: "always" });
+		// A setting of the person's own goes in their file, which every repository uses; this repository's still wins.
+		await pi.command("/lattice config user approval never");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes("This repository sets its own")), "the note that the repository wins");
+		await pi.command("/lattice config user limits.maxDepth 6");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes("limits.maxDepth set to 6")), "the limit set");
+		expect(JSON.parse(readFileSync(join(sandbox.home, "config.json"), "utf8"))).toEqual({ approval: "never", limits: { maxDepth: 6 } });
 		await pi.command("/lattice config");
-		await pi.waitFor(() => pi.notifications().find((text) => /approval\s+always/.test(text) && /model\s+not set/.test(text)), "the settings listed");
+		await pi.waitFor(() => pi.notifications().find((text) => /approval\s+always\s+\(this repository\)/.test(text) && /model\s+not set/.test(text) && /limits\.maxDepth\s+6\s+\(yours\)/.test(text)), "the settings listed with where each is from");
 
 		// With approval always, a child's report waits for the person instead of reaching the agent.
 		await pi.prompt(spawnTool({ name: "kid", brief: sendTool("parent", "report from the kid") }));
