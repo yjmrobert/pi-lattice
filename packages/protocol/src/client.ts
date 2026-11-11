@@ -3,7 +3,7 @@
  * stream instead of opening one, so this package stays free of I/O and Pi dependencies.
  */
 import { PROTOCOL_VERSION } from "./envelope.ts";
-import { type Channel, type ClientFrame, encodeFrame, FrameDecoder, type HostFrame, type RequestMap, type RequestOp } from "./wire.ts";
+import { type Channel, type ClientFrame, encodeFrame, FrameDecoder, type HostFrame, type RequestMap, type RequestOp, type UiApi, type UiMethod } from "./wire.ts";
 
 /** The part of a socket the client needs. `node:net` sockets satisfy it. */
 export interface DuplexLike {
@@ -112,6 +112,11 @@ export class HostClient {
 			this.pending.set(rid, { resolve: resolve as (value: unknown) => void, reject, timer });
 			this.stream.write(encodeFrame({ t: "req", rid, op, params } as ClientFrame));
 		});
+	}
+
+	/** Call the host's control API. Only valid on a `ui` connection. */
+	ui<K extends UiMethod>(method: K, params: UiApi[K]["params"]): Promise<UiApi[K]["result"]> {
+		return this.request("ui", { method, params }) as Promise<UiApi[K]["result"]>;
 	}
 
 	/** Send a frame that expects no response. */

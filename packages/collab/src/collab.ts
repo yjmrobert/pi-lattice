@@ -29,7 +29,7 @@ export interface HostPort {
 	/** A node's conversation, without starting its session. */
 	readMessages(id: string): Promise<unknown[]>;
 	setRemoteRouter(router: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined): void;
-	importRemoteNode(node: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt">): void;
+	importRemoteNode(node: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt" | "repo">): void;
 	deliverExternal(envelope: unknown, recipientId: string): void;
 	releaseNode(id: string, toOwner: string, version: number): Promise<void>;
 	adoptNode(id: string, options: { cwd: string; branch: string | null; workspace: NodeMeta["workspace"]; version: number; sessionFile?: string }): NodeMeta;

@@ -34,6 +34,7 @@ describe("shared metadata", () => {
 	it("never includes local paths or session files", () => {
 		const shared = toSharedMeta(node) as Record<string, unknown>;
 		expect(Object.keys(shared).sort()).toEqual(["branch", "brief", "createdAt", "fragments", "id", "kind", "name", "parentId", "rootId", "status", "workspace"]);
+		expect(toSharedMeta({ ...node, repo: "shop" }).repo).toBe("shop");
 		expect(JSON.stringify(shared)).not.toContain("secret");
 	});
 });

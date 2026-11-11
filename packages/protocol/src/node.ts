@@ -28,6 +28,8 @@ export interface NodeMeta {
 	workspace: WorkspaceMode;
 	/** Git branch for worktree nodes. */
 	branch: string | null;
+	/** Name of the repository the node works in, for display. */
+	repo?: string;
 	createdAt: string;
 	updatedAt: string;
 }
