@@ -245,11 +245,25 @@ In `shop`:
 /lattice help
 ```
 
-- [ ] `/lattice config` lists what you set, and `.lattice/config.json` holds it.
+- [ ] `/lattice config` opens the settings where the chat was. `Model` and `Thinking` show what you set, marked `this repository`, and `.lattice/config.json` holds them.
+- [ ] `↓` to `Bell` and `space`: it switches to off at once. `tab`: the path at the top changes to your own file. `x` on a row clears it from the file being edited. `esc` returns to the chat.
 - [ ] A child created now shows that model nowhere (it is the repository's default), but one created from the form with a model typed in shows `model` in the inspector.
 - [ ] `/lattice doctor` shows a tick for the model, credentials, repository, tree, host, settings and roles.
-- [ ] `/lattice config thinking loud` is refused with the list of levels.
+- [ ] `/lattice config thinking loud` is refused with what the setting takes.
 - [ ] `/lattice restart` restarts the host and leaves you in the same session.
+
+6. What sessions are told:
+
+```
+/lattice prompt
+/role show reporting
+/lattice template
+```
+
+- [ ] `/lattice prompt` opens a read-only page: the `protocol` role in full with the file it comes from, then the brief, handover, reminder and child-stopped texts.
+- [ ] In the settings, `↓` past the last setting reaches the role fragments and templates. `enter` on `worker` opens it in Pi's editor; change a line and save. The row now says `yours`, and `/role show worker` prints your text. Open it again, save it empty: the row says `built in` again.
+- [ ] Create a child with `n`, no roles chosen, brief `Reply here with the word done and nothing else. Do not send any message.` Its inspector shows `roles  protocol · reporting · worker`. It is reminded once that its parent is waiting; if it still sends nothing, the session you are in receives a message saying the child stopped without reporting.
+- [ ] Create a child with brief `Write the word done to DONE.txt, then report.` It sends a result, and its row shows `✓`.
 
 ## 10. Under a real workload (optional)
 

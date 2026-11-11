@@ -39,7 +39,12 @@ Subfolders are searched, so you can group files as `base/`, `phase/`, `scope/`. 
 /role remove planning
 /role set worker implementation
 /role clear
+/role show worker          print a fragment in full, with the file it comes from
+/role edit worker          open it in Pi's editor; saving writes your own copy
+/role edit worker project  the same, into this project's folder
 ```
+
+Saving a fragment empty removes your copy, and the one under it is used again. `/lattice prompt` shows everything the session you are in has been told, roles included.
 
 The model can do the same with the `apply_role` tool. A session spawned by a host takes its starting fragments from `LATTICE_FRAGMENTS`.
 
@@ -55,6 +60,8 @@ The applied list is stored in the session, survives resume, and carries over `/n
 
 | Name | Folder | Use it for |
 |---|---|---|
+| `protocol` | base | Given to every session in a tree: who is speaking, how messages work, how to delegate |
+| `reporting` | base | Given to every child: how to answer the session that created it |
 | `coordinator` | base | Breaking work down, delegating to children, tracking, reporting |
 | `worker` | base | One bounded piece of work, reported back when done or blocked |
 | `lifecycle` | base | Moving work through the four phases below, with the user steering |
@@ -69,6 +76,19 @@ The applied list is stored in the session, survives resume, and carries over `/n
 Typical combinations: `coordinator + lifecycle + feature` for the root of a feature; `worker + grilling + story` for a child that interrogates one story; `worker + implementation + task` for a child that builds one piece. See [the lifecycle example](../examples/feature-lifecycle/README.md).
 
 The lifecycle is not a state machine. It is the `lifecycle` fragment explaining to a coordinator how to move between phase fragments, and each phase fragment describing its own gate.
+
+## Roles a session gets without being asked
+
+A session in a tree is given some roles when it is created, so that sessions know how to talk to each other without anyone having to remember:
+
+| Setting | Default | Given to |
+|---|---|---|
+| `roles.tree` | `protocol` | Every session in a tree |
+| `roles.children` | `reporting` | Every child, whatever roles were chosen for it |
+| `roles.root` | none | The session that starts a tree |
+| `roles.child` | `worker` | A child created with no roles |
+
+They are ordinary fragments: they show in the inspector, `/role remove protocol` takes one off a session, and `/role edit protocol` changes what it says. The settings are on the settings screen (`,` in the pane). See [ADR 0017](decisions/0017-settings-and-orchestration.md).
 
 ## What roles are not
 

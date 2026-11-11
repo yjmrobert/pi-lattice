@@ -42,7 +42,10 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | `/lattice answer <name>` | Answer the questions a background session is waiting on |
 | `/lattice approvals` | Review messages waiting for your approval |
 | `/lattice status` | List the whole tree |
-| `/lattice config [setting] [value]` | Show or change this repository's settings |
+| `,` / `/lattice config` | Open the settings: every setting on one screen, edited in place |
+| `/lattice config [user] <setting> [value]` | Show or change one setting, for this repository or (`user`) for all of yours |
+| `/lattice prompt` | Show what this session is told beyond what you type, and the file each part comes from |
+| `/lattice template [name]` | List or edit the texts pi-lattice writes into a session |
 | `/lattice doctor` | Check credentials, the repository, the host, the settings and the roles |
 | `/lattice restart` | Restart the background host, keeping your session open |
 | `/lattice stop` | Stop the background host |
@@ -52,7 +55,7 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 
 While the pane has the keyboard, the chat steps aside for an inspector: everything about what the cursor is on. For a session that is its state and how long it has been in it, its place in the tree, its brief, roles, workspace, branch and directory, its model, the tokens and cost it has used, the last few things it said and did, and anything it is waiting on you for. For a waiting item it is the full text, with the session it concerns. The keys that act on it are listed along the bottom. `esc` puts the chat back as it was.
 
-Marks: a spinner for working, `●` in the attention colour for waiting on you, dim `●` idle, `○` asleep or offline, `✓` finished, `✗` failed, `▸` open in this terminal, `?n` questions waiting on you, `✉n` messages to approve. The attention colour is used for nothing else.
+Marks: a spinner for working, `●` in the attention colour for waiting on you, dim `●` idle, `○` asleep or offline, `✓` done (it sent its parent its result) or finished, `✗` failed, `▸` open in this terminal, `?n` questions waiting on you, `✉n` messages to approve. The attention colour is used for nothing else.
 
 Each session is one line. The kind is on the right, or the owner when the session is someone else's. What is waiting on you is listed above the tree. The design, with drawings of every screen, is [ADR 0015](../../docs/decisions/0015-pane-design.md).
 
@@ -62,29 +65,40 @@ Each session is one line. The kind is on the right, or the owner when the sessio
 
 ## Settings
 
-Each repository's background sessions are configured by `<repository>/.lattice/config.json`:
+`,` while the pane has the keyboard, or `/lattice config`, opens the settings where the chat was:
 
-```json
-{
-  "model": "anthropic/claude-haiku-4-5",
-  "thinking": "low",
-  "approval": "always",
-  "env": { "ANTHROPIC_API_KEY": "sk-ant-..." }
-}
+```
+ Settings   changes go to  this repository   all your repositories
+ /work/shop/.lattice/config.json
+
+ BACKGROUND SESSIONS
+   Model                anthropic/claude-haiku-4-5                   yours
+   Thinking             not set                                    default
+
+ ROLES
+   Every session        protocol                                   default
+   Every child          reporting                                  default
+   First session        none                                       default
+   Child with no roles  worker                                     default
+
+ MESSAGING
+ ▸ Approval             always                             this repository
+ ───────────────────────────────────────────────────────────────────────────
+ approval · Which messages between agents wait for you: those from other
+ people's sessions (cross-owner), all of them (always), or none (never).
+ ───────────────────────────────────────────────────────────────────────────
+ ↑↓ move  ←→ choose  x clear here  tab yours  esc close
 ```
 
-| Setting | Does |
-|---|---|
-| `model` | The model background sessions run on. A session created with its own model keeps it |
-| `thinking` | Their thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `approval` | Which messages between agents wait for you: `cross-owner` (the default), `always`, `never`. Applies to the session open in your terminal too, unless you set `--lattice-approval` |
-| `env` | Extra environment for background sessions. Edit the file for this one |
+Every setting shows its value and where the value comes from, and the one under the cursor says what it does and when a change applies. A change is written at once. `tab` switches between this repository's file and your own, which every repository uses; `x` clears a value from the file you are editing, so what is under it shows again. Below the settings, every role fragment and template is a row: `enter` opens it in Pi's editor.
 
-`/lattice config` shows them, `/lattice config model anthropic/claude-haiku-4-5` sets one, and `/lattice config model -` clears it. The file is read each time a session starts, so a change applies to the next one; `/lattice restart` applies it to the ones already running. Without a setting, a background session uses Pi's own defaults.
+A value comes from the environment, then `<repository>/.lattice/config.json`, then `~/.pi/agent/lattice/config.json`, then the default. Every setting, its default and its environment variable are listed in [the settings reference](../../docs/settings.md).
+
+In a terminal with no room beside the pane, `/lattice config` prints the settings as text; `/lattice config approval always` sets one for this repository, `/lattice config user approval always` for all of yours, and `-` as the value clears it.
 
 ## Noticing from another window
 
-When something starts waiting on you the terminal bell rings and the terminal's title shows how many things are waiting. `LATTICE_BELL=0` silences the bell.
+When something starts waiting on you the terminal bell rings and the terminal's title shows how many things are waiting. The `Bell` setting silences it.
 
 ## Several repositories
 
