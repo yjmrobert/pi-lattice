@@ -113,6 +113,13 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 		change("set", assignment.fragments);
 	});
 
+	// Whoever builds a form for choosing roles asks what there is to choose from.
+	onEvent(pi.events, "lattice:roles:available", (request) => {
+		if (!context) return;
+		reload(context);
+		for (const name of available.keys()) if (!request.names.includes(name)) request.names.push(name);
+	});
+
 	onEvent(pi.events, "lattice:roles:set", (request) => {
 		if (context) change("set", request.fragments);
 	});

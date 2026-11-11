@@ -40,6 +40,8 @@ export interface LatticeEvents {
 	"lattice:a2a:inbound": { envelope: Envelope; state: InboundState };
 	/** The session's applied role fragments changed. */
 	"lattice:roles:changed": { fragments: string[] };
+	/** Ask which role fragments exist here. The asker passes an empty list; the roles extension fills it in. */
+	"lattice:roles:available": { names: string[] };
 	/** Ask the roles extension to replace the applied fragments. */
 	"lattice:roles:set": { fragments: string[] };
 }

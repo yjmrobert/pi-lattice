@@ -22,8 +22,10 @@ Then open `pi` in a project as you always do. A pane on the left lists the proje
 ```
 
 - The first time in a project, run `/lattice` once to start a tree. After that the pane is populated whenever Pi opens, and each new session joins with its first message.
-- Ask the agent to delegate, or press `alt+l` then `n`, to create child sessions. They run in the background.
-- `alt+l`, arrows, `enter` opens any session in this terminal, with all of Pi. You can switch at any time, even mid-turn: the work you leave carries on in the background.
+- What needs you is listed above the tree: questions a background session is stuck on, messages to approve. `alt+l` gives the pane the keyboard, and you answer them where they are (`y`/`n`, `a`/`x`).
+- With the keyboard, the chat steps aside to show the selected session in full. `enter` opens it in this terminal, with all of Pi. You can switch at any time, even mid-turn: the work you leave carries on in the background.
+- `n` creates a child session from one form. Agents can also delegate on their own. Children run in the background.
+- Work in several repositories shows in one pane. Opening a session from another repository moves this terminal there; `-` goes back.
 - `/lattice share` pairs you with a collaborator, peer to peer, so you see each other's sessions and can hand one over.
 
 See the [pane readme](packages/pane/README.md) for keys, and [a feature through the full lifecycle](examples/feature-lifecycle/README.md) for a walkthrough.
@@ -32,7 +34,7 @@ See the [pane readme](packages/pane/README.md) for keys, and [a feature through 
 
 | Package | What it does |
 |---|---|
-| [`pane`](packages/pane/README.md) | Pi extension. The session tree as a left pane inside Pi, and the `/lattice` command. |
+| [`pane`](packages/pane/README.md) | Pi extension. The session trees of every repository as a left pane inside Pi, and the `/lattice` command. |
 | [`a2a`](packages/a2a/README.md) | Pi extension. Sessions message each other; inbound mail can require human approval. Also works alone ([try it](examples/minimal-two-agents/README.md)). |
 | [`roles`](packages/roles/README.md) | Pi extension. Compose a session's role from markdown fragments and change it mid-session. Also works alone ([guide](docs/roles.md)). |
 | [`graph`](packages/graph/README.md) | Pi extension. Lets an agent spawn child sessions and see the tree. |

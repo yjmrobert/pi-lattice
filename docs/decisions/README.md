@@ -19,4 +19,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0012 | Collab is peer to peer, with no server and no shared storage | accepted |
 | 0013 | The tree lives inside Pi, as a pane | accepted |
 | 0014 | Package seams | accepted |
-| 0015 | The pane: a rail, an inbox, an inspector, and every repository | accepted, being built |
+| 0015 | The pane: a rail, an inbox, an inspector, and every repository | accepted |

@@ -1,6 +1,6 @@
 import type { NodeMeta, UiState } from "@pi-lattice/protocol";
 import { describe, expect, it } from "vitest";
-import { ago, cursorKeys, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
+import { ago, type ChildForm, cursorKeys, formKey, newChildForm, renderForm, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
 
 const node = (id: string, parentId: string | null, over: Partial<NodeMeta> = {}): NodeMeta => ({
 	id, parentId, rootId: "r", kind: "task", name: id, brief: "", fragments: [], owner: "yan", version: 1, status: "idle",
@@ -199,7 +199,7 @@ describe("keys while the pane has the keyboard", () => {
 	it("opens, creates under and shares the session the cursor is on", () => {
 		expect(interpretKey(at(nodeKey("a")), "enter")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice open a" }]);
 		expect(interpretKey(at(nodeKey("r")), "enter")).toEqual([{ do: "leave" }]);
-		expect(interpretKey(at(nodeKey("a")), "n")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice new a" }]);
+		expect(interpretKey(at(nodeKey("a")), "n")).toEqual([{ do: "new", nodeId: "a" }]);
 		expect(interpretKey(at(nodeKey("a")), "escape")).toEqual([{ do: "leave" }]);
 	});
 
@@ -313,5 +313,68 @@ describe("the strip for narrow terminals", () => {
 
 	it("shows nothing when there is no tree anywhere", () => {
 		expect(renderStrip({ repos: [], current: undefined, cursor: undefined, focused: false }, 72)).toEqual([]);
+	});
+});
+
+describe("the new-session form", () => {
+	const blank = (): ChildForm => newChildForm({ id: "a", name: "payments" }, ["coordinator", "implementation", "worker"]);
+	/** Press keys in turn; text is typed. */
+	const press = (form: ChildForm, ...keys: Array<Parameters<typeof formKey>[1] | string>): ChildForm => {
+		let at = form;
+		for (const key of keys) {
+			const named = ["tab", "back-tab", "up", "down", "left", "right", "enter", "space", "backspace", "escape", "submit"].includes(key as string);
+			const result = formKey(at, (typeof key === "string" && !named ? { text: key } : key) as Parameters<typeof formKey>[1]);
+			if (!("form" in result)) throw new Error("the form ended");
+			at = result.form;
+		}
+		return at;
+	};
+
+	it("shows every field at once", () => {
+		expect(renderForm(press(blank(), "refund-rounding"), 70)).toEqual([
+			" New session under payments",
+			"",
+			" Name       refund-rounding▏",
+			" Kind       task",
+			" Roles       coordinator   implementation   worker  ",
+			" Workspace  ◉ this directory   ○ its own worktree and branch",
+			"",
+			" Brief      what it should do; it sees only this",
+			" ╭────────────────────────────────────────────────────────────────╮",
+			" │                                                                │",
+			" │                                                                │",
+			" │                                                                │",
+			" │                                                                │",
+			" ╰────────────────────────────────────────────────────────────────╯",
+			"",
+			"   Create    runs in the background",
+			"─────────────────────────────────────────────────────────────────────",
+			" tab next field  ctrl+s create  esc cancel",
+		]);
+	});
+
+	it("fills in from the keyboard: text, roles in the order chosen, workspace, a brief of several lines", () => {
+		const filled = press(blank(), "refund", "tab", "backspace", "backspace", "backspace", "backspace", "fix", "tab", "right", "right", "space", "left", "space", "tab", "space", "tab", "Fix rounding.", "enter", "Keep the tests green.");
+		expect(filled).toMatchObject({ name: "refund", kind: "fix", picked: ["worker", "implementation"], workspace: "worktree", brief: "Fix rounding.\nKeep the tests green.", field: "brief" });
+		expect(renderForm(filled, 70).join("\n")).toContain("[implementation]");
+		expect(formKey(filled, "submit")).toEqual({ submit: { parentId: "a", spec: { name: "refund", brief: "Fix rounding.\nKeep the tests green.", kind: "fix", fragments: ["worker", "implementation"], workspace: "worktree" } } });
+	});
+
+	it("creates from the button as well, and unchooses a role chosen by mistake", () => {
+		const form = press(blank(), "x", "tab", "tab", "space", "space", "tab", "tab", "do it", "tab");
+		expect(form.picked).toEqual([]);
+		expect(form.field).toBe("create");
+		expect(formKey(form, "enter")).toMatchObject({ submit: { spec: { name: "x", brief: "do it", fragments: [], workspace: "shared" } } });
+	});
+
+	it("says what is missing and goes to that field, and forgets the complaint at the next key", () => {
+		const result = formKey(press(blank(), "x"), "submit");
+		expect(result).toMatchObject({ form: { field: "brief", error: "Say what it should do. It sees only the brief." } });
+		expect(formKey(blank(), "submit")).toMatchObject({ form: { field: "name", error: "Give it a name." } });
+		if ("form" in result) expect(press(result.form, "y").error).toBeUndefined();
+	});
+
+	it("cancels with escape", () => {
+		expect(formKey(blank(), "escape")).toEqual({ cancel: true });
 	});
 });

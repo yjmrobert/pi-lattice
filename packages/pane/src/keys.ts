@@ -17,6 +17,8 @@ export type PaneAction =
 	| { do: "decide"; repo: string; nodeId: string; envelopeId: string; action: "approve" | "reject" }
 	/** Accept or decline a session someone offers. */
 	| { do: "sharing"; repo: string; action: "accept" | "cancel"; nodeId: string }
+	/** Create a session under this one. */
+	| { do: "new"; nodeId: string | undefined }
 	/** Start the host of a repository whose tree is asleep, so its sessions can be seen and opened. */
 	| { do: "wake"; repo: string };
 
@@ -82,7 +84,7 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 	}
 	const target = cursorNode(view) ?? view.current;
 	if (key === "enter") return target && target !== view.current ? [{ do: "leave" }, { do: "command", text: `/lattice open ${target}` }] : [{ do: "leave" }];
-	if (key === "n") return [{ do: "leave" }, { do: "command", text: `/lattice new ${target ?? ""}`.trim() }];
+	if (key === "n") return [{ do: "new", nodeId: target }];
 	if (key === "a") return [{ do: "leave" }, { do: "command", text: "/lattice approvals" }];
 	if (key === "o") return [{ do: "leave" }, { do: "command", text: `/lattice share ${target ?? ""}`.trim() }];
 	return [];

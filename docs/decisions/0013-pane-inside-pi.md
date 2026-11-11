@@ -1,6 +1,6 @@
 # 0013 The tree lives inside Pi, as a pane
 
-Supersedes [0006](0006-attach-model.md).
+Supersedes [0006](0006-attach-model.md). How the pane looks and what its keys do is now [0015](0015-pane-design.md).
 
 **Decision**
 

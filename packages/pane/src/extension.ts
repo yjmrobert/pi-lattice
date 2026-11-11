@@ -10,6 +10,7 @@ import { basename, dirname } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { emitEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type KnownTree, type NodeMeta, type UiState } from "@pi-lattice/protocol";
+import { type ChildForm, type FormKey, formKey, newChildForm, renderForm } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorKeys, interpretKey, type PaneAction } from "./keys.ts";
 import { connectHost, hasTree, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
@@ -56,6 +57,8 @@ interface Shared {
 	/** What the pane's cursor is on: a key from the view's order. */
 	cursor: string | undefined;
 	focused: boolean;
+	/** The new-session form, while it is being filled in. It takes the inspector's place and the keyboard. */
+	form: ChildForm | undefined;
 	/** Redraws the pane while a session is working, so its spinner turns. */
 	ticker: ReturnType<typeof setInterval> | undefined;
 	scanner: ReturnType<typeof setInterval> | undefined;
@@ -71,7 +74,7 @@ interface Shared {
 const KEY = Symbol.for("pi-lattice.pane.2");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
-	links: new Map(), home: undefined, asleep: [], current: undefined, currentDir: undefined, previous: undefined, assignment: undefined, cursor: undefined, focused: false,
+	links: new Map(), home: undefined, asleep: [], current: undefined, currentDir: undefined, previous: undefined, assignment: undefined, cursor: undefined, focused: false, form: undefined,
 	ticker: undefined, scanner: undefined, scanning: false, paint: PLAIN, tui: undefined, wrapped: false, strip: undefined, pi: undefined, ctx: undefined,
 });
 
@@ -99,6 +102,7 @@ function view(): PaneView {
 		frame: Math.floor(Date.now() / SPINNER_MS),
 		height: shared.tui?.terminal.rows,
 		inspector: inspecting(),
+		note: shared.form ? `new session under ${shared.form.parentName}` : undefined,
 		now: Date.now(),
 	};
 	return { ...base, keys: cursorKeys(base) };
@@ -271,7 +275,8 @@ function installPane(tui: Hooked): void {
 	};
 	// While the pane has the keyboard, what the cursor is on is shown in full where the chat was.
 	const inspector: Component = {
-		render: (width) => renderInspector(view(), width, shared.paint, shared.tui?.terminal.rows).map((line) => truncateToWidth(line, width)),
+		render: (width) =>
+			(shared.form ? renderForm(shared.form, width, shared.paint, shared.tui?.terminal.rows) : renderInspector(view(), width, shared.paint, shared.tui?.terminal.rows)).map((line) => truncateToWidth(line, width)),
 		invalidate() {},
 	};
 	const wrap = (inner: Component): Component =>
@@ -307,7 +312,54 @@ function dispatch(command: string): void {
 	}
 }
 
+/** A key press as the form sees it. Anything that is not a key it acts on is text, pasted text included. */
+function formKeyOf(data: string): FormKey | undefined {
+	const named = (["tab", "up", "down", "left", "right", "enter", "space", "backspace", "escape"] as const).find((key) => matchesKey(data, key));
+	if (named) return named;
+	if (matchesKey(data, "shift+tab")) return "back-tab";
+	if (matchesKey(data, "ctrl+s")) return "submit";
+	// Pasted text arrives between markers; other escape sequences are keys the form has no use for.
+	const text = data.replace(/\x1b\[20[01]~/g, "").replace(/\r\n?/g, "\n");
+	if (text === "" || text.includes("\x1b") || /[\x00-\x09\x0b-\x1f\x7f]/.test(text)) return undefined;
+	return { text };
+}
+
+/** Keys while the new-session form is open. */
+function onFormKey(data: string): void {
+	const form = shared.form;
+	const key = formKeyOf(data);
+	if (!form || !key) return;
+	const result = formKey(form, key);
+	if ("cancel" in result) shared.form = undefined;
+	else if ("form" in result) shared.form = result.form;
+	else {
+		const client = linkOf(result.submit.parentId)?.client;
+		if (!client) {
+			shared.form = { ...form, error: "Its parent is no longer here." };
+			return;
+		}
+		client
+			.ui("spawn", result.submit)
+			.then(async ({ node }) => {
+				shared.form = undefined;
+				await refresh();
+				// Leave the cursor on what was just made.
+				shared.cursor = nodeKey(node.id);
+				tell(`Created "${node.name}". It is working in the background.`);
+			})
+			.catch((error: unknown) => {
+				if (shared.form) shared.form = { ...shared.form, error: error instanceof Error ? error.message : String(error) };
+			})
+			.finally(redraw);
+	}
+}
+
 function onPaneKey(data: string): void {
+	if (shared.form) {
+		onFormKey(data);
+		redraw();
+		return;
+	}
 	const key = matchesKey(data, "up") ? "up" : matchesKey(data, "down") ? "down" : matchesKey(data, "enter") ? "enter" : matchesKey(data, "escape") || matchesKey(data, "alt+l") ? "escape" : data;
 	for (const action of interpretKey(view(), key)) perform(action);
 	redraw();
@@ -323,7 +375,20 @@ function perform(action: PaneAction): void {
 		shared.focused = false;
 		shared.cursor = undefined;
 	} else if (action.do === "command") dispatch(action.text);
-	else if (action.do === "wake") {
+	else if (action.do === "new") {
+		const parent = action.nodeId ? [...shared.links.values()].flatMap((link) => (link.state?.nodes ?? []).map((node) => ({ node, owner: link.state?.owner }))).find((entry) => entry.node.id === action.nodeId) : undefined;
+		if (!parent || parent.node.owner !== parent.owner) tell("Choose one of your own sessions to add a child under.", "warning");
+		else if (inspecting()) {
+			// Ask whoever knows which roles exist here; with no answer the form simply offers none.
+			const request = { names: [] as string[] };
+			if (shared.pi) emitEvent(shared.pi.events, "lattice:roles:available", request);
+			shared.form = newChildForm(parent.node, request.names.sort());
+		} else {
+			shared.focused = false;
+			shared.cursor = undefined;
+			dispatch(`/lattice new ${parent.node.id}`);
+		}
+	} else if (action.do === "wake") {
 		const tree = shared.asleep.find((candidate) => candidate.stateDir === action.repo);
 		const bus = shared.pi?.events;
 		if (!tree || !bus) return;
@@ -486,6 +551,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			shared.focused = !shared.focused;
+			shared.form = undefined;
 			shared.cursor = shared.focused ? restingCursor() : undefined;
 			redraw();
 		},

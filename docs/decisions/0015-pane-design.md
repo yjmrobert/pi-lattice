@@ -1,6 +1,6 @@
 # 0015 The pane: a rail, an inbox, an inspector, and every repository
 
-Builds on [0013](0013-pane-inside-pi.md). Status: accepted as the destination; built in the steps listed below.
+Builds on [0013](0013-pane-inside-pi.md), and replaces what it says about how the pane looks, its keys, hiding below 90 columns, and not scrolling. Status: accepted and built.
 
 The coloured drawings of every screen are in [`docs/design/pane.html`](../design/pane.html).
 
@@ -170,11 +170,16 @@ Pi already moves with a session: `switchSession` rebuilds its runtime in the dir
 5. The strip for narrow terminals.
 6. The new-child form.
 
+All six are built.
+
 Later, and needing more from the host: what each session is doing right now, and a list of its recent events.
 
 **Costs and limits**
 
 - The inspector hides the chat while the pane has the keyboard.
+- The form edits text at its end only: there is no cursor to move within a field. The brief can be pasted.
+- The form's roles come from the roles extension over the event bus. Without that extension the form offers none; `/lattice new` still takes them as text.
+- Showing and hiding the chat, like the pane itself, relies on Pi's layout internals (ADR 0013).
 - Every open terminal is connected to every running host, so a host stops on its own only once no Pi of this user is open anywhere and nothing in its tree is working.
 - Entering a repository for the first time can raise Pi's project trust prompt.
 - Quitting Pi after moving leaves the shell in the directory Pi was started from.

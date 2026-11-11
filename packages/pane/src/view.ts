@@ -64,6 +64,8 @@ export interface PaneView {
 	previous?: boolean;
 	/** Whether the inspector is showing beside the pane. It then lists the keys that act, and the pane keeps the ones that move. */
 	inspector?: boolean;
+	/** Shown in the footer in place of the keys, while something else has the keyboard (the new-session form). */
+	note?: string | undefined;
 	/** The time, for saying how long a session has been in its state. */
 	now?: number;
 	/** The node open in this terminal. */
@@ -291,6 +293,7 @@ function footer(view: PaneView, waiting: number, width: number, paint: Paint): S
 		const left: Seg[] = [[" "], key("alt+l"), word(waiting > 0 ? " to answer" : " sessions")];
 		return [rule, widthOf(left) + widthOf(right) + 1 <= width ? spread(left, right, width) : left];
 	}
+	if (view.note) return [rule, [[fit(` ${view.note}`, width), paint.dim]]];
 	if (view.inspector) return [rule, ...flow([["↑↓", "move"], ...(waiting > 0 ? ([["1-9", "jump"]] as const) : []), ["esc", "close"]], width, paint)];
 	const back: Array<readonly [string, string]> = view.previous ? [["-", "previous"]] : [];
 	return [rule, ...flow([...(view.keys ?? [["⏎", "open"], ["n", "new"], ["o", "share"]]), ...back, ["↑↓", "move"], ["esc", "close"]], width, paint)];

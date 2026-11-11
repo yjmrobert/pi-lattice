@@ -28,7 +28,8 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | `enter` | Open the selected session here; on a question, answer it with Pi's prompt |
 | `y` `n` | Answer the selected yes/no question, where it is |
 | `a` `x` | Approve or reject the selected message; accept or decline an offered session |
-| `n` / `/lattice new` | Create a child: name, kind, roles, workspace, brief |
+| `n` | Create a child under the selected session, in one form: name, kind, roles, workspace, brief |
+| `/lattice new` | The same, as a series of prompts |
 | `o` / `/lattice share` | Pair with someone, offer or accept a session, confirm a release |
 | `-` / `/lattice back` | Go back to the session you were in before, in any repository |
 | `/lattice open <name>` | Open a session by name, from any repository |
@@ -42,6 +43,10 @@ While the pane has the keyboard, the chat steps aside for an inspector: everythi
 Marks: a spinner for working, `●` in the attention colour for waiting on you, dim `●` idle, `○` asleep or offline, `✓` finished, `✗` failed, `▸` open in this terminal, `?n` questions waiting on you, `✉n` messages to approve. The attention colour is used for nothing else.
 
 Each session is one line. The kind is on the right, or the owner when the session is someone else's. What is waiting on you is listed above the tree. The design, with drawings of every screen, is [ADR 0015](../../docs/decisions/0015-pane-design.md).
+
+## Creating a session
+
+`n` opens a form where the chat was, with every field visible at once. `tab` and `shift+tab` move between fields. Roles are chosen from the fragments that exist (`←` `→` to move, `space` to choose, in the order you want them applied). `ctrl+s` creates the session from anywhere in the form; `esc` cancels. Text is typed and deleted at its end; paste works.
 
 ## Several repositories
 
