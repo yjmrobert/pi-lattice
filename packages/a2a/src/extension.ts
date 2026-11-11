@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import {
 	type ApprovalPolicy,
 	assignmentFromEnv,
@@ -29,7 +30,7 @@ import {
 	validateEnvelope,
 } from "@pi-lattice/protocol";
 import { Type } from "typebox";
-import { formatInbound, summarize } from "./format.ts";
+import { formatInbound, messageCard, summarize } from "./format.ts";
 import { releaseNode, resolveIdentity } from "./identity.ts";
 import { MailStore } from "./mailstore.ts";
 import { latticeHome, nodeDir } from "./paths.ts";
@@ -339,6 +340,19 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async () => {
 		session = undefined;
 		await queue(unbind);
+	});
+
+	// In the chat a message is a card: who it is from, why, and what it says. The model still gets the wrapped text.
+	pi.registerMessageRenderer<{ envelope?: Envelope }>(MESSAGE_TYPE, (message, { expanded, outputPad, keyHint }, theme) => {
+		const envelope = message.details?.envelope;
+		if (!envelope) return undefined;
+		const card = messageCard(envelope, expanded);
+		const rows = [`${theme.fg("customMessageLabel", `${card.icon} ${theme.bold(card.from)}`)}  ${theme.fg("dim", card.intent)}`, ...card.lines.map((line) => theme.fg("customMessageText", line))];
+		if (card.hidden > 0) rows.push(theme.fg("dim", `… ${card.hidden} more ${card.hidden === 1 ? "line" : "lines"} (`) + keyHint("app.tools.expand", "to expand") + theme.fg("dim", ")"));
+		if (card.meta.length > 0) rows.push("", ...card.meta.map((line) => theme.fg("dim", line)));
+		const box = new Box(outputPad, 1, (text) => theme.bg("customMessageBg", text));
+		box.addChild(new Text(rows.join("\n"), 0, 0));
+		return box;
 	});
 
 	pi.on("before_agent_start", async (event) => {

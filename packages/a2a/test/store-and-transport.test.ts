@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEnvelope, type Envelope, newNodeId } from "@pi-lattice/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { claimNode, FileTransport, formatInbound, MailStore, nodeDir, releaseNode, resolveIdentity, TransportError } from "../src/index.ts";
+import { claimNode, FileTransport, formatInbound, MailStore, messageCard, nodeDir, releaseNode, resolveIdentity, TransportError } from "../src/index.ts";
 import { RateLimiter } from "../src/rate.ts";
 
 let home: string;
@@ -205,5 +205,27 @@ describe("RateLimiter", () => {
 		expect([rate.tryAcquire(0), rate.tryAcquire(10), rate.tryAcquire(20)]).toEqual([true, true, false]);
 		expect(rate.tryAcquire(1005)).toBe(true);
 		expect(rate.tryAcquire(1006)).toBe(false);
+	});
+});
+
+describe("messageCard", () => {
+	it("shows who a message is from, why, and its first lines", () => {
+		const card = messageCard({ ...envelope({ text: "one\ntwo\nthree\nfour\nfive\nsix", intent: "result" }), fromName: "payments" });
+		expect(card).toMatchObject({ icon: "✉", from: "payments", intent: "result", lines: ["one", "two", "three", "four"], hidden: 2, meta: [] });
+	});
+
+	it("expanded, shows all of it with the files and where it came from", () => {
+		const sent = { ...envelope({ text: "one\ntwo\nthree\nfour\nfive", refs: ["PLAN.md"] }), causationId: "env_before" };
+		const card = messageCard(sent, true);
+		expect(card.icon).toBe("↩");
+		expect(card.from).toBe(sent.from);
+		expect(card.lines).toHaveLength(5);
+		expect(card.hidden).toBe(0);
+		expect(card.meta).toEqual(["files  PLAN.md", `${sent.id} · from ${sent.from} · owner yan`]);
+	});
+
+	it("leaves out the pi-lattice prefix and anything that would steer the terminal", () => {
+		const card = messageCard(envelope({ text: "[pi-lattice] Your child stopped.\n\u001b[31mred\u001b[2J" }));
+		expect(card.lines).toEqual(["Your child stopped.", "[31mred[2J"]);
 	});
 });
