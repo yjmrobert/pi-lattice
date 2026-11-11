@@ -53,7 +53,10 @@ const open = async (overrides: Record<string, unknown> = {}, root: { fragments?:
 	app.start();
 	return node;
 };
-const screen = (needle: string, timeoutMs = 15_000) => eventually(() => (app.text().includes(needle) ? app.text() : undefined), `screen to show "${needle}"`, timeoutMs);
+const screen = (needle: string, timeoutMs = 15_000) =>
+	eventually(() => (app.text().includes(needle) ? app.text() : undefined), `screen to show "${needle}"`, timeoutMs).catch((error: Error) => {
+		throw new Error(`${error.message}\n--- screen ---\n${app.text()}`);
+	});
 const typeLine = (text: string) => {
 	terminal.type(text);
 	terminal.type(KEY.enter);
