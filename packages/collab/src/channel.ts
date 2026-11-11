@@ -53,8 +53,10 @@ export interface ChannelOptions {
 	expect?: string;
 	/** The network's secret. With it, the other side must prove they hold it too, and that is enough to let a new name in. */
 	network?: Buffer;
-	/** What this host is working on, such as a repository. The other side must say the same. */
+	/** What this host is working on, such as a repository. The other side must say the same, unless `guests` is set. */
 	scope?: string;
+	/** Let in members working on something else. The channel then says what, and the caller decides what they may do. */
+	guests?: boolean;
 	/** Told when someone new proved they are in the network, so their key can be pinned. */
 	onMember?(name: string, publicKey: string): void;
 	/** Told about an authenticated-looking peer whose key is not pinned and who is not let in. */
@@ -77,6 +79,8 @@ export interface ChannelEvents {
 export class SecureChannel extends EventEmitter<ChannelEvents> {
 	/** The authenticated name of the person at the other end. */
 	readonly peer: string;
+	/** What the other end says it is working on. */
+	readonly scope: string | undefined;
 	private readonly stream: Duplex;
 	private readonly sendKey: Buffer;
 	private readonly receiveKey: Buffer;
@@ -86,10 +90,11 @@ export class SecureChannel extends EventEmitter<ChannelEvents> {
 	private closed = false;
 
 	/** @internal Use {@link openChannel}. */
-	constructor(stream: Duplex, peer: string, sendKey: Buffer, receiveKey: Buffer, leftover: Buffer, sendCounter: bigint, receiveCounter: bigint) {
+	constructor(stream: Duplex, peer: string, sendKey: Buffer, receiveKey: Buffer, leftover: Buffer, sendCounter: bigint, receiveCounter: bigint, scope?: string) {
 		super();
 		this.stream = stream;
 		this.peer = peer;
+		this.scope = scope;
 		this.sendKey = sendKey;
 		this.receiveKey = receiveKey;
 		this.buffer = leftover;
@@ -236,7 +241,7 @@ export function openChannel(stream: Duplex, options: ChannelOptions): Promise<Se
 			if (options.expect !== undefined && hello.name !== options.expect) throw new HandshakeError(`Expected to reach ${options.expect}, but ${hello.name} answered.`);
 			if (hello.name === options.identity.name) throw new HandshakeError("Refusing a connection from someone using your own name.");
 			if (options.network && hello.net !== mine.net) throw new HandshakeError(`${hello.name} is not in your network.`);
-			if (hello.scope !== mine.scope) throw new HandshakeError(`${hello.name} is working on something else.`);
+			if (hello.scope !== mine.scope && !options.guests) throw new HandshakeError(`${hello.name} is working on something else.`);
 			const pinned = options.keyOf(hello.name);
 			if (pinned === undefined) {
 				if (!options.network) {
@@ -274,7 +279,7 @@ export function openChannel(stream: Duplex, options: ChannelOptions): Promise<Se
 			settled = true;
 			cleanup();
 			if (newcomer) options.onMember?.(theirs.name, theirs.key);
-			resolve(new SecureChannel(stream, theirs.name, keys.send, keys.receive, buffer, sendCounter, receiveCounter));
+			resolve(new SecureChannel(stream, theirs.name, keys.send, keys.receive, buffer, sendCounter, receiveCounter, theirs.scope));
 		};
 
 		const takeLine = (): string | undefined => {

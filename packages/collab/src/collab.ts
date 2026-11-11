@@ -13,13 +13,14 @@
  */
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { type Envelope, isId, type LeaseEvent, newHandoffId, type NodeMeta, validateEnvelope } from "@pi-lattice/protocol";
 import { type ChannelOptions, openChannel, type SecureChannel } from "./channel.ts";
 import { fingerprint, type Identity, type Signed } from "./identity.ts";
-import { appendEvent, type Folded, foldRecord, type KeyLookup, type NodeRecord, parseRecord, toSharedMeta } from "./ledger.ts";
+import { appendEvent, type Folded, foldRecord, type KeyLookup, type NodeRecord, parseRecord, type SharedMeta, toSharedMeta } from "./ledger.ts";
 import type { Discovery } from "./discovery.ts";
 import { formatJoinCode, type Network, networkKey, sharedPort } from "./network.ts";
 import type { PeerBook } from "./peers.ts";
@@ -56,6 +57,18 @@ export interface CollabOptions {
 	scope?: string;
 	/** Finds teammates on the local network. Without it, only known machines and seeds are tried. */
 	discovery?: Discovery;
+	/**
+	 * A second place to listen, on the port every member knows (`lobbyPort`). Whichever of a
+	 * person's hosts gets it is where teammates who share no repository with them first ask.
+	 * The others keep trying, and take over when it stops.
+	 */
+	lobby?: PeerTransport;
+	/** A directory all of this person's hosts share, where each says what it has running, so any one of them can answer for all. */
+	directoryDir?: string;
+	/** What this host's repository is called, and where a teammate can clone it from. */
+	repo?: { name: string; url?: string };
+	/** How often to look for news in a session someone is watching, in milliseconds. */
+	followMs?: number;
 	/** Private working directory: ownership logs, queued mail, transfers in flight. */
 	dir: string;
 	/** The local checkout of the project, where adopted nodes work. */
@@ -78,10 +91,36 @@ export interface PersonView {
 	publicKey: string;
 	fingerprint: string;
 	trust: PersonTrust;
-	/** Connected to this host right now: they are working on the same thing. */
+	/** One of their hosts is reachable right now, whatever it is working on. */
 	online: boolean;
+	/** Their host for the same work as this one is connected: their sessions here can be read, asked for and offered to. */
+	here: boolean;
 	self: boolean;
 }
+
+/** One repository a person has sessions running in, as their hosts describe it. */
+export interface DirectoryTree {
+	scope: string;
+	repo: string;
+	/** Where the repository can be cloned from, when its owner's checkout has a remote. */
+	url?: string;
+	/** The port their host for it listens on. */
+	port: number;
+	nodes: SharedMeta[];
+}
+
+/** A teammate's tree in a repository this host is not working on. */
+export interface ElsewhereTree extends DirectoryTree {
+	owner: string;
+	online: boolean;
+}
+
+/** The scope of the port every member knows; see `CollabOptions.lobby`. */
+const LOBBY = "|lobby";
+export const lobbyPort = (network: Pick<Network, "secret">): number => sharedPort(networkKey(network), LOBBY);
+
+/** What a member working on something else may ask of a host: who is in the network, what is running, and to read it. */
+const GUEST_OPS = new Set(["roster", "directory", "messages", "follow"]);
 
 /** Someone asking to take a session over. `owner`: they ask this person. `asker`: this person asked. */
 export interface RequestView {
@@ -140,7 +179,15 @@ type Frame =
 	| { t: "req"; id: number; op: string; p: unknown }
 	| { t: "res"; id: number; ok: true; r: unknown }
 	| { t: "res"; id: number; ok: false; e: string }
-	| { t: "note"; kind: "changed" };
+	/** The sender's own tree changed. */
+	| { t: "note"; kind: "changed" }
+	/** What the sender, or another of that person's hosts, has running changed. */
+	| { t: "note"; kind: "directory" }
+	/** A session the receiver is watching has more in it: everything from message `from` on. */
+	| { t: "note"; kind: "session"; nodeId: string; from: number; messages: unknown[] };
+
+/** The person at the far end of a link: a link is their name, or `name|scope` when they are working on something else. */
+const personOf = (link: string): string => link.split("|")[0] as string;
 
 const git = (cwd: string, ...args: string[]): Promise<string> =>
 	new Promise((resolvePromise, reject) => {
@@ -170,6 +217,18 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private readonly failures = new Map<string, { count: number; retryAt: number }>();
 	private readonly key: Buffer;
 	private settling = false;
+	/** Channels to members working on something else, by `name|scope`. They carry reading, never handing over. */
+	private readonly guests = new Map<string, { channel: SecureChannel; initiator: string }>();
+	private readonly guestAddresses = new Map<string, string>(); // name -> `host:port` of one of their other hosts
+	private readonly reached = new Map<string, string>(); // link -> the machine it goes to
+	private readonly directory = new Map<string, DirectoryTree[]>(); // person -> what they have running, as last told
+	private readonly following = new Map<string, { messages: unknown[]; link: string; asked: number; used: number }>();
+	private readonly followers = new Map<string, Map<string, { until: number; sent: number }>>();
+	private followTimer: NodeJS.Timeout | undefined;
+	private polling = false;
+	private lobbyOpen = false;
+	private summary = "";
+	private directoryStamp = "";
 	private readonly waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; peer: string }>();
 	private readonly timers = new Map<string, NodeJS.Timeout>();
 	private requestId = 0;
@@ -190,28 +249,37 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		this.now = options.now ?? Date.now;
 		this.key = networkKey(options.network);
 		if (this.identity.name !== this.host.owner) throw new Error(`The sharing identity "${this.identity.name}" must match the host owner "${this.host.owner}".`);
-		for (const name of ["ledger", "outbox", "transfers", "incoming", "requests", "asked"]) mkdirSync(join(options.dir, name), { recursive: true });
+		for (const name of ["ledger", "outbox", "transfers", "incoming", "requests", "asked", "directory"]) mkdirSync(join(options.dir, name), { recursive: true });
+		if (options.directoryDir) mkdirSync(options.directoryDir, { recursive: true });
+		// What teammates had running elsewhere when last heard from, so it shows before they are reached again.
+		for (const file of readdirSync(join(options.dir, "directory"))) {
+			try {
+				const trees = cleanTrees(JSON.parse(readFileSync(join(options.dir, "directory", file), "utf8")));
+				if (file.endsWith(".json")) this.directory.set(file.slice(0, -5), trees);
+			} catch {
+				// Unreadable: they will say again.
+			}
+		}
 	}
 
 	// --- lifecycle -------------------------------------------------------------
 
 	/** Start listening, publish this host's nodes, and reach out to the rest of the network. */
 	async start(): Promise<void> {
-		this.bound = await this.options.transport.listen((stream, from) => {
-			openChannel(stream, { ...this.channelOptions(), initiator: false }).then(
-				(channel) => this.adopted(channel, channel.peer, from),
-				() => {}, // refused: not in the network, or a changed key, which knocked() reports
-			);
-		});
+		this.bound = await this.options.transport.listen(this.answer);
+		await this.openLobby();
 		this.host.setRemoteRouter((envelope, recipient) => this.queueOutbound(envelope, recipient));
 		this.host.on("node", this.onNode);
 		await this.publishOwn();
-		await this.options.discovery?.start(this.port(), (name, address) => this.heard(name, address)).catch(() => {});
+		await this.options.discovery?.start(this.port(), (name, address, same) => this.heard(name, address, same)).catch(() => {});
 		const redialMs = this.options.redialMs ?? 5000;
 		if (redialMs > 0) {
 			this.redial = setInterval(() => {
+				void this.openLobby();
+				this.tellDirectory();
 				this.reach();
 				void this.settle();
+				for (const [nodeId, entry] of this.following) if (this.now() - entry.used > 60_000) this.following.delete(nodeId);
 			}, redialMs);
 			this.redial.unref();
 		}
@@ -224,8 +292,12 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		for (const timer of this.timers.values()) clearTimeout(timer);
 		this.host.off("node", this.onNode);
 		this.host.setRemoteRouter(undefined);
+		if (this.followTimer) clearInterval(this.followTimer);
 		await this.options.discovery?.stop().catch(() => {});
-		for (const { channel } of this.channels.values()) channel.close();
+		for (const { channel } of [...this.channels.values(), ...this.guests.values()]) channel.close();
+		const mine = this.summaryPath();
+		if (mine) rmSync(mine, { force: true });
+		await this.options.lobby?.close().catch(() => {});
 		await this.options.transport.close();
 		await this.chain.catch(() => {});
 	}
@@ -251,8 +323,28 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 
 	// --- people and connections ------------------------------------------------
 
+	/** Someone connected to one of this host's ports. */
+	private readonly answer = (stream: import("node:stream").Duplex, from?: string): void => {
+		openChannel(stream, { ...this.channelOptions(), initiator: false }).then(
+			(channel) => this.adopted(channel, channel.peer, from),
+			() => {}, // refused: not in the network, or a changed key, which knocked() reports
+		);
+	};
+
+	/** Take the port every member knows, if no other host of this person has it. */
+	private async openLobby(): Promise<void> {
+		if (this.lobbyOpen || !this.options.lobby || this.stopped) return;
+		try {
+			await this.options.lobby.listen(this.answer);
+			this.lobbyOpen = true;
+		} catch {
+			// Another of this person's hosts has it, and answers for this one too.
+		}
+	}
+
 	private channelOptions(): Omit<ChannelOptions, "initiator"> {
 		return {
+			guests: true,
 			identity: this.identity,
 			keyOf: (name) => this.book.keyOf(name),
 			network: this.key,
@@ -313,28 +405,52 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		await this.dial(name);
 	}
 
+	/** Whether their host for the same work is connected. */
 	isOnline(name: string): boolean {
 		return name === this.identity.name || this.channels.has(name);
+	}
+
+	/** Whether any of their hosts is connected. */
+	isReachable(name: string): boolean {
+		if (name === this.identity.name || this.channels.has(name)) return true;
+		for (const link of this.guests.keys()) if (personOf(link) === name) return true;
+		return false;
+	}
+
+	private link(id: string): SecureChannel | undefined {
+		return (this.channels.get(id) ?? this.guests.get(id))?.channel;
+	}
+
+	private links(): string[] {
+		return [...this.channels.keys(), ...this.guests.keys()];
 	}
 
 	people(): PersonView[] {
 		const view = new Map<string, PersonView>();
 		view.set(this.identity.name, {
-			name: this.identity.name, publicKey: this.identity.publicKey, fingerprint: this.identity.fingerprint, trust: "trusted", online: true, self: true,
+			name: this.identity.name, publicKey: this.identity.publicKey, fingerprint: this.identity.fingerprint, trust: "trusted", online: true, here: true, self: true,
 		});
 		for (const peer of this.book.list()) {
 			if (peer.name === this.identity.name) continue;
 			const changed = this.strangers.get(peer.name);
 			view.set(peer.name, {
-				name: peer.name, publicKey: changed ?? peer.publicKey, fingerprint: fingerprint(changed ?? peer.publicKey), trust: changed ? "changed" : "trusted", online: this.channels.has(peer.name), self: false,
+				name: peer.name, publicKey: changed ?? peer.publicKey, fingerprint: fingerprint(changed ?? peer.publicKey), trust: changed ? "changed" : "trusted", online: this.isReachable(peer.name), here: this.channels.has(peer.name), self: false,
 			});
 		}
 		return [...view.values()].sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name));
 	}
 
-	/** A beacon, or a teammate, says where someone is. Worth trying at once. */
-	private heard(name: string, address: string): void {
+	/** A beacon, or a teammate, says where someone is. Worth trying at once. `same`: it is their host for this work. */
+	private heard(name: string, address: string, same = true): void {
 		if (name === this.identity.name || this.stopped) return;
+		if (!same) {
+			this.guestAddresses.set(name, address);
+			if (this.isReachable(name)) return;
+			this.failures.delete(`guest:${name}`);
+			if (this.book.get(name)) void this.dialGuest(name);
+			else void this.dialAddress(address);
+			return;
+		}
 		if (this.addresses.get(name) !== address) {
 			this.addresses.set(name, address);
 			this.failures.delete(name);
@@ -347,15 +463,23 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	/** Try everyone in the network, and every machine the join code named, now. */
 	reach(): void {
 		if (this.stopped) return;
-		for (const peer of this.book.list()) void this.dial(peer.name);
+		for (const peer of this.book.list()) {
+			// Their host for this work first; failing that, any host of theirs, to know what they have running.
+			void this.dial(peer.name).then((here) => (here || this.isReachable(peer.name) ? undefined : this.dialGuest(peer.name)));
+		}
 		const known = new Set(this.book.list().flatMap((peer) => peer.hosts ?? []));
 		for (const seed of this.options.network.seeds) {
 			const answered = this.seedPeer.get(seed);
 			// A seed is only for the first contact: once its machine belongs to someone known, they are dialled by name.
 			if ((answered !== undefined && this.book.get(answered)) || known.has(seed)) continue;
-			void this.dialAddress(seed.includes(":") ? seed : `${seed}:${this.wellKnownPort()}`).then((name) => {
-				if (name) this.seedPeer.set(seed, name);
-			});
+			// Whoever gave the code may be working on something else: then the port every member knows is where they answer.
+			const tries = seed.includes(":") ? [seed] : [`${seed}:${this.wellKnownPort()}`, `${seed}:${lobbyPort(this.options.network)}`];
+			void (async () => {
+				for (const address of tries) {
+					const name = await this.dialAddress(address);
+					if (name) return void this.seedPeer.set(seed, name);
+				}
+			})();
 		}
 	}
 
@@ -375,7 +499,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		try {
 			const stream = await this.options.transport.connect(address);
 			const channel = await openChannel(stream, { ...this.channelOptions(), initiator: true, ...(expect !== undefined ? { expect } : {}) });
-			this.addresses.set(channel.peer, address);
+			(channel.scope === this.options.scope ? this.addresses : this.guestAddresses).set(channel.peer, address);
 			this.adopted(channel, this.identity.name, splitAddress(address).host);
 			return channel.peer;
 		} catch {
@@ -396,7 +520,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		try {
 			for (const address of this.candidates(name)) {
 				if (this.channels.has(name)) return true;
-				if ((await this.dialAddress(address, name)) === name) return true;
+				await this.dialAddress(address, name);
 			}
 			if (this.channels.has(name)) return true;
 			// Someone who is away is tried less and less often, up to once a minute.
@@ -408,6 +532,32 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		}
 	}
 
+	/** Reach any host of someone whose host for this work is not around, to know what they have running. */
+	private async dialGuest(name: string): Promise<boolean> {
+		if (this.stopped || name === this.identity.name) return false;
+		if (this.isReachable(name)) return true;
+		const slot = `guest:${name}`;
+		const failed = this.failures.get(slot);
+		if ((failed && this.now() < failed.retryAt) || this.dialing.has(slot)) return false;
+		this.dialing.add(slot);
+		try {
+			const hosts = this.book.get(name)?.hosts ?? [];
+			const heard = this.guestAddresses.get(name);
+			const ports = [lobbyPort(this.options.network), ...(this.directory.get(name) ?? []).map((tree) => tree.port)];
+			const tries = [...(heard ? [heard] : []), ...ports.flatMap((port) => hosts.map((host) => `${host}:${port}`))];
+			for (const address of tries.filter((address, index) => tries.indexOf(address) === index)) {
+				if (this.isReachable(name)) return true;
+				await this.dialAddress(address, name);
+			}
+			if (this.isReachable(name)) return true;
+			const count = (failed?.count ?? 0) + 1;
+			this.failures.set(slot, { count, retryAt: this.now() + Math.min(60_000, 5000 * 2 ** (count - 1)) });
+			return false;
+		} finally {
+			this.dialing.delete(slot);
+		}
+	}
+
 	/** Register an authenticated channel. When both sides dialled at once, both keep the same one. */
 	private adopted(channel: SecureChannel, initiator: string, from?: string): void {
 		if (this.stopped) {
@@ -415,8 +565,36 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			return;
 		}
 		const peer = channel.peer;
-		this.failures.delete(peer);
 		if (from !== undefined) this.book.sawAt(peer, [from], true);
+		if (channel.scope !== this.options.scope) {
+			// A member working on something else: they may look, and so may this host.
+			const id = `${peer}|${channel.scope ?? ""}`;
+			this.failures.delete(`guest:${peer}`);
+			const known = this.guests.get(id);
+			if (known) {
+				if (known.initiator <= initiator) {
+					channel.close();
+					return;
+				}
+				known.channel.removeAllListeners("close");
+				known.channel.close();
+				this.failWaiting(id);
+			}
+			this.guests.set(id, { channel, initiator });
+			if (from !== undefined) this.reached.set(id, from);
+			channel.on("message", (value) => this.onFrame(id, channel, value as Frame));
+			channel.on("close", () => {
+				if (this.guests.get(id)?.channel !== channel) return;
+				this.guests.delete(id);
+				this.failWaiting(id);
+				this.emit("changed");
+			});
+			this.emit("changed");
+			void this.meet(id, from).then(() => this.fetchDirectory(id)).catch(() => {});
+			return;
+		}
+		this.failures.delete(peer);
+		if (from !== undefined) this.reached.set(peer, from);
 		const existing = this.channels.get(peer);
 		if (existing) {
 			if (existing.initiator <= initiator) {
@@ -444,7 +622,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			if (entry.peer !== peer) continue;
 			clearTimeout(entry.timer);
 			this.waiting.delete(id);
-			entry.reject(new Error(`${peer} went offline.`));
+			entry.reject(new Error(`${personOf(peer)} went offline.`));
 		}
 	}
 
@@ -452,6 +630,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private async greet(peer: string, from?: string): Promise<void> {
 		try {
 			await this.meet(peer, from);
+			await this.fetchDirectory(peer).catch(() => {});
 			await this.fetchTree(peer);
 			await this.flushOutbox(peer);
 			await this.sendTransfers(peer);
@@ -473,8 +652,9 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	}
 
 	/** Learn the rest of the network from someone in it. Keys already pinned are never replaced this way. */
-	private async meet(peer: string, from?: string): Promise<void> {
-		const { people } = await this.request<{ people: RosterEntry[] }>(peer, "roster", {});
+	private async meet(link: string, from?: string): Promise<void> {
+		const peer = personOf(link);
+		const { people } = await this.request<{ people: RosterEntry[] }>(link, "roster", {});
 		for (const entry of Array.isArray(people) ? people : []) {
 			if (!entry || typeof entry.name !== "string" || typeof entry.publicKey !== "string" || entry.name === this.identity.name) continue;
 			const hosts = Array.isArray(entry.hosts) ? entry.hosts.filter((host): host is string => typeof host === "string") : [];
@@ -485,22 +665,25 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			const host = entry.name === peer ? from : hosts[0];
 			if (port === undefined || host === undefined) continue;
 			// Where the peer itself listens is worth keeping even though they are connected: others will ask.
-			if (entry.name === peer) this.addresses.set(peer, `${host}:${port}`);
-			else if (!this.channels.has(entry.name)) this.heard(entry.name, `${host}:${port}`);
+			if (entry.name === peer) (link === peer ? this.addresses : this.guestAddresses).set(peer, `${host}:${port}`);
+			// A guest speaks of ports for its own work, which is not this host's.
+			else if (!this.isReachable(entry.name)) this.heard(entry.name, `${host}:${port}`, link === peer);
 		}
 		this.reach();
 	}
 
 	// --- requests --------------------------------------------------------------
 
+	/** Ask over a link: a person's name for their host on this work, or `name|scope` for one of their others. */
 	private request<T>(peer: string, op: string, params: unknown): Promise<T> {
-		const entry = this.channels.get(peer);
-		if (!entry) return Promise.reject(new Error(`${peer} is offline.`));
+		const channel = this.link(peer);
+		if (!channel) return Promise.reject(new Error(`${personOf(peer)} is offline.`));
+		const entry = { channel };
 		const id = ++this.requestId;
 		return new Promise<T>((resolvePromise, reject) => {
 			const timer = setTimeout(() => {
 				this.waiting.delete(id);
-				reject(new Error(`${peer} did not answer in time.`));
+				reject(new Error(`${personOf(peer)} did not answer in time.`));
 			}, this.options.requestTimeoutMs ?? 60_000);
 			timer.unref();
 			this.waiting.set(id, { resolve: resolvePromise as (value: unknown) => void, reject, timer, peer });
@@ -517,7 +700,9 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			if (frame.ok) entry.resolve(frame.r);
 			else entry.reject(new Error(frame.e));
 		} else if (frame?.t === "note") {
-			if (frame.kind === "changed") this.debounce(`fetch:${peer}`, () => this.fetchTree(peer));
+			if (frame.kind === "changed" && this.channels.has(peer)) this.debounce(`fetch:${peer}`, () => this.fetchTree(peer));
+			else if (frame.kind === "directory") this.debounce(`directory:${peer}`, () => this.fetchDirectory(peer));
+			else if (frame.kind === "session") this.heardSession(peer, frame.nodeId, frame.from, frame.messages);
 		} else if (frame?.t === "req") {
 			this.serve(peer, frame.op, frame.p).then(
 				(r) => channel.send({ t: "res", id: frame.id, ok: true, r } satisfies Frame),
@@ -526,9 +711,15 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		}
 	}
 
-	private async serve(peer: string, op: string, params: unknown): Promise<unknown> {
+	private async serve(link: string, op: string, params: unknown): Promise<unknown> {
 		const p = (params ?? {}) as Record<string, unknown>;
+		const peer = personOf(link);
+		if (link !== peer && !GUEST_OPS.has(op)) throw new Error("That needs both of you to be working in the same repository.");
 		switch (op) {
+			case "directory":
+				return { trees: this.ownTrees() };
+			case "follow":
+				return this.followed(link, p.nodeId, p.have);
 			case "roster":
 				return { people: this.roster() };
 			case "tree":
@@ -638,6 +829,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			}
 		}
 		if (changed) this.broadcastChanged();
+		this.writeSummary();
 	}
 
 	/**
@@ -697,12 +889,208 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		}
 	}
 
-	/** A peer's node's conversation, fetched from its owner. Read-only. */
+	/** A teammate's session's conversation, fetched from its owner, whichever repository it is in. Read-only. */
 	async fetchMessages(nodeId: string): Promise<unknown[]> {
-		const node = this.host.node(nodeId);
-		if (!node) throw new Error(`No node ${nodeId} in this tree.`);
-		const { messages } = await this.request<{ messages: unknown[] }>(node.owner, "messages", { nodeId });
+		const { messages } = await this.request<{ messages: unknown[] }>(await this.linkTo(nodeId), "messages", { nodeId });
 		return Array.isArray(messages) ? messages : [];
+	}
+
+	// --- what everyone has running -------------------------------------------------
+
+	private summaryPath(): string | undefined {
+		const dir = this.options.directoryDir;
+		return dir ? join(dir, `${createHash("sha256").update(resolve(this.options.dir)).digest("hex").slice(0, 16)}.json`) : undefined;
+	}
+
+	/** This host's own tree, as teammates anywhere are told of it. */
+	private ownTree(): DirectoryTree {
+		const me = this.identity.name;
+		const repo = this.options.repo;
+		return {
+			scope: this.options.scope ?? "", repo: repo?.name ?? "", ...(repo?.url ? { url: repo.url } : {}), port: this.bound ? this.port() : 0,
+			nodes: this.host.nodes().filter((node) => node.owner === me).map(toSharedMeta),
+		};
+	}
+
+	/** Say what this host has running where this person's other hosts can read it, and tell teammates when it changed. */
+	private writeSummary(): void {
+		const path = this.summaryPath();
+		const text = JSON.stringify({ pid: process.pid, ...this.ownTree() });
+		if (text === this.summary) return;
+		this.summary = text;
+		if (path) {
+			writeFileSync(`${path}.tmp`, text);
+			renameSync(`${path}.tmp`, path);
+		}
+		this.tellDirectory(true);
+	}
+
+	/** Everything this person has running, in every repository with a live host. */
+	private ownTrees(): DirectoryTree[] {
+		const dir = this.options.directoryDir;
+		if (!dir) return [this.ownTree()];
+		const out: DirectoryTree[] = [];
+		for (const file of readdirSync(dir)) {
+			if (!file.endsWith(".json")) continue;
+			try {
+				const value = JSON.parse(readFileSync(join(dir, file), "utf8")) as { pid?: unknown };
+				// A host that died without tidying up has nothing running.
+				if (typeof value.pid === "number") process.kill(value.pid, 0);
+				out.push(...cleanTrees([value]));
+			} catch {
+				// Unreadable, or its host is gone.
+			}
+		}
+		return out;
+	}
+
+	/** Tell everyone connected that what this person has running changed: here, or in another of their hosts. */
+	private tellDirectory(changed = false): void {
+		const dir = this.options.directoryDir;
+		if (dir && !changed) {
+			let stamp = "";
+			try {
+				stamp = readdirSync(dir).filter((file) => file.endsWith(".json")).map((file) => `${file}:${statSync(join(dir, file)).mtimeMs}`).join("|");
+			} catch {
+				// No directory: nothing to tell.
+			}
+			if (stamp === this.directoryStamp) return;
+			this.directoryStamp = stamp;
+		}
+		for (const id of this.links()) this.link(id)?.send({ t: "note", kind: "directory" } satisfies Frame);
+	}
+
+	/** Ask someone what they have running, everywhere. */
+	private async fetchDirectory(link: string): Promise<void> {
+		const peer = personOf(link);
+		const answer = await this.request<{ trees: unknown }>(link, "directory", {});
+		const trees = cleanTrees(answer?.trees);
+		const text = JSON.stringify(trees);
+		if (text !== JSON.stringify(this.directory.get(peer) ?? null)) {
+			this.directory.set(peer, trees);
+			writeFileSync(join(this.options.dir, "directory", `${peer}.json`), text);
+			this.emit("changed");
+		}
+		// If they have a host for this work that was not found yet, this is where it is.
+		const here = trees.find((tree) => tree.scope === (this.options.scope ?? ""));
+		const host = this.reached.get(link);
+		if (here && host && here.port > 0 && !this.channels.has(peer)) this.heard(peer, `${host}:${here.port}`);
+	}
+
+	/** Teammates' trees in repositories this host is not working on, as last heard. */
+	elsewhere(): ElsewhereTree[] {
+		const out: ElsewhereTree[] = [];
+		for (const [owner, trees] of this.directory) {
+			if (!this.book.get(owner)) continue;
+			for (const tree of trees) {
+				if (tree.scope === (this.options.scope ?? "") || tree.nodes.length === 0) continue;
+				out.push({ ...tree, owner, online: this.isReachable(owner) });
+			}
+		}
+		return out.sort((a, b) => a.repo.localeCompare(b.repo) || a.owner.localeCompare(b.owner));
+	}
+
+	/** The link to the host that has a session: its owner's host for this work, or a channel opened to the one it is in. */
+	private async linkTo(nodeId: string): Promise<string> {
+		const node = this.host.node(nodeId);
+		if (node) {
+			if (node.owner === this.identity.name) throw new Error("That session is yours.");
+			if (!this.channels.has(node.owner)) throw new Error(`${node.owner} is offline.`);
+			return node.owner;
+		}
+		for (const [owner, trees] of this.directory) {
+			const tree = trees.find((candidate) => candidate.nodes.some((each) => each.id === nodeId));
+			if (!tree) continue;
+			const id = `${owner}|${tree.scope}`;
+			if (this.guests.has(id)) return id;
+			const hosts = [...this.links().filter((link) => personOf(link) === owner).map((link) => this.reached.get(link)), ...(this.book.get(owner)?.hosts ?? [])];
+			for (const host of hosts.filter((host, index): host is string => host !== undefined && hosts.indexOf(host) === index)) {
+				await this.dialAddress(`${host}:${tree.port}`, owner);
+				if (this.guests.has(id)) return id;
+			}
+			throw new Error(`${owner} is offline.`);
+		}
+		throw new Error(`No session ${nodeId} that anyone in ${this.options.network.name} has running.`);
+	}
+
+	// --- watching a session ----------------------------------------------------------
+
+	/**
+	 * A teammate's conversation, kept up to date for as long as this keeps being called. The
+	 * first call fetches it and asks its owner for news; the owner then sends each new message
+	 * as it is written, and stops a little after the calls do.
+	 */
+	async follow(nodeId: string): Promise<unknown[]> {
+		const now = this.now();
+		let entry = this.following.get(nodeId);
+		if (!entry || now - entry.asked > 5000 || !this.link(entry.link)) {
+			const link = await this.linkTo(nodeId);
+			const have = entry && entry.link === link ? entry.messages.length : 0;
+			const answer = await this.request<{ from: number; messages: unknown[] }>(link, "follow", { nodeId, have });
+			const from = Number.isInteger(answer?.from) && answer.from >= 0 && answer.from <= have ? answer.from : 0;
+			// What arrived while asking was added to the entry of the time; build on the newest.
+			const kept = (this.following.get(nodeId)?.link === link ? this.following.get(nodeId)?.messages : entry?.messages) ?? [];
+			const fresh = Array.isArray(answer?.messages) ? answer.messages : [];
+			entry = { messages: kept.length >= from + fresh.length ? kept : [...kept.slice(0, from), ...fresh], link, asked: now, used: now };
+			this.following.set(nodeId, entry);
+		}
+		entry.used = now;
+		return entry.messages;
+	}
+
+	/** The owner sent more of a session this host is watching. */
+	private heardSession(link: string, nodeId: unknown, from: unknown, messages: unknown): void {
+		const entry = typeof nodeId === "string" ? this.following.get(nodeId) : undefined;
+		if (!entry || entry.link !== link || typeof from !== "number" || !Array.isArray(messages)) return;
+		// A gap means something was missed; the next look fetches it whole.
+		if (from > entry.messages.length) this.following.delete(nodeId as string);
+		else entry.messages = [...entry.messages.slice(0, from), ...messages];
+		this.emit("changed");
+	}
+
+	/** Someone watches a session owned here. They are sent what is new until they stop asking. */
+	private async followed(link: string, nodeId: unknown, have: unknown): Promise<{ from: number; messages: unknown[] }> {
+		const node = typeof nodeId === "string" ? this.host.node(nodeId) : undefined;
+		if (!node || node.owner !== this.identity.name) throw new Error("That session is not here.");
+		const messages = await this.host.readMessages(node.id);
+		const from = typeof have === "number" && Number.isInteger(have) && have >= 0 && have <= messages.length ? have : 0;
+		const watchers = this.followers.get(node.id) ?? new Map<string, { until: number; sent: number }>();
+		watchers.set(link, { until: this.now() + 20_000, sent: messages.length });
+		this.followers.set(node.id, watchers);
+		if (!this.followTimer && !this.stopped) {
+			this.followTimer = setInterval(() => void this.tellFollowers(), this.options.followMs ?? 1000);
+			this.followTimer.unref();
+		}
+		return { from, messages: messages.slice(from) };
+	}
+
+	private async tellFollowers(): Promise<void> {
+		if (this.polling) return;
+		this.polling = true;
+		try {
+			for (const [nodeId, watchers] of this.followers) {
+				for (const [link, watcher] of watchers) if (this.now() > watcher.until || !this.link(link)) watchers.delete(link);
+				if (watchers.size === 0 || this.host.node(nodeId)?.owner !== this.identity.name) {
+					this.followers.delete(nodeId);
+					continue;
+				}
+				const messages = await this.host.readMessages(nodeId).catch(() => undefined);
+				if (!messages) continue;
+				for (const [link, watcher] of watchers) {
+					if (messages.length === watcher.sent) continue;
+					// Fewer than before means the conversation was rewound: send it whole.
+					const from = messages.length > watcher.sent ? watcher.sent : 0;
+					this.link(link)?.send({ t: "note", kind: "session", nodeId, from, messages: messages.slice(from) } satisfies Frame);
+					watcher.sent = messages.length;
+				}
+			}
+			if (this.followers.size === 0 && this.followTimer) {
+				clearInterval(this.followTimer);
+				this.followTimer = undefined;
+			}
+		} finally {
+			this.polling = false;
+		}
 	}
 
 	// --- mail ------------------------------------------------------------------
@@ -1127,4 +1515,22 @@ export function localHosts(): string[] {
 		}
 	}
 	return out.length > 0 ? out : ["127.0.0.1"];
+}
+
+/** Read what someone says they have running, keeping only what is well formed. They speak for their own sessions only. */
+function cleanTrees(value: unknown): DirectoryTree[] {
+	const out: DirectoryTree[] = [];
+	for (const raw of Array.isArray(value) ? value.slice(0, 64) : []) {
+		const tree = raw as Partial<DirectoryTree> | null;
+		if (!tree || typeof tree.scope !== "string" || typeof tree.repo !== "string" || typeof tree.port !== "number" || !Number.isInteger(tree.port) || tree.port < 0 || tree.port > 65535) continue;
+		const nodes = (Array.isArray(tree.nodes) ? tree.nodes.slice(0, 500) : []).filter(
+			(node): node is SharedMeta =>
+				node !== null && typeof node === "object" && isId(node.id) && typeof node.name === "string" && typeof node.kind === "string" && typeof node.status === "string" &&
+				typeof node.createdAt === "string" && (node.parentId === null || typeof node.parentId === "string") && typeof node.rootId === "string" && Array.isArray(node.fragments),
+		);
+		// A clone address is shown to a person before anything is cloned, and is only ever handed to git.
+		const url = typeof tree.url === "string" && tree.url.length < 500 && !tree.url.startsWith("-") && !/\s/.test(tree.url) ? tree.url : undefined;
+		out.push({ scope: tree.scope, repo: tree.repo.slice(0, 80), ...(url ? { url } : {}), port: tree.port, nodes });
+	}
+	return out;
 }

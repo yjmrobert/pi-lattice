@@ -78,7 +78,7 @@ afterEach(async () => {
 
 const until = async (probe: () => unknown, what = "condition", ms = 5000) => {
 	const end = Date.now() + ms;
-	while (!probe()) {
+	while (!(await probe())) {
 		if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
@@ -148,11 +148,12 @@ describe("join codes", () => {
 });
 
 describe("beacons", () => {
-	it("are read only by members of the network, working on the same thing", () => {
+	it("are read only by members of the network, and say whether they are for the same work", () => {
 		const key = networkKey(TEAM);
 		const beacon = encodeBeacon(key, "repo-a", { name: "yan", port: 47123 });
-		expect(decodeBeacon(key, "repo-a", beacon)).toEqual({ name: "yan", port: 47123 });
-		expect(decodeBeacon(key, "repo-b", beacon)).toBeUndefined();
+		expect(decodeBeacon(key, "repo-a", beacon)).toEqual({ name: "yan", port: 47123, same: true });
+		// Someone working on something else still learns a teammate is there, to ask what they have running.
+		expect(decodeBeacon(key, "repo-b", beacon)).toEqual({ name: "yan", port: 47123, same: false });
 		expect(decodeBeacon(networkKey(createNetwork("other")), "repo-a", beacon)).toBeUndefined();
 		expect(beacon.toString()).not.toContain("repo-a"); // the LAN does not learn what is being worked on
 		const forged = Buffer.from(beacon.toString().replace("47123", "47124"));
@@ -465,6 +466,142 @@ describe("asking for a session", () => {
 		await sam.collab.ask(kid.id);
 		clock += 61_000;
 		expect([yan.collab.requests(), sam.collab.requests()]).toEqual([[], []]);
+	});
+});
+
+describe("everything everyone has running", () => {
+	/** One of a person's hosts, for one repository. A person's hosts share their keys, their people and what each says it has running. */
+	const hostFor = (name: string, repo: string, code?: string) => {
+		const person = join(root, name);
+		const dir = join(person, repo);
+		const host = new FakeHost(name);
+		const logs: string[] = [];
+		const collab = new CollabSession({
+			host, identity: Identity.loadOrCreate(join(person, "keys"), name), peers: new PeerBook(join(person, "people.json")), network: code ? parseJoinCode(code) : TEAM,
+			transport: new TcpTransport({ host: "127.0.0.1", port: 0 }), dir: join(dir, "collab"), projectDir: dir, advertise: "127.0.0.1", redialMs: 0, requestTimeoutMs: 5000, now: () => clock,
+			scope: `git:${repo}`, repo: { name: repo, url: `git@example.com:team/${repo}.git` }, directoryDir: join(person, "summaries"), followMs: 20,
+		});
+		sessions.push(collab);
+		collab.on("log", (_level, message) => logs.push(message));
+		return { host, collab, logs };
+	};
+	const names = (seat: { collab: CollabSession }) => seat.collab.elsewhere().map((tree) => `${tree.owner}/${tree.repo}: ${tree.nodes.map((node) => node.name).join(" ")}`);
+
+	it("shows a teammate's sessions in a repository this person does not have, with where to clone it", async () => {
+		const yan = hostFor("yan", "shop");
+		yan.host.add("checkout");
+		await yan.collab.start();
+		const sam = hostFor("sam", "api", yan.collab.joinCode());
+		sam.host.add("auth-rework");
+		await sam.collab.start();
+
+		await until(() => names(yan).length === 1 && names(sam).length === 1, "each to hear what the other has running");
+		expect(names(yan)).toEqual(["sam/api: auth-rework"]);
+		expect(names(sam)).toEqual(["yan/shop: checkout"]);
+		expect(sam.collab.elsewhere()[0]).toMatchObject({ scope: "git:shop", url: "git@example.com:team/shop.git", online: true });
+		// They can see each other, and each knows the other is not here: nothing can be handed over between repositories.
+		expect(sam.collab.people().find((p) => p.name === "yan")).toMatchObject({ online: true, here: false });
+		expect(sam.collab.isOnline("yan")).toBe(false);
+		expect(sam.host.nodes().map((n) => n.name)).toEqual(["auth-rework"]); // and nothing of yan's is in sam's own tree
+
+		// A new session shows up without anyone asking.
+		yan.host.add("billing");
+		await until(() => names(sam)[0] === "yan/shop: checkout billing", "the new session to appear for sam");
+	});
+
+	it("lets any one of a person's hosts answer for all of them, and reads a session from the host that has it", async () => {
+		const shop = hostFor("yan", "shop");
+		shop.host.add("checkout");
+		await shop.collab.start();
+		const api = hostFor("yan", "api"); // yan's host for another repository
+		const auth = api.host.add("auth-rework");
+		api.host.conversations.set(auth.id, [{ role: "user", content: "rotate the keys" }]);
+		await api.collab.start();
+
+		// Sam works in a third repository and was only told where yan's shop host is.
+		const sam = hostFor("sam", "infra", shop.collab.joinCode());
+		await sam.collab.start();
+		await until(() => names(sam).length === 2, "sam to hear of both of yan's repositories");
+		expect(names(sam)).toEqual(["yan/api: auth-rework", "yan/shop: checkout"]);
+		expect(await sam.collab.fetchMessages(auth.id)).toEqual([{ role: "user", content: "rotate the keys" }]);
+		await expect(sam.collab.fetchMessages("nd_missing")).rejects.toThrow(/No session/);
+	});
+
+	it("leads a host to a teammate's host for the same repository when it was told of another", async () => {
+		const shop = hostFor("yan", "shop");
+		const api = hostFor("yan", "api");
+		const kid = api.host.add("auth-rework");
+		await shop.collab.start();
+		await api.collab.start();
+		const sam = hostFor("sam", "api", shop.collab.joinCode()); // the code names yan's shop host, not the api one
+		await sam.collab.start();
+		await until(() => sam.collab.isOnline("yan"), "sam's api host to find yan's api host");
+		await until(() => sam.host.node(kid.id), "yan's api sessions to join sam's tree");
+		expect(names(sam)).toEqual([]); // nothing of yan's is elsewhere, from where sam stands: shop has no sessions, api is here
+	});
+
+	it("keeps what a teammate had running as last heard when they go, marked as away", async () => {
+		const yan = hostFor("yan", "shop");
+		yan.host.add("checkout");
+		await yan.collab.start();
+		const code = yan.collab.joinCode();
+		const sam = hostFor("sam", "api", code);
+		await sam.collab.start();
+		await until(() => names(sam).length === 1);
+		await yan.collab.stop();
+		await until(() => sam.collab.elsewhere()[0]?.online === false, "sam to see yan go");
+		expect(names(sam)).toEqual(["yan/shop: checkout"]);
+		await sam.collab.stop();
+		const again = hostFor("sam", "api", code); // after a restart it is still there to look at
+		expect(names(again)).toEqual(["yan/shop: checkout"]);
+	});
+
+	it("does not let someone working elsewhere do more than look", async () => {
+		const yan = hostFor("yan", "shop");
+		const top = yan.host.add("checkout");
+		await yan.collab.start();
+		const sam = hostFor("sam", "api", yan.collab.joinCode());
+		await sam.collab.start();
+		await until(() => names(sam).length === 1);
+		await expect(sam.collab.ask(top.id)).rejects.toThrow(/No node/);
+		await expect(yan.collab.offer(top.id, "sam")).resolves.toBeUndefined(); // an offer waits for sam to have the repository
+		expect(sam.collab.handoffs()).toEqual([]);
+	});
+});
+
+describe("watching a teammate's session", () => {
+	it("sends what is new while someone is watching, and stops when they stop", async () => {
+		const { yan, sam, kid } = await pair();
+		const said = (text: string) => ({ role: "assistant", content: text });
+		yan.host.conversations.set(kid.id, [said("one")]);
+		expect(await sam.collab.follow(kid.id)).toEqual([said("one")]);
+
+		let news = 0;
+		sam.collab.on("changed", () => news++);
+		yan.host.conversations.set(kid.id, [said("one"), said("two")]);
+		await until(async () => (await sam.collab.follow(kid.id)).length === 2, "the new message to arrive unasked");
+		expect(news).toBeGreaterThan(0); // the pane is told to look again
+		expect(await sam.collab.follow(kid.id)).toEqual([said("one"), said("two")]);
+
+		// A conversation that was rewound is sent whole.
+		yan.host.conversations.set(kid.id, [said("again")]);
+		await until(async () => (await sam.collab.follow(kid.id)).length === 1, "the rewound conversation");
+		expect(await sam.collab.follow(kid.id)).toEqual([said("again")]);
+
+		// Nobody looks for a while: the owner stops sending, and a later look catches up.
+		clock += 30_000;
+		await new Promise((resolve) => setTimeout(resolve, 60));
+		yan.host.conversations.set(kid.id, [said("again"), said("while you were away")]);
+		await new Promise((resolve) => setTimeout(resolve, 60));
+		expect(await sam.collab.follow(kid.id)).toEqual([said("again"), said("while you were away")]);
+	});
+
+	it("refuses to watch what is not there", async () => {
+		const { yan, sam, kid } = await pair();
+		await expect(yan.collab.follow(kid.id)).rejects.toThrow(/yours/);
+		await yan.collab.stop();
+		await until(() => !sam.collab.isOnline("yan"));
+		await expect(sam.collab.follow(kid.id)).rejects.toThrow(/yan is offline/);
 	});
 });
 
