@@ -1,0 +1,121 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { type Daemon, runDaemon } from "../../packages/app/src/index.ts";
+import { createSandbox, eventually, hostOptionsFor, type Sandbox } from "../support/harness.ts";
+
+/**
+ * The whole path a person takes: create a network in one repository's host, join it from
+ * another machine with the code, and from then on see each other's sessions and hand them
+ * over. Each "machine" is a background host with its own lattice home, on this computer.
+ */
+interface Machine {
+	sandbox: Sandbox;
+	daemon: Daemon;
+}
+let machines: Machine[] = [];
+let scratch: Sandbox | undefined;
+afterEach(async () => {
+	for (const machine of machines) {
+		await machine.daemon.stop().catch(() => {});
+		machine.sandbox.cleanup();
+	}
+	machines = [];
+	scratch?.cleanup();
+	scratch = undefined;
+});
+
+const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+/** A person's computer. `repo` is a checkout to work in; hosts for several checkouts share the person's home. */
+const machine = async (owner: string, sandbox: Sandbox, repo: string): Promise<Machine> => {
+	const stateDir = join(repo, ".lattice");
+	const daemon = await runDaemon({
+		stateDir, cwd: repo, owner, idleExitMs: 0, tickMs: 100, home: sandbox.home, discovery: false, advertise: "127.0.0.1",
+		hostOptions: hostOptionsFor(sandbox, { stateDir, owner, socketDir: join(sandbox.root, `sock-${machines.length}`) }),
+	});
+	const made = { sandbox, daemon };
+	machines.push(made);
+	return made;
+};
+const sharing = (m: Machine) => m.daemon.host.uiState().sharing;
+const run = (m: Machine, action: string, ...args: string[]) => m.daemon.host.runSharing(action, args);
+
+describe("a network of teammates, through the background host", () => {
+	it("is created once, joined with one code, and then shows and moves sessions with nothing else to set up", async () => {
+		scratch = createSandbox();
+		const origin = join(scratch.root, "project.git");
+		git(scratch.root, "init", "-q", "--bare", "-b", "main", origin);
+		const checkout = (dir: string, who: string, fresh: boolean): string => {
+			if (fresh) {
+				git(dir, "init", "-q", "-b", "main");
+				writeFileSync(join(dir, "README.md"), "project\n");
+			} else git(dir, "clone", "-q", origin, ".");
+			git(dir, "config", "user.email", `${who}@example.com`);
+			git(dir, "config", "user.name", who);
+			if (fresh) {
+				git(dir, "add", ".");
+				git(dir, "commit", "-q", "-m", "init");
+				git(dir, "remote", "add", "origin", origin);
+				git(dir, "push", "-q", "origin", "main");
+			}
+			return dir;
+		};
+
+		const yanBox = createSandbox();
+		const yan = await machine("yan", yanBox, checkout(yanBox.work, "yan", true));
+		expect(sharing(yan)).toBeNull(); // nothing is shared until there is a network
+
+		const root = await yan.daemon.host.createRoot({ name: "checkout", cwd: yanBox.work, fragments: [] });
+		const kid = await yan.daemon.host.spawnChild(root.id, { name: "impl", fragments: ["worker"], brief: "the password is heliotrope" });
+		await eventually(() => yan.daemon.host.node(kid.id)?.status === "idle", "yan's child to settle");
+
+		// Yan creates the network. The answer is the code to pass on; it names where yan is.
+		const created = await run(yan, "create", "team");
+		const code = created.split("\n").at(-1) ?? "";
+		expect(code).toMatch(/^team\.[A-Za-z0-9_-]{43}@127\.0\.0\.1/);
+		expect(sharing(yan)).toMatchObject({ network: "team", people: [{ name: "yan", self: true }] });
+		expect(statSync(join(yanBox.home, "network.json")).mode & 0o077).toBe(0); // the secret is the person's alone
+		await expect(run(yan, "create", "another")).rejects.toThrow(/already in team/);
+
+		// Sam joins with the code, in their clone of the same repository. That is all either of them does.
+		const samBox = createSandbox();
+		const sam = await machine("sam", samBox, checkout(samBox.work, "sam", false));
+		await run(sam, "join", code);
+		await eventually(() => sam.daemon.host.nodes().length === 2, "yan's sessions to appear for sam");
+		expect(sam.daemon.host.nodes().map((n) => [n.name, n.owner]).sort()).toEqual([["checkout", "yan"], ["impl", "yan"]]);
+		await eventually(() => sharing(yan)?.people.some((p) => p.name === "sam" && p.online), "yan to see sam");
+
+		// A host sam already had running for another repository joins by itself, and stays out of this one's tree.
+		const elsewhere = join(samBox.root, "other-repo");
+		git(samBox.root, "init", "-q", "-b", "main", elsewhere);
+		git(elsewhere, "-c", "user.email=sam@example.com", "-c", "user.name=sam", "commit", "-q", "--allow-empty", "-m", "another project");
+		const other = await machine("sam", samBox, elsewhere);
+		await eventually(() => sharing(other)?.network === "team", "sam's other host to follow the network file");
+		expect(sharing(other)?.people.map((p) => [p.name, p.online])).toEqual([["sam", true], ["yan", false]]); // yan is known, but not working there
+		expect(other.daemon.host.nodes()).toEqual([]);
+
+		// Sam asks for yan's session; yan approves; it is sam's.
+		await run(sam, "ask", kid.id);
+		await eventually(() => sharing(yan)?.requests.some((r) => r.from === "sam" && r.nodeId === kid.id), "the request to reach yan");
+		expect(sharing(sam)?.requests).toMatchObject([{ nodeId: kid.id, to: "yan", role: "asker" }]);
+		await run(yan, "approve", kid.id, "sam");
+		await eventually(() => sam.daemon.host.node(kid.id)?.owner === "sam", "the session to become sam's");
+		await eventually(() => yan.daemon.host.node(kid.id)?.owner === "sam", "yan to see it is sam's");
+		expect([sharing(yan)?.requests, sharing(sam)?.requests]).toEqual([[], []]);
+
+		// And back the other way: sam offers it, yan accepts, with no third step.
+		await run(sam, "offer", kid.id, "yan");
+		await eventually(() => sharing(yan)?.handoffs.some((h) => h.nodeId === kid.id && h.role === "recipient"), "the offer to reach yan");
+		await run(yan, "accept", kid.id);
+		await eventually(() => yan.daemon.host.node(kid.id)?.owner === "yan" && sam.daemon.host.node(kid.id)?.owner === "yan", "the session to be yan's again");
+
+		// Leaving takes effect in every one of sam's hosts, and yan sees sam go.
+		await run(sam, "leave");
+		expect(sharing(sam)).toBeNull();
+		await eventually(() => sharing(other) === null, "sam's other host to leave too");
+		expect(existsSync(join(samBox.home, "network.json"))).toBe(false);
+		await eventually(() => sharing(yan)?.people.some((p) => p.name === "sam" && !p.online), "yan to see sam leave");
+	}, 120_000);
+});
