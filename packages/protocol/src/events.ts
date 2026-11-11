@@ -2,10 +2,22 @@
  * The contract between lattice extensions inside one Pi process. Extensions never import
  * each other; they exchange these typed events over `pi.events`.
  */
+import type { HostAssignment } from "./assignment.ts";
 import type { Envelope } from "./envelope.ts";
 import type { InboundState } from "./inbound.ts";
 
 export interface LatticeEvents {
+	/**
+	 * This session has been made a node of a host's tree (or, with null, released from one).
+	 * Emitted by whatever opened the node here. Extensions rebind when they receive it, whether
+	 * it arrives before or after their own session start.
+	 */
+	"lattice:host:assigned": { assignment: HostAssignment | null };
+	/**
+	 * Ask for a host to be started for a project. Whoever can start one sets `claimed` and
+	 * does so; the asker then waits for it to appear. Unclaimed means nothing here can.
+	 */
+	"lattice:host:launch": { stateDir: string; cwd: string; claimed: boolean };
 	/** Announced by each lattice extension at session start, so version mismatches are visible. */
 	"lattice:hello": { package: string; protocol: number };
 	/** The session's node identity is known. Emitted by whichever extension resolved it. */

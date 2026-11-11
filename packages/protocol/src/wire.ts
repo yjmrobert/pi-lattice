@@ -2,6 +2,7 @@
  * The host socket protocol: LF-delimited JSON frames between a lattice extension inside a
  * Pi session and the host process. Each extension opens its own connection ("channel").
  */
+import type { HostAssignment } from "./assignment.ts";
 import type { Envelope } from "./envelope.ts";
 import type { InboundState } from "./inbound.ts";
 import type { NodeMeta, PeerInfo, WorkspaceMode } from "./node.ts";
@@ -68,18 +69,15 @@ export interface UiState {
 	sharing: null | { people: SharingPerson[]; handoffs: SharingHandoff[]; pendingTransfers: Array<{ nodeId: string; to: string }> };
 }
 
-/** What a node's session needs in its environment to speak as that node. */
-export type NodeEnv = Record<string, string>;
-
 /** The control API a person's Pi uses to drive the host. Carried by the `ui` request. */
 export interface UiApi {
 	state: { params: Record<string, never>; result: UiState };
 	/** Take a node over into this terminal. Any headless copy is stopped first. */
-	attach: { params: { nodeId: string }; result: { node: NodeMeta; sessionFile: string; env: NodeEnv } };
+	attach: { params: { nodeId: string }; result: { node: NodeMeta; sessionFile: string; assignment: HostAssignment } };
 	/** Give a node back; the host runs it headless again when it has work. */
 	detach: { params: { nodeId: string }; result: Record<string, never> };
 	/** Make the session already open in this terminal the root of a new tree. */
-	adopt: { params: { sessionFile: string; sessionId: string; cwd: string; name: string; fragments?: string[] }; result: { node: NodeMeta; env: NodeEnv } };
+	adopt: { params: { sessionFile: string; sessionId: string; cwd: string; name: string; fragments?: string[] }; result: { node: NodeMeta; assignment: HostAssignment } };
 	spawn: { params: { parentId: string; spec: SpawnSpec }; result: { node: NodeMeta } };
 	/** Report whether the agent in a foreground node is working. */
 	status: { params: { nodeId: string; streaming: boolean }; result: Record<string, never> };
@@ -154,17 +152,3 @@ export class FrameDecoder {
 		return out;
 	}
 }
-
-/** Environment variables a host sets on the sessions it spawns. */
-export const HOST_ENV = {
-	socket: "LATTICE_SOCK",
-	token: "LATTICE_TOKEN",
-	nodeId: "LATTICE_NODE_ID",
-	parentId: "LATTICE_PARENT_ID",
-	rootId: "LATTICE_ROOT_ID",
-	kind: "LATTICE_KIND",
-	name: "LATTICE_NODE_NAME",
-	fragments: "LATTICE_FRAGMENTS",
-	owner: "LATTICE_OWNER",
-	home: "LATTICE_HOME",
-} as const;
