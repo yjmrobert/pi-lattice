@@ -108,7 +108,8 @@ describe("package seams", () => {
 		for (const name of ["a2a", "roles", "graph", "pane"]) {
 			for (const file of sources(join(root, "packages", name, "src"))) {
 				const text = readFileSync(file, "utf8");
-				expect(/process\.env\[[^\]]+\]\s*=|process\.env\.\w+\s*=|Object\.assign\(process\.env|delete process\.env/.test(text), `${file} writes to the environment`).toBe(false);
+				// An assignment, not a comparison: "=" that is not part of "==" or "===".
+				expect(/process\.env(\[[^\]]+\]|\.\w+)\s*=(?!=)|Object\.assign\(process\.env|delete process\.env/.test(text), `${file} writes to the environment`).toBe(false);
 			}
 		}
 	});

@@ -4,6 +4,7 @@
  *   !tool <name> <json>   call a tool with the given arguments
  *   !reply <text>         answer the <lattice-message> in the last message via send_message
  *   !pingpong             answer every lattice message with another !pingpong
+ *   !sleep <seconds>      (in a lattice message) run a shell sleep, to stay busy for a while
  *
  * After a tool result it reports the result as text. Anything else is echoed, together
  * with the role sections it can see, so tests can assert on exactly what the model saw.
@@ -27,6 +28,8 @@ export default (ai) => {
 		}
 		if (inbound) {
 			const body = /<lattice-message [^>]*>\n([\s\S]*?)\n<\/lattice-message>/.exec(text)?.[1] ?? "";
+			const nap = /!sleep (\d+)/.exec(body);
+			if (nap) return ai.fauxAssistantMessage([ai.fauxToolCall("bash", { command: `sleep ${nap[1]}` })], { stopReason: "toolUse" });
 			const reply = /!reply (.*)/.exec(body);
 			const answer = body.includes("!pingpong") ? "!pingpong" : reply?.[1];
 			if (answer !== undefined) {

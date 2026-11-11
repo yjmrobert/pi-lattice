@@ -119,6 +119,83 @@ describe("the tree inside Pi", () => {
 		expect((await state()).nodes).toHaveLength(2);
 	}, 120_000);
 
+	it("switches away from a session in the middle of a turn, and the work carries on in the background", async () => {
+		const pi = await terminal();
+		await pi.prompt("hello");
+		const rootFile = await sessionFile(pi);
+		await pi.command("/lattice");
+		const root = await until((s) => s.nodes[0]?.status === "idle" && s.nodes[0], "the root");
+		await pi.prompt(spawnTool({ name: "kid", brief: "wait" }));
+		const kid = await until((s) => childrenOf(s.nodes, root.id)[0], "the child");
+		await until((s) => s.nodes.find((n) => n.id === kid.id)?.status === "idle", "the child to settle");
+
+		// Start a long step here, and switch away while it is running.
+		await pi.client.prompt('!tool bash {"command":"sleep 30"}');
+		await pi.waitFor(() => pi.events.some((e) => e.type === "tool_execution_start" && e.toolName === "bash"), "the long step to start");
+		const started = Date.now();
+		await pi.client.prompt(`/lattice open ${kid.id}`, undefined, "steer");
+		await eventually(async () => (await sessionFile(pi)) !== rootFile, "this terminal to switch without waiting for the turn");
+		expect(Date.now() - started).toBeLessThan(15_000); // far less than the 30 second step
+
+		// The session left behind is running in the background, told to carry on.
+		await until((s) => !s.foreground.includes(root.id) && s.foreground.includes(kid.id), "the child to be open here");
+		await until((s) => s.nodes.find((n) => n.id === root.id)?.status === "idle", "the root to carry on and settle in the background");
+
+		// And this terminal is immediately usable in the session it switched to.
+		await pi.prompt("are you there?");
+		await pi.waitForAssistant("are you there?");
+
+		await pi.command(`/lattice open ${root.id}`);
+		await eventually(async () => (await sessionFile(pi)) === rootFile, "this terminal to return to the root");
+		expect(await messages(pi)).toContain("moved between the background and a terminal");
+	}, 120_000);
+
+	it("opens a session that is working in the background, and it carries on here", async () => {
+		const pi = await terminal();
+		await pi.prompt("hello");
+		await pi.command("/lattice");
+		const root = await until((s) => s.nodes[0]?.status === "idle" && s.nodes[0], "the root");
+		await pi.prompt(spawnTool({ name: "kid", brief: "wait" }));
+		const kid = await until((s) => childrenOf(s.nodes, root.id)[0], "the child");
+		await until((s) => s.nodes.find((n) => n.id === kid.id)?.status === "idle", "the child to settle");
+
+		// Give the child a long step, in the background.
+		await pi.prompt(sendTool(kid.id, "!sleep 30"));
+		await until((s) => s.nodes.find((n) => n.id === kid.id)?.status === "running", "the child to be working");
+
+		await pi.command(`/lattice open ${kid.id}`);
+		await until((s) => s.foreground.includes(kid.id), "the child to be open here");
+		// It was stopped in the background and told to carry on in this terminal.
+		await pi.waitForAssistant("moved between the background and a terminal", 20_000);
+	}, 120_000);
+
+	it("shows the project's sessions as soon as Pi opens, and a new session joins with its first message", async () => {
+		const first = await terminal();
+		await first.prompt("hello");
+		await first.command("/lattice");
+		await until((s) => s.nodes[0]?.status === "idle", "the first session to be in the tree");
+		await first.stop();
+		// Nothing is running any more: stop the background host too.
+		await observer?.ui("shutdown", {});
+		observer?.close();
+		observer = undefined;
+		await eventually(() => !existsSync(join(stateDir, "host.json")), "the host to stop");
+
+		// Open Pi again, on a brand-new session, and type nothing.
+		const second = await terminal();
+		const seen = await until((s) => s.nodes.length === 1 && s, "the host to be started and the tree fetched, with nothing typed");
+		expect(seen.foreground).toEqual([]); // the new session is not in the tree yet
+
+		// Its first message makes it a session of the tree, named after what was asked.
+		await second.prompt("plan the cart redesign");
+		const joined = await until((s) => s.nodes.length === 2 && s.nodes.find((n) => n.name === "plan the cart redesign"), "the new session to join the tree");
+		expect(joined).toMatchObject({ parentId: null, owner: "tester", sessionFile: await sessionFile(second) });
+		await until((s) => s.foreground.includes(joined.id), "the new session to be open here");
+		// And it is a full member: it can create children.
+		await second.prompt(spawnTool({ name: "kid", brief: "wait" }));
+		await until((s) => childrenOf(s.nodes, joined.id).length === 1, "the joined session to spawn a child");
+	}, 120_000);
+
 	it("does not depend on the order the extensions load in", async () => {
 		// The reverse of the bundle's order: messaging and tree tools start before the pane knows the node.
 		const pi = await terminal([], [...BUNDLE].reverse());
