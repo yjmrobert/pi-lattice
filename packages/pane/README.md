@@ -37,7 +37,7 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | `/lattice status` | List the whole tree |
 | `/lattice stop` | Stop the background host |
 
-The footer shows the keys that act on whatever the cursor is on. The item under the cursor shows all of its text.
+While the pane has the keyboard, the chat steps aside for an inspector: everything about what the cursor is on. For a session that is its state and how long it has been in it, its place in the tree, its brief, roles, workspace, branch and directory, and anything it is waiting on you for. For a waiting item it is the full text, with the session it concerns. The keys that act on it are listed along the bottom. `esc` puts the chat back as it was.
 
 Marks: a spinner for working, `●` in the attention colour for waiting on you, dim `●` idle, `○` asleep or offline, `✓` finished, `✗` failed, `▸` open in this terminal, `?n` questions waiting on you, `✉n` messages to approve. The attention colour is used for nothing else.
 

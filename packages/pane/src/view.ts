@@ -62,6 +62,10 @@ export interface PaneView {
 	asleep?: Array<{ key: string; name: string }>;
 	/** Whether there is a session to go back to with `-`. */
 	previous?: boolean;
+	/** Whether the inspector is showing beside the pane. It then lists the keys that act, and the pane keeps the ones that move. */
+	inspector?: boolean;
+	/** The time, for saying how long a session has been in its state. */
+	now?: number;
 	/** The node open in this terminal. */
 	current: string | undefined;
 	/** What the cursor is on: a key from {@link paneOrder}. */
@@ -82,14 +86,14 @@ export const nodeKey = (id: string): string => `n:${id}`;
 export const itemKey = (id: string): string => `i:${id}`;
 export const repoKey = (key: string): string => `r:${key}`;
 
-const SPINNER = [..."⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"];
+export const SPINNER = [..."⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"];
 const ITEM_ICON: Record<InboxItem["kind"], string> = { question: "?", message: "✉", pair: "⇄", offer: "⇄", release: "⇄" };
 
 const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 /** Cut plain text to a number of columns. Styling is applied afterwards, so widths stay exact. */
-function fit(text: string, width: number): string {
+export function fit(text: string, width: number): string {
 	const chars = [...text];
 	if (chars.length <= width) return text;
 	return width <= 1 ? chars.slice(0, Math.max(0, width)).join("") : `${chars.slice(0, width - 1).join("")}…`;
@@ -117,11 +121,11 @@ export function wrap(text: string, width: number): string[] {
 }
 
 /** A run of text with one style. Widths are counted on the plain text. */
-type Seg = readonly [text: string, style?: ((text: string) => string) | undefined];
-const widthOf = (segs: readonly Seg[]): number => segs.reduce((sum, [text]) => sum + [...text].length, 0);
-const draw = (segs: readonly Seg[]): string => segs.map(([text, style]) => (style && text !== "" ? style(text) : text)).join("");
+export type Seg = readonly [text: string, style?: ((text: string) => string) | undefined];
+export const widthOf = (segs: readonly Seg[]): number => segs.reduce((sum, [text]) => sum + [...text].length, 0);
+export const draw = (segs: readonly Seg[]): string => segs.map(([text, style]) => (style && text !== "" ? style(text) : text)).join("");
 /** Left and right parts on one row, the right one against the edge. The caller makes sure they fit. */
-function spread(left: readonly Seg[], right: readonly Seg[], width: number): Seg[] {
+export function spread(left: readonly Seg[], right: readonly Seg[], width: number): Seg[] {
 	return [...left, [" ".repeat(Math.max(1, width - widthOf(left) - widthOf(right)))], ...right];
 }
 const padTo = (segs: readonly Seg[], width: number): Seg[] => [...segs, [" ".repeat(Math.max(0, width - widthOf(segs)))]];
@@ -197,7 +201,7 @@ function tally(repo: PaneRepo): Tally {
 }
 
 /** Whether a session belongs to someone who cannot be reached right now. */
-function gone(node: NodeMeta, state: UiState): boolean {
+export function gone(node: NodeMeta, state: UiState): boolean {
 	if (node.owner === state.owner) return false;
 	const person = state.sharing?.people.find((candidate) => candidate.name === node.owner);
 	return !person || (!person.online && !person.self);
@@ -263,7 +267,7 @@ function repoHeader(repo: PaneRepo, only: boolean, folded: boolean, frame: numbe
 }
 
 /** Key hints, as many to a row as fit. */
-function flow(hints: ReadonlyArray<readonly [key: string, does: string]>, width: number, paint: Paint): Seg[][] {
+export function flow(hints: ReadonlyArray<readonly [key: string, does: string]>, width: number, paint: Paint): Seg[][] {
 	const rows: Seg[][] = [];
 	let row: Seg[] = [];
 	for (const [key, does] of hints) {
@@ -287,6 +291,7 @@ function footer(view: PaneView, waiting: number, width: number, paint: Paint): S
 		const left: Seg[] = [[" "], key("alt+l"), word(waiting > 0 ? " to answer" : " sessions")];
 		return [rule, widthOf(left) + widthOf(right) + 1 <= width ? spread(left, right, width) : left];
 	}
+	if (view.inspector) return [rule, ...flow([["↑↓", "move"], ...(waiting > 0 ? ([["1-9", "jump"]] as const) : []), ["esc", "close"]], width, paint)];
 	const back: Array<readonly [string, string]> = view.previous ? [["-", "previous"]] : [];
 	return [rule, ...flow([...(view.keys ?? [["⏎", "open"], ["n", "new"], ["o", "share"]]), ...back, ["↑↓", "move"], ["esc", "close"]], width, paint)];
 }
@@ -324,7 +329,7 @@ export function renderPane(view: PaneView, width: number, paint: Paint = PLAIN):
 			push(from ? spread([...lead, [title, paint.bold]], [[fit(from, 14), paint.accent], [" "]], inner) : [...lead, [title, paint.bold]], key);
 			const indent = `   ${" ".repeat(number.length)}`;
 			// Under the cursor an item shows all of what it says, so it can be answered where it is.
-			if (view.focused && key === view.cursor) for (const text of wrap(item.text, inner - indent.length - 1).slice(0, 6)) push([[`${indent}${text}`]], key);
+			if (view.focused && key === view.cursor && !view.inspector) for (const text of wrap(item.text, inner - indent.length - 1).slice(0, 6)) push([[`${indent}${text}`]], key);
 			else push([[fit(`${indent}${item.text}`, inner), paint.dim]], key);
 		});
 		push([["─".repeat(inner), paint.dim]]);

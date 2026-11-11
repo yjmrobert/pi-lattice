@@ -10,6 +10,7 @@ import { basename, dirname } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { emitEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type KnownTree, type NodeMeta, type UiState } from "@pi-lattice/protocol";
+import { renderInspector } from "./inspect.ts";
 import { cursorKeys, interpretKey, type PaneAction } from "./keys.ts";
 import { connectHost, hasTree, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
 import { type InboxDetails, inboxItems, nodeKey, type Paint, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "./view.ts";
@@ -97,8 +98,15 @@ function view(): PaneView {
 		hint: homeLink() ? "No sessions yet. Your next\nmessage starts one here." : "No sessions in this\nproject yet.\n\n/lattice starts a tree\nfrom this session.",
 		frame: Math.floor(Date.now() / SPINNER_MS),
 		height: shared.tui?.terminal.rows,
+		inspector: inspecting(),
+		now: Date.now(),
 	};
 	return { ...base, keys: cursorKeys(base) };
+}
+
+/** Whether the inspector is showing: the pane has the keyboard and sits beside Pi. */
+function inspecting(): boolean {
+	return shared.focused && shared.wrapped && (shared.tui?.terminal.columns ?? 0) >= MIN_TERMINAL_WIDTH;
 }
 
 /** A repository's name: what its sessions report, else the folder its tree is kept in. */
@@ -255,11 +263,17 @@ function installPane(tui: Hooked): void {
 		},
 		invalidate() {},
 	};
+	// While the pane has the keyboard, what the cursor is on is shown in full where the chat was.
+	const inspector: Component = {
+		render: (width) => renderInspector(view(), width, shared.paint, shared.tui?.terminal.rows).map((line) => truncateToWidth(line, width)),
+		invalidate() {},
+	};
 	const wrap = (inner: Component): Component =>
 		new HStack([
 			// Always there, so opening pi shows the sessions without typing anything.
 			{ component: pane, basis: PANE_WIDTH, shrink: 0, visible: (viewport) => viewport.width >= MIN_TERMINAL_WIDTH },
-			{ component: inner, basis: 0, grow: 1, minSize: 20 },
+			{ component: inspector, basis: 0, grow: 1, minSize: 20, visible: () => inspecting() },
+			{ component: inner, basis: 0, grow: 1, minSize: 20, visible: () => !inspecting() },
 		]);
 	const set = tui.setLayoutRoot.bind(tui);
 	tui.setLayoutRoot = (component) => set(component ? wrap(component) : undefined);

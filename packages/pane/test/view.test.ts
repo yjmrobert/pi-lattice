@@ -1,6 +1,6 @@
 import type { NodeMeta, UiState } from "@pi-lattice/protocol";
 import { describe, expect, it } from "vitest";
-import { cursorKeys, inboxItems, interpretKey, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
+import { ago, cursorKeys, renderInspector, repoKey, inboxItems, interpretKey, itemKey, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "../src/index.ts";
 
 const node = (id: string, parentId: string | null, over: Partial<NodeMeta> = {}): NodeMeta => ({
 	id, parentId, rootId: "r", kind: "task", name: id, brief: "", fragments: [], owner: "yan", version: 1, status: "idle",
@@ -222,5 +222,69 @@ describe("keys while the pane has the keyboard", () => {
 			"     schema attached.            ",
 		]);
 		expect(renderPane(at(nodeKey("r")), 34)[from + 1]).toBe("     Totals endpoint is live at …");
+	});
+});
+
+describe("the inspector", () => {
+	const now = Date.parse("2026-01-01T00:14:00.000Z");
+	const s = state({ attention: { a: { dialogs: 1, pending: 0 } } });
+	(s.nodes[1] as NodeMeta) = { ...(s.nodes[1] as NodeMeta), brief: "Find the gaps in the checkout story.\nAsk before assuming.", fragments: ["worker", "grilling"], workspace: "worktree", branch: "lattice/grilling", cwd: "/w/.lattice/worktrees/a", updatedAt: "2026-01-01T00:08:00.000Z" };
+	const details = { dialogs: { a: [{ id: "d1", method: "confirm" as const, title: "Run stripe listen in this shell?", message: "It forwards webhooks to localhost:3000." }] } };
+	const at = (cursor: string): PaneView => {
+		const base: PaneView = { repos: [repo(s, { inbox: inboxItems(s, details) })], current: "r", cursor, focused: true, now, inspector: true };
+		return { ...base, keys: cursorKeys(base) };
+	};
+
+	it("shows a session's state, lineage, brief, roles and workspace, and what it is waiting on", () => {
+		expect(renderInspector(at(nodeKey("a")), 60)).toEqual([
+			" grilling                           ● waiting on you · 6m ",
+			" shop · checkout › grilling",
+			"",
+			" BRIEF",
+			" Find the gaps in the checkout story.",
+			" Ask before assuming.",
+			"",
+			" owner      you",
+			" kind       task",
+			" roles      worker · grilling",
+			" workspace  own worktree · branch lattice/grilling",
+			" directory  /w/.lattice/worktrees/a",
+			"",
+			" WAITING ON YOU",
+			" 1 grilling: Run stripe listen in this shell?",
+			"───────────────────────────────────────────────────────────",
+			" ⏎ open  n new  o share",
+		]);
+	});
+
+	it("shows a question in full, with the session asking and the keys that answer it", () => {
+		const lines = renderInspector(at(itemKey("q:a:d1")), 60);
+		expect(lines.slice(0, 5)).toEqual([
+			" Question from grilling             ● waiting on you · 6m ",
+			" shop · checkout › grilling",
+			"",
+			" │ Run stripe listen in this shell?",
+			" │ It forwards webhooks to localhost:3000.",
+		]);
+		expect(lines).toContain(" THE SESSION ASKING");
+		expect(lines.at(-1)).toBe(" y yes  n no");
+	});
+
+	it("pins its keys to the bottom, and keeps the pane's own footer to the keys that move", () => {
+		const lines = renderInspector(at(nodeKey("a")), 60, PLAIN, 30);
+		expect(lines).toHaveLength(30);
+		expect(lines.at(-1)).toBe(" ⏎ open  n new  o share");
+		expect(renderPane(at(nodeKey("a")), 34).at(-1)).toBe(" ↑↓ move  1-9 jump  esc close");
+	});
+
+	it("explains a repository whose host is asleep", () => {
+		const view: PaneView = { repos: [repo()], asleep: [{ key: "/docs/.lattice", name: "docs-site" }], current: "r", cursor: repoKey("/docs/.lattice"), focused: true };
+		expect(renderPane(view, 34)).toContain(" ◇ docs-site              asleep ");
+		expect(interpretKey(view, "enter")).toEqual([{ do: "wake", repo: "/docs/.lattice" }]);
+		expect(renderInspector({ ...view, keys: cursorKeys(view) }, 60).join("\n")).toContain("host is not running");
+	});
+
+	it("says how long ago in the largest unit that fits", () => {
+		expect([ago("2026-01-01T00:13:20.000Z", now), ago("2026-01-01T00:00:00.000Z", now), ago("2025-12-31T21:00:00.000Z", now), ago("2025-12-29T00:00:00.000Z", now), ago("", now)]).toEqual(["40s", "14m", "3h", "3d", ""]);
 	});
 });
