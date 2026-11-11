@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSandbox, extensionPaths, type PiChild, type Sandbox, startPi } from "../support/harness.ts";
@@ -116,5 +116,45 @@ describe("roles", () => {
 		const trusted = await start({ args: ["--approve"] });
 		await trusted.command("/role add house-style");
 		expect(await rolesSeen(trusted, "q1")).toBe("lattice-role-house-style");
+	});
+	it("shows a role in full with where it comes from, and edits it into the person's own copy", async () => {
+		const child = await start();
+		const own = join(sandbox.agentDir, "lattice", "roles", "worker.md");
+		const editor = async (after: number, command: string, answer: (prefill: string) => Record<string, unknown>) => {
+			const flow = child.command(command);
+			const dialog = await child.waitFor(() => child.events.filter((e) => e.type === "extension_ui_request" && e.method === "editor")[after], "the editor");
+			child.answer(dialog.id, answer(String(dialog.prefill ?? "")));
+			await flow;
+			return dialog;
+		};
+
+		await child.command("/role show worker");
+		const shown = await child.waitFor(() => child.notifications().find((text) => text.startsWith("worker · built in")), "the role shown");
+		expect(shown).toContain("You have been given one bounded piece of work.");
+		expect(shown).toContain("competes with: coordinator");
+
+		// The editor opens on the built-in text; saving writes a copy of the person's own, which then wins.
+		const first = await editor(0, "/role edit worker", (prefill) => ({ value: prefill.replace("You have been given one bounded piece of work.", "You have been given exactly one job.") }));
+		expect(String(first.title)).toContain(own);
+		expect(String(first.prefill)).toContain("name: worker");
+		await child.waitFor(() => child.notifications().find((text) => text.startsWith(`Saved ${own}`)), "the save");
+		expect(readFileSync(own, "utf8")).toContain("You have been given exactly one job.");
+		await child.command("/role show worker");
+		await child.waitFor(() => child.notifications().find((text) => text.startsWith("worker · yours") && text.includes("exactly one job")), "the person's copy to be the one in use");
+
+		// A copy that names another role is refused, so one file cannot quietly replace another role.
+		await editor(1, "/role edit worker", (prefill) => ({ value: prefill.replace("name: worker", "name: boss") }));
+		await child.waitFor(() => child.notifications().find((text) => text.includes('names the role "boss"')), "the refusal");
+		expect(readFileSync(own, "utf8")).toContain("name: worker");
+
+		// Saving it empty removes the copy, and the built-in one is back.
+		await editor(2, "/role edit worker", () => ({ value: "" }));
+		await child.waitFor(() => child.notifications().find((text) => text.includes('"worker" is the built in one again')), "the removal");
+		expect(existsSync(own)).toBe(false);
+
+		// A name nobody has yet starts a new role.
+		await editor(3, "/role edit reviewer", (prefill) => ({ value: prefill.replace("What a session with this role should do.", "Read the diff before the description.") }));
+		await child.command("/role add reviewer");
+		expect(await rolesSeen(child, "q1")).toBe("lattice-role-reviewer");
 	});
 });

@@ -41,7 +41,13 @@ export interface LatticeEvents {
 	/** The session's applied role fragments changed. */
 	"lattice:roles:changed": { fragments: string[] };
 	/** Ask which role fragments exist here. The asker passes an empty list; the roles extension fills it in. */
-	"lattice:roles:available": { names: string[] };
+	"lattice:roles:available": { names: string[]; fragments?: Array<{ name: string; summary: string; source: string; path: string }> };
+	/**
+	 * Ask what this session has been told beyond what the person typed. The asker passes an
+	 * empty list; each extension that writes into the prompt adds its parts, with where each
+	 * comes from, so a person can read exactly what was injected and find the file to change.
+	 */
+	"lattice:prompt:describe": { parts: Array<{ title: string; source: string; where: string; text: string }> };
 	/**
 	 * Ask what the settings in effect here are. The asker leaves `values` out; whoever reads
 	 * the settings files fills it in, by setting name. With no answer, each extension falls back

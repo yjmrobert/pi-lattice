@@ -5,14 +5,18 @@
  * coordinator, at spawn time) chooses and can change mid-session. Each applied fragment
  * becomes one system prompt section.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { assignmentFromEnv, emitEvent, HOST_ENV, type HostAssignment, onEvent, PROTOCOL_VERSION } from "@pi-lattice/protocol";
 import { Type } from "typebox";
 import { advisories, editRoles, INDEX_SECTION, type RoleEdit, roleSections, SECTION_PREFIX } from "./compose.ts";
-import { type Fragment, fragmentRoots, loadFragments } from "./fragments.ts";
+import { type Fragment, fragmentRoots, isFragmentName, loadFragments, parseFragment } from "./fragments.ts";
 
 const ROLES_ENTRY = "lattice:roles";
+
+/** Where a fragment comes from, in a person's words. */
+const SOURCE_WORDS: Record<string, string> = { builtin: "built in", user: "yours", project: "this project's" };
 
 function rolesIn(entries: Iterable<{ type?: string; customType?: string; data?: unknown }>): string[] | undefined {
 	let found: string[] | undefined;
@@ -120,8 +124,107 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 	onEvent(pi.events, "lattice:roles:available", (request) => {
 		if (!context) return;
 		reload(context);
-		for (const name of available.keys()) if (!request.names.includes(name)) request.names.push(name);
+		for (const fragment of available.values()) {
+			if (request.names.includes(fragment.name)) continue;
+			request.names.push(fragment.name);
+			(request.fragments ??= []).push({ name: fragment.name, summary: fragment.summary, source: fragment.source, path: fragment.path });
+		}
 	});
+
+	// Whoever shows a person what this session has been told asks each extension for its part.
+	onEvent(pi.events, "lattice:prompt:describe", (request) => {
+		if (!context) return;
+		const sections = roleSections(applied, available);
+		for (const [key, text] of Object.entries(sections)) {
+			const fragment = key.startsWith(SECTION_PREFIX) ? available.get(key.slice(SECTION_PREFIX.length)) : undefined;
+			request.parts.push({
+				title: fragment ? `Role: ${fragment.name}` : "Roles",
+				source: fragment ? `${SOURCE_WORDS[fragment.source] ?? fragment.source} · ${fragment.path}` : "written by pi-lattice from the list of roles",
+				where: `system prompt, section <${key}>`,
+				text,
+			});
+		}
+	});
+
+	/** Where a person's own version of a fragment is kept: theirs, or this project's. */
+	const ownPath = (ctx: ExtensionContext, name: string, scope: "user" | "project"): string =>
+		join(scope === "user" ? join(getAgentDir(), "lattice", "roles") : join(ctx.cwd, ".pi", "lattice", "roles"), `${name}.md`);
+
+	/** Show a fragment in full, with where it comes from. */
+	const show = (ctx: ExtensionContext, name: string): void => {
+		reload(ctx);
+		const fragment = available.get(name);
+		if (!fragment) {
+			ctx.ui.notify(`No role fragment "${name}". Available: ${[...available.keys()].join(", ") || "none"}.`, "warning");
+			return;
+		}
+		ctx.ui.notify(
+			[
+				`${fragment.name} · ${SOURCE_WORDS[fragment.source] ?? fragment.source} · ${fragment.path}`,
+				fragment.summary,
+				...(fragment.requires.length > 0 ? [`usually with: ${fragment.requires.join(", ")}`] : []),
+				...(fragment.conflicts.length > 0 ? [`competes with: ${fragment.conflicts.join(", ")}`] : []),
+				"",
+				fragment.body,
+				"",
+				`/role edit ${fragment.name} opens it for editing.`,
+			].join("\n"),
+			"info",
+		);
+	};
+
+	/**
+	 * Edit a fragment in Pi's editor. Saving writes the person's own copy, which is used in place
+	 * of the built-in one; saving it empty removes that copy, so the one under it is used again.
+	 */
+	const edit = async (ctx: ExtensionContext, name: string, scopeWord: string | undefined): Promise<void> => {
+		if (!isFragmentName(name)) {
+			ctx.ui.notify(`"${name}" cannot be a role name. Use lowercase letters, digits and dashes.`, "warning");
+			return;
+		}
+		if (scopeWord !== undefined && scopeWord !== "user" && scopeWord !== "project") {
+			ctx.ui.notify("Usage: /role edit <name> [user|project]", "warning");
+			return;
+		}
+		const scope = scopeWord ?? "user";
+		if (scope === "project" && !ctx.isProjectTrusted()) {
+			ctx.ui.notify("This project is not trusted, so its roles are not read. Trust it first, or edit your own copy with /role edit <name>.", "warning");
+			return;
+		}
+		reload(ctx);
+		const existing = available.get(name);
+		const path = ownPath(ctx, name, scope);
+		const starting = existsSync(path)
+			? readFileSync(path, "utf8")
+			: existing
+				? readFileSync(existing.path, "utf8")
+				: `---\nname: ${name}\nsummary: One line saying what this role is for.\n---\nWhat a session with this role should do.\n`;
+		const where = scope === "user" ? "your own copy, used in every repository" : "this project's copy";
+		const text = await ctx.ui.editor(`Role "${name}" · saving writes ${where}: ${path} · save it empty to remove that copy`, starting);
+		if (text === undefined) return;
+		if (text.trim() === "") {
+			if (!existsSync(path)) {
+				ctx.ui.notify(`There is no copy of "${name}" at ${path} to remove.`, "info");
+				return;
+			}
+			unlinkSync(path);
+			reload(ctx);
+			const now = available.get(name);
+			ctx.ui.notify(now ? `Removed ${path}. "${name}" is the ${SOURCE_WORDS[now.source] ?? now.source} one again.` : `Removed ${path}. There is no "${name}" role any more.`, "info");
+			return;
+		}
+		const parsed = parseFragment(text, path, scope);
+		if (!parsed || parsed.name !== name) {
+			ctx.ui.notify(parsed ? `Not saved: the file names the role "${parsed.name}", but it is being saved as "${name}". Change the name line back.` : "Not saved: a role needs some text under its header.", "warning");
+			return;
+		}
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, text.endsWith("\n") ? text : `${text}\n`);
+		reload(ctx);
+		const used = available.get(name);
+		const shadowed = used && used.path !== path ? ` Another copy wins here: ${used.path}.` : "";
+		ctx.ui.notify(`Saved ${path}.${shadowed} Sessions with the "${name}" role use it from their next turn.`, "info");
+	};
 
 	onEvent(pi.events, "lattice:roles:set", (request) => {
 		if (context) change("set", request.fragments);
@@ -159,11 +262,11 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("role", {
-		description: "Compose this session's roles. Usage: /role [show|list|add <names>|remove <names>|set <names>|clear]",
+		description: "Compose this session's roles, and read or edit a role. Usage: /role [show [name]|list|add <names>|remove <names>|set <names>|clear|edit <name> [user|project]]",
 		getArgumentCompletions: (prefix) => {
 			const words = prefix.split(/\s+/);
 			if (words.length <= 1) {
-				const verbs = ["show", "list", "add", "remove", "set", "clear"].filter((verb) => verb.startsWith(words[0] ?? ""));
+				const verbs = ["show", "list", "add", "remove", "set", "clear", "edit"].filter((verb) => verb.startsWith(words[0] ?? ""));
 				return verbs.length > 0 ? verbs.map((verb) => ({ value: verb, label: verb })) : null;
 			}
 			const last = words[words.length - 1] ?? "";
@@ -175,7 +278,11 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			context = ctx;
 			const [verb = "show", ...names] = args.trim().split(/[\s,+]+/).filter(Boolean);
-			if (verb === "show") {
+			if (verb === "show" && names[0]) show(ctx, names[0]);
+			else if (verb === "edit") {
+				if (!names[0]) ctx.ui.notify("Usage: /role edit <name> [user|project]", "warning");
+				else await edit(ctx, names[0], names[1]);
+			} else if (verb === "show") {
 				reload(ctx);
 				ctx.ui.notify([`Roles: ${describe()}.`, ...advisories(applied, available).map((note) => `Note: ${note}`)].join("\n"), "info");
 			} else if (verb === "list") {
@@ -192,7 +299,7 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 			} else if (verb === "clear") {
 				ctx.ui.notify(change("set", []).text, "info");
 			} else {
-				ctx.ui.notify("Usage: /role [show|list|add <names>|remove <names>|set <names>|clear]", "warning");
+				ctx.ui.notify("Usage: /role [show [name]|list|add <names>|remove <names>|set <names>|clear|edit <name> [user|project]]", "warning");
 			}
 		},
 	});
