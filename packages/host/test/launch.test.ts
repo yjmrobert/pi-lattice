@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { parseSettings, resolveSettings } from "@pi-lattice/protocol";
 import { sessionLaunch, tailOf, toolLine } from "../src/index.ts";
 
 describe("starting a session", () => {
-	it("uses the tree's settings, and the session's own model over the tree's", () => {
-		expect(sessionLaunch({}, {})).toEqual({ args: [], env: {} });
-		expect(sessionLaunch({}, { model: "haiku", thinking: "low", approval: "always", env: { KEY: "k" } })).toEqual({
+	it("uses the settings in effect, and the session's own model over them", () => {
+		const settings = (file: object = {}, env: Record<string, string> = {}) => resolveSettings({ repo: parseSettings(JSON.stringify(file)), env });
+		expect(sessionLaunch({}, settings())).toEqual({ args: [], env: {} });
+		expect(sessionLaunch({}, settings({ model: "haiku", thinking: "low", approval: "always", limits: { maxHops: 3, maxDepth: 2 }, env: { KEY: "k" } }))).toEqual({
 			args: ["--model", "haiku", "--thinking", "low"],
-			env: { KEY: "k", LATTICE_APPROVAL: "always" },
+			// Only what the session enforces itself is passed on; the tree limits stay with the host.
+			env: { KEY: "k", LATTICE_APPROVAL: "always", LATTICE_MAX_HOPS: "3" },
 		});
-		expect(sessionLaunch({ model: "opus" }, { model: "haiku" }).args).toEqual(["--model", "opus"]);
+		expect(sessionLaunch({ model: "opus" }, settings({ model: "haiku" })).args).toEqual(["--model", "opus"]);
 	});
 });
 

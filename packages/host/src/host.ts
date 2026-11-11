@@ -5,16 +5,14 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
 	assignmentToEnv,
 	type Channel,
 	childrenOf,
-	CONFIG_FILE,
 	type DialogInfo,
-	DEFAULT_LIMITS,
 	depthOf,
 	type Envelope,
 	HANDOVER_NOTE,
@@ -22,10 +20,18 @@ import {
 	type HostAssignment,
 	type InboundState,
 	isRelativeAddress,
+	latticeHome,
 	type Limits,
+	limitsOf,
 	newNodeId,
-	parseConfig,
-	type TreeConfig,
+	parseSettings,
+	repoConfigPath,
+	resolveSettings,
+	SETTINGS,
+	type Settings,
+	type SettingsFile,
+	textSetting,
+	userConfigPath,
 	type NodeMeta,
 	type NodeStatus,
 	type PeerInfo,
@@ -58,7 +64,10 @@ export interface HostOptions {
 	extensionPaths?: string[];
 	/** Extra environment for every session. */
 	env?: Record<string, string>;
+	/** Limits that hold whatever the settings say. */
 	limits?: Partial<Limits>;
+	/** Where the person's own settings and templates are kept. Defaults to their lattice home. */
+	userDir?: string;
 	/** Directory for the unix socket. Defaults to a private directory under XDG_RUNTIME_DIR or the temp dir. */
 	socketDir?: string;
 	/** Milliseconds to wait for a session to start and connect. */
@@ -127,13 +136,23 @@ interface Runtime {
 const RECENT_LINES = 12;
 
 /** What a session is started with: the tree's settings, then anything chosen for the session itself. */
-export function sessionLaunch(node: Pick<NodeMeta, "model">, config: TreeConfig): { args: string[]; env: Record<string, string> } {
-	const model = node.model ?? config.model;
+export function sessionLaunch(node: Pick<NodeMeta, "model">, settings: Settings): { args: string[]; env: Record<string, string> } {
+	const model = node.model ?? textSetting(settings, "model");
+	const thinking = textSetting(settings, "thinking");
+	// What the session's own extensions enforce reaches them through the environment, under the same names a person would use.
+	const passed: Record<string, string> = {};
+	for (const setting of SETTINGS) {
+		const value = settings.values[setting.key];
+		if (setting.env && SESSION_SETTINGS.has(setting.key) && settings.sources[setting.key] !== "default" && value !== undefined) passed[setting.env] = String(value);
+	}
 	return {
-		args: [...(model ? ["--model", model] : []), ...(config.thinking ? ["--thinking", config.thinking] : [])],
-		env: { ...config.env, ...(config.approval ? { LATTICE_APPROVAL: config.approval } : {}) },
+		args: [...(model ? ["--model", model] : []), ...(thinking ? ["--thinking", thinking] : [])],
+		env: { ...settings.env, ...passed },
 	};
 }
+
+/** The settings a session's messaging extension enforces itself. */
+const SESSION_SETTINGS = new Set(["approval", "limits.maxHops", "limits.maxSendsPerMinute", "limits.maxPayloadBytes"]);
 
 const brief = (text: string, width = 200): string => {
 	const line = text.replace(/\s+/g, " ").trim();
@@ -180,7 +199,8 @@ function isProcessAlive(pid: number): boolean {
 export class LatticeHost extends EventEmitter<HostEvents> {
 	readonly stateDir: string;
 	readonly owner: string;
-	readonly limits: Limits;
+	/** Where the person's own settings and templates are kept. */
+	readonly userDir: string;
 	readonly socketPath: string;
 	private readonly options: HostOptions;
 	private readonly store: Store;
@@ -202,7 +222,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		this.options = options;
 		this.stateDir = resolve(options.stateDir);
 		this.owner = options.owner ?? process.env[HOST_ENV.owner] ?? userInfo().username;
-		this.limits = { ...DEFAULT_LIMITS, ...options.limits };
+		this.userDir = resolve(options.userDir ?? latticeHome(process.env, homedir()));
 		mkdirSync(this.stateDir, { recursive: true });
 
 		const socketDir = options.socketDir ?? join(process.env.XDG_RUNTIME_DIR ?? tmpdir(), `pi-lattice-${userInfo().uid}`);
@@ -283,26 +303,51 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		return this.runtimes.has(id);
 	}
 
-	/** The tree's settings as they are now. A file that cannot be read is reported and counts as empty. */
-	config(): TreeConfig {
-		const path = join(this.stateDir, CONFIG_FILE);
-		if (!existsSync(path)) return {};
-		try {
-			const { config, problems } = parseConfig(readFileSync(path, "utf8"));
-			const said = problems.join(" ");
-			if (said && said !== this.configComplaint) this.emit("log", "warn", `Settings in ${path}: ${said}`);
-			this.configComplaint = said;
-			return config;
-		} catch (error) {
-			const said = error instanceof Error ? error.message : String(error);
-			if (said !== this.configComplaint) this.emit("log", "warn", `Settings in ${path} were ignored: ${said}`);
-			this.configComplaint = said;
-			return {};
-		}
+	/**
+	 * The settings in effect: the environment, then this repository's file, then the person's own.
+	 * Read again whenever a file changes, so a change needs no restart. A file that cannot be
+	 * read is reported once and counts as empty.
+	 */
+	settings(): Settings {
+		const paths = { user: userConfigPath(this.userDir), repo: repoConfigPath(this.stateDir) };
+		const stamp = (path: string): string => {
+			try {
+				const stat = statSync(path);
+				return `${stat.mtimeMs}:${stat.size}`;
+			} catch {
+				return "";
+			}
+		};
+		const stamps = `${stamp(paths.user)}|${stamp(paths.repo)}`;
+		if (this.settingsCache?.stamps === stamps) return this.settingsCache.settings;
+		const complaints: string[] = [];
+		const read = (path: string): SettingsFile | undefined => {
+			if (!existsSync(path)) return undefined;
+			try {
+				const file = parseSettings(readFileSync(path, "utf8"));
+				if (file.problems.length > 0) complaints.push(`Settings in ${path}: ${file.problems.join(" ")}`);
+				return file;
+			} catch (error) {
+				complaints.push(`Settings in ${path} were ignored: ${error instanceof Error ? error.message : String(error)}`);
+				return undefined;
+			}
+		};
+		const settings = resolveSettings({ user: read(paths.user), repo: read(paths.repo), env: process.env });
+		const said = complaints.join(" ");
+		if (said && said !== this.settingsComplaint) this.emit("log", "warn", said);
+		this.settingsComplaint = said;
+		this.settingsCache = { stamps, settings };
+		return settings;
 	}
 
+	private settingsCache: { stamps: string; settings: Settings } | undefined;
 	/** The last problem reported about the settings, so it is said once and not at every session start. */
-	private configComplaint = "";
+	private settingsComplaint = "";
+
+	/** The limits in effect now. */
+	get limits(): Limits {
+		return { ...limitsOf(this.settings()), ...this.options.limits };
+	}
 
 	/** Dialogs currently blocking a node. */
 	dialogs(id: string): Dialog[] {
@@ -433,7 +478,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const token = randomBytes(24).toString("hex");
 		const sessionDir = join(this.stateDir, "sessions", id);
 		mkdirSync(sessionDir, { recursive: true });
-		const launch = sessionLaunch(node, this.config());
+		const launch = sessionLaunch(node, this.settings());
 		const args = [
 			...(this.options.piArgs ?? []),
 			...launch.args,

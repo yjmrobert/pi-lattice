@@ -179,10 +179,12 @@ export function mailIn(sandbox: Sandbox, nodeId: string, state: string): string[
 
 /** Options that make a LatticeHost run its sessions against the scripted model inside a sandbox. */
 export function hostOptionsFor(sandbox: Sandbox, overrides: Record<string, unknown> = {}): {
-	stateDir: string; owner: string; piCommand: string[]; piArgs: string[]; extensionPaths: string[]; env: Record<string, string>; socketDir: string; startTimeoutMs: number;
+	stateDir: string; userDir: string; owner: string; piCommand: string[]; piArgs: string[]; extensionPaths: string[]; env: Record<string, string>; socketDir: string; startTimeoutMs: number;
 } & Record<string, unknown> {
 	return {
 		stateDir: join(sandbox.root, "state"),
+		// The person's own settings come from the sandbox, never from whoever runs the tests.
+		userDir: sandbox.home,
 		owner: "tester",
 		piCommand: [process.execPath, cliPath],
 		piArgs: ["-e", extensionPaths.faux, "--provider", "lattice-faux", "--model", "scripted", "--no-skills", "--no-context-files"],

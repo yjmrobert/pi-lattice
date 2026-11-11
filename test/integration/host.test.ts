@@ -301,12 +301,27 @@ describe("keeping the tree tidy", () => {
 		const h = await startHost();
 		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
 		writeFileSync(join(h.stateDir, "config.json"), JSON.stringify({ approval: "always" }));
-		expect(h.config()).toEqual({ approval: "always" });
+		expect(h.settings().values.approval).toBe("always");
+		expect(h.settings().sources.approval).toBe("repo");
 		await h.prompt(root.id, spawnTool({ name: "kid", brief: sendTool("parent", "hi") }));
 		// The parent was started before the setting; a restart picks it up, and the child's report then waits.
 		await child(h, root.id, "kid");
 		writeFileSync(join(h.stateDir, "config.json"), "{ not json");
-		expect(h.config()).toEqual({});
+		expect(h.settings().sources.approval).toBe("default");
+	});
+
+	it("takes the person's own settings for every repository, and the repository's over them", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		writeFileSync(join(sandbox.home, "config.json"), JSON.stringify({ limits: { maxChildren: 1, maxDepth: 1 } }));
+		expect(h.limits.maxChildren).toBe(1);
+		await h.spawnChild(root.id, { name: "one", brief: "x" });
+		await expect(h.spawnChild(root.id, { name: "two", brief: "x" })).rejects.toThrow("already has 1 children");
+		// The repository's file wins, and a raised limit holds from the next request on.
+		writeFileSync(join(h.stateDir, "config.json"), JSON.stringify({ limits: { maxChildren: 2 } }));
+		expect(h.settings().sources["limits.maxChildren"]).toBe("repo");
+		expect(h.settings().sources["limits.maxDepth"]).toBe("user");
+		await h.spawnChild(root.id, { name: "two", brief: "x" });
 	});
 
 	it("is not kept awake by a terminal that only watches from another repository", async () => {
