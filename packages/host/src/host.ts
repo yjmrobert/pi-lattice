@@ -118,7 +118,8 @@ export interface HostEvents {
 	activity: [nodeId: string];
 	/** A raw session event or UI request from a node's Pi process, numbered in stream order per process. */
 	session: [nodeId: string, event: RpcRecord, seq: number];
-	log: [level: "info" | "warn" | "error", message: string];
+	/** Everything but `info` is shown to the person in their terminal; `notice` is news, not a problem. */
+	log: [level: "info" | "notice" | "warn" | "error", message: string];
 }
 
 interface Runtime {

@@ -146,7 +146,8 @@ export interface HandoffView {
 export interface CollabEvents {
 	/** People, connections or shared nodes changed; views may differ. */
 	changed: [];
-	log: [level: "info" | "warn" | "error", message: string];
+	/** `notice` is for the person: someone joined, asked, declined, or a session became theirs. */
+	log: [level: "info" | "notice" | "warn" | "error", message: string];
 }
 
 interface OutboxItem {
@@ -357,7 +358,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	/** Someone new showed they are in the network. Their key is pinned from here on. */
 	private joined(name: string, key: string): void {
 		if (name === this.identity.name || !this.book.learn(name, key)) return;
-		this.emit("log", "info", `${name} joined ${this.options.network.name}.`);
+		this.emit("log", "notice", `${name} joined ${this.options.network.name}.`);
 		this.emit("changed");
 	}
 
@@ -1379,7 +1380,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		if (!node || node.owner !== this.identity.name) throw new Error("That session is not here.");
 		const known = this.readAsk("requests", node.id, peer) !== undefined;
 		writeFileSync(this.askPath("requests", node.id, peer), JSON.stringify({ nodeId: node.id, who: peer, at: this.now() } satisfies Ask));
-		if (!known) this.emit("log", "info", `${peer} asks to take over "${node.name}".`);
+		if (!known) this.emit("log", "notice", `${peer} asks to take over "${node.name}".`);
 		this.emit("changed");
 		return {};
 	}
@@ -1394,7 +1395,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		const ask = typeof nodeId === "string" ? this.readAsk("asked", nodeId) : undefined;
 		if (ask?.who === peer) {
 			this.forget("asked", ask.nodeId);
-			this.emit("log", "info", `${peer} declined to hand over "${this.host.node(ask.nodeId)?.name ?? "the session"}".`);
+			this.emit("log", "notice", `${peer} declined to hand over "${this.host.node(ask.nodeId)?.name ?? "the session"}".`);
 			this.emit("changed");
 		}
 		return {};
@@ -1484,7 +1485,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			rmSync(bundlePath, { force: true });
 		}
 		this.forget("asked", id);
-		this.emit("log", "info", `You now own "${record.meta.body.name}".`);
+		this.emit("log", "notice", `You now own "${record.meta.body.name}".`);
 		this.debounce("publish", () => this.publishOwn());
 		this.emit("changed");
 		return receipt;
