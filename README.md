@@ -29,7 +29,7 @@ Then open `pi` in a project as you always do. A pane on the left lists the proje
 - `,` in the pane, or `/lattice config`, opens the settings: models, roles, limits and the pane itself, for this repository or for all of yours. `/lattice doctor` checks the setup.
 - Sessions are told how to talk to each other, and you can read and change all of it: `/lattice prompt` shows what a session has been told and the file each part comes from.
 - Work in several repositories shows in one pane. Opening a session from another repository moves this terminal there; `-` goes back.
-- `/lattice share` pairs you with a collaborator, peer to peer, so you see each other's sessions and can hand one over.
+- `/lattice network` puts you and your teammates in one network, once: create it, pass on the join code, and from then on everyone's sessions show in everyone's pane, in every repository you share. `o` offers one of yours to a teammate; `t` asks for one of theirs. It is peer to peer, with no server.
 
 See the [pane readme](packages/pane/README.md) for keys, and [a feature through the full lifecycle](examples/feature-lifecycle/README.md) for a walkthrough.
 
@@ -42,7 +42,7 @@ See the [pane readme](packages/pane/README.md) for keys, and [a feature through 
 | [`roles`](packages/roles/README.md) | Pi extension. Compose a session's role from markdown fragments and change it mid-session. Also works alone ([guide](docs/roles.md)). |
 | [`graph`](packages/graph/README.md) | Pi extension. Lets an agent spawn child sessions and see the tree. |
 | [`host`](packages/host/README.md) | Library. Owns the tree and runs the sessions you are not in. |
-| [`collab`](packages/collab/README.md) | Library. Shares a tree between people, peer to peer, with signed ownership handoff. |
+| [`collab`](packages/collab/README.md) | Library. Shares trees between the people of a network, peer to peer, with signed ownership handoff. |
 | [`app`](packages/app/README.md) | Everything assembled: the Pi package, the launcher, the background host, the command line. |
 | `protocol` | The contracts everything else shares: envelope, events, wire types, state machines. |
 

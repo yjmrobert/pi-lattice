@@ -1,6 +1,6 @@
 # 0012 Collab is peer to peer, with no server and no shared storage
 
-Supersedes [0011](0011-collab-transport.md).
+Supersedes [0011](0011-collab-transport.md). Pairing by invite and the separate confirm step were replaced by [0018](0018-networks.md); the rest stands.
 
 **Decision**
 

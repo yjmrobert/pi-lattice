@@ -2,37 +2,51 @@
 
 Every node has an **owner** and a **version**. The owner's host is the only one that runs the node's session. The version counts how many times ownership has changed.
 
-Sharing is peer to peer. Each person runs their own host, and the hosts connect directly; there is no server and no shared storage ([ADR 0012](decisions/0012-peer-to-peer-collab.md)).
+Sharing is peer to peer. Each person runs their own host, and the hosts connect directly; there is no server and no shared storage ([ADR 0012](decisions/0012-peer-to-peer-collab.md), [ADR 0018](decisions/0018-networks.md)).
 
-## Pairing
+## The network
 
-1. One person turns sharing on and shows their invite (`/lattice share`, "Show my invite"). It looks like `name@host:port#key`.
-2. The other pairs with it ("Pair using someone's invite"). Their host connects.
-3. The first person is told who knocked, compares the key fingerprint with them over a call or in person, and pairs back.
+A network is you and your teammates. You set it up once, and it holds for every repository.
 
-From then on the two hosts connect whenever both are running. Someone using a paired name with a different key is refused, and you are told.
+1. One person runs `/lattice network`, chooses "Create a network" and names it. They are shown a join code, `name.secret@host`.
+2. They pass the code to their teammates over a channel the team already trusts. Whoever has the code is in.
+3. Each teammate runs `/lattice network`, chooses "Join with a teammate's code" and pastes it.
 
-## What you see of a peer
+That is all. Nobody approves anybody, chooses a port or types an address. Everyone is told when someone joins.
+
+The hosts find each other by themselves: on a local network by announcing themselves, and otherwise at the machines they already know, on a port that every member's host for the same repository shares. Two machines that cannot reach each other at all, such as two home networks with no VPN between them, do not connect.
+
+Two people's hosts connect when they are working in the same repository, which is recognised by its first commit and not by what the checkout is called.
+
+The first key seen under a person's name is theirs from then on. If someone later connects under that name with a different key, they are refused and you are asked: that is what a new machine looks like, and also what an impostor looks like.
+
+To remove someone, everyone else leaves (`/lattice network`, "Leave") and joins a new network.
+
+## What you see of a teammate
 
 - Their sessions appear in your pane, marked `@name`. You cannot run them or type into them.
 - Opening one fetches its conversation from them and shows it read-only.
-- When they are offline, their sessions stay in your pane as last seen, marked offline, and cannot be opened until they are back.
+- When they are offline, or not working in that repository, their sessions stay in your pane as last seen, marked offline, and cannot be opened until they are back.
 
-## The handoff
+## Handing a session over
 
-Ownership moves in three explicit steps, and only on the last one. Both people need to be online for steps 2 and 3.
+A session changes hands in two steps, and it can start from either side.
 
-| Step | Who | What happens |
+| | First | Then |
 |---|---|---|
-| 1. Offer | Owner | Names one paired person. Nothing moves. The offer expires after 24 hours. |
-| 2. Accept | That person | Says yes. The owner's host records it. Nothing moves yet. |
-| 3. Confirm release | Owner | The session stops, the signed confirmation is recorded, and the conversation and branch go straight to the new owner. |
+| **You give** | You press `o` on one of your sessions and pick a teammate. | They press `a` on the offer. It is theirs. |
+| **You take** | You press `t` on a teammate's session. | They press `a` on your request and confirm. It is yours. |
 
-Until step 3, the original owner keeps the node and either side can cancel. After it, the previous owner sees the node marked with the new owner's name and can no longer run it, though they can still read it.
+The owner acts once. That one act is their yes to the release, so it is where they are told what a release sends. When the second step happens, the owner's host stops the session, records the signed release and sends the conversation and branch straight to the new owner, without asking again.
 
-Every step can be repeated safely. If a host crashes mid-handoff, doing its last step again is recognised and ignored.
+- An offer or a request nobody answers lapses after 24 hours. Either side can take theirs back before then (`x` on an offer, `t` again on a session you asked for).
+- Both people need to be online for the session to move. A yes given while the other is away takes effect when they are back.
+- A session that is open in its owner's terminal is not sent from under them. It goes when they leave it, and the pane says so.
+- After the move, the previous owner sees the session marked with the new owner's name and can no longer run it, though they can still read it.
 
-If the connection drops during step 3, the release still stands. The package stays on the old owner's machine and is sent again on the next contact; it is deleted only when the new owner signs for it. The old owner's screen says so until then.
+Every step can be repeated safely. If a host crashes partway, the handoff carries on from where it was when the host is back.
+
+If the connection drops during the release, the release still stands. The package stays on the old owner's machine and is sent again on the next contact; it is deleted only when the new owner signs for it. The old owner's screen says so until then.
 
 ## What stops things going wrong
 
@@ -40,13 +54,14 @@ If the connection drops during step 3, the release still stands. The package sta
 - **One writer.** Only a node's current owner appends to its ownership log. Everyone else asks the owner, so two hosts never write the same log at once.
 - **Forged ownership.** Ownership is recomputed from a log of signed events. An event not signed by the person it names, or one the state machine would not allow, is ignored along with everything after it.
 - **Contradicting histories.** A host accepts a log only if it extends the one it already holds. A log that disagrees is refused and reported.
-- **Strangers.** Only paired people can connect at all.
+- **Strangers.** Only someone who holds the network's secret can connect at all, and they have to prove it on every connection.
+- **Impostors.** A known name with a different key is refused until you accept the new key.
 - **Eavesdropping.** Everything between two hosts is encrypted, with keys that exist only for that connection.
 
 ## What travels in a handoff
 
 - The node's metadata: name, kind, brief, roles.
-- The session file: the whole conversation, including any file contents and command output in it. The release step warns about this before sending.
+- The session file: the whole conversation, including any file contents and command output in it. You are told this before you offer a session or approve a request for one.
 - The branch, when the node has its own worktree, packed so the new owner can recreate it without a shared code remote.
 
 The new owner's host adopts the session by forking it into their own checkout of the project ([ADR 0007](decisions/0007-session-transfer.md)). The conversation continues; the Pi session id is new; the node id is the same.
@@ -64,6 +79,9 @@ An agent can message a node another person owns. It is delivered directly when t
 | The lease state machine | `packages/protocol/src/lease.ts` |
 | Signed logs and replay | `packages/collab/src/ledger.ts` |
 | Keys and signatures | `packages/collab/src/identity.ts` |
-| Paired people and invites | `packages/collab/src/peers.ts` |
+| Networks and join codes | `packages/collab/src/network.ts` |
+| The people of the network and their keys | `packages/collab/src/peers.ts` |
+| Finding teammates on the local network | `packages/collab/src/discovery.ts` |
 | The encrypted channel | `packages/collab/src/channel.ts` |
-| Connections, fetching, mail and handoff steps | `packages/collab/src/collab.ts` |
+| Connections, fetching, mail, offers and requests | `packages/collab/src/collab.ts` |
+| Following the network file, one host per repository | `packages/app/src/daemon.ts` |

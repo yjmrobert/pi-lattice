@@ -10,7 +10,7 @@ An additive set of Pi extensions plus a host process that provide:
 2. A session tree the human can enter at any node. Nothing is forced to bubble up.
 3. Composable roles the human assigns to a session, instead of fixed agent profiles.
 4. Lifecycle coordination: grilling, planning, implementation, verification.
-5. Trees shared between two people, with explicit ownership, handoff, and approval of anything inbound from the other person's agents.
+5. Trees shared between the people of a network, set up once, with explicit ownership, handoff in either direction, and approval of anything inbound from another person's agents.
 
 Non-goals: token optimisation, a library of agent personas, running agents on someone else's machine without their approval.
 
@@ -50,7 +50,7 @@ Two kinds of thing, kept separate.
 | `graph` | Extension. `spawn_session`, `list_sessions`, `/children`. Needs a host to spawn. | protocol |
 | `pane` | Extension. The tree as a left pane inside Pi; `/lattice`; opens a session here by taking it over from the host. | protocol |
 | `host` | Library. Store, supervisor, broker, socket API, foreground handover. | protocol |
-| `collab` | Library. Identities, pairing, an encrypted peer channel, signed ownership logs, cross-owner mail, handoff. | protocol |
+| `collab` | Library. Networks, identities, finding teammates, an encrypted peer channel, signed ownership logs, cross-owner mail, handoff. | protocol |
 | `app` | The composition root. The Pi package manifest, the launcher extension, the background host wired to sharing, the command line. | all of the above |
 
 ## Seams
@@ -60,7 +60,7 @@ The full account is in [ADR 0014](decisions/0014-package-seams.md). In short:
 - A package imports only `protocol` from this repository. `app` imports everything, and nothing imports `app`.
 - Extensions talk through typed events on `pi.events`, defined in `protocol`. They never read each other's state and never write to the environment for each other.
 - A session learns it is a node through a **host assignment**: from the environment when the host started it, or from the `lattice:host:assigned` event when a person opens the node in their own Pi. Extensions accept it at any time, so load order does not matter.
-- A package that needs something from another defines an interface and is handed an implementation: `HostPort` (collab), `SharingPort` (host), `Transport` (a2a), `PeerTransport` (collab).
+- A package that needs something from another defines an interface and is handed an implementation: `HostPort` (collab), `SharingPort` (host), `Transport` (a2a), `PeerTransport` and `Discovery` (collab).
 - The pane does not start hosts. It asks on the event bus; the app's launcher answers.
 - An extension goes quiet when its session ends, because the event bus outlives a session switch.
 - `protocol` holds no state ([0001](decisions/0001-packaging-and-scope.md)). Extensions start nothing in their factory.
@@ -105,9 +105,11 @@ Details in [roles.md](roles.md). Each applied fragment becomes one system prompt
 
 Each person runs their own host, and the hosts connect directly, peer to peer. There is no server and no shared storage ([ADR 0012](decisions/0012-peer-to-peer-collab.md)); [leases.md](leases.md) describes the behaviour.
 
-A peer's nodes are fetched from them while they are online and shown as last seen, greyed out, when they are not. A peer's conversation is fetched on demand, read-only. Nothing is streamed.
+A **network** is a name and a secret, kept in one file in the person's lattice home and followed by the host of every repository they have open ([ADR 0018](decisions/0018-networks.md)). Whoever holds the secret is a member, and proves it on every connection; the first key seen under a name is pinned. Hosts find each other by a port derived from the network and the repository, by beacons on the local network, and by telling each other who they know. Two hosts connect only when they work on the same repository.
 
-Every node has an owner and a version. Ownership changes only by a three-step handoff: the owner offers to a named person, that person accepts, the owner confirms the release. Only the last step moves ownership and increments the version. Offers expire, either side can cancel before the release, and every step is idempotent.
+A teammate's nodes are fetched from them while they are online and shown as last seen, greyed out, when they are not. A teammate's conversation is fetched on demand, read-only. Nothing is streamed.
+
+Every node has an owner and a version. Ownership changes in two steps from either side: the owner offers and the other person accepts, or a teammate asks and the owner approves. The owner's host then releases the node by itself; only that release moves ownership and increments the version. Offers and requests expire, either side can take theirs back before the release, and every step is idempotent.
 
 Ownership is a log of signed events replayed through the lease state machine, not a field. Only the current owner appends to a node's log; a peer accepts a log only when its signatures verify and it extends the one already held.
 
@@ -120,7 +122,7 @@ Session transfer is fork-on-receipt ([ADR 0007](decisions/0007-session-transfer.
 - Extensions run with the user's full OS permissions. Only trusted code is loaded.
 - Remote-originated content is never executed and never treated as instructions. Every inbound envelope is validated against the schema and delivered as delimited, attributed data.
 - The host socket is private to the user and children authenticate with a per-child token.
-- Hosts connect only to people the human has paired with, over an encrypted channel. Ownership events are signed, and a collaborator's key is pinned when paired.
+- Hosts connect only to members of the person's network, over an encrypted channel. Ownership events are signed, and a teammate's key is pinned when first seen. The join code is the one secret: whoever has it can read the network's sessions.
 - Limits on hops, send rate and spawning are enforced by code.
 
 ## Build phases
@@ -136,6 +138,7 @@ Each phase ends with something usable and a stop for review.
 | 4 | Tree UI: view, attach, spawn, approvals, blocked dialogs | **Done, then redone inside Pi.** A pane in Pi lists the tree; any node can be opened and typed into with Pi's full interface. |
 | 5 | Lifecycle fragments, then a full feature run | **Done against a scripted model.** A feature goes through grilling, planning, implementation and verification. A run with a real model is still to do. |
 | 6 | `collab`: transport decision, handoff, cross-owner approvals, session transfer | **Done on one machine, peer to peer.** Two isolated hosts connect directly, share a tree, and a node changes owner with both confirming. A run across two real machines is still to do ([script](two-machine-handoff.md)). |
+| 7 | Networks: one join code, hosts that find each other, handoff in two steps from either side | **Done on one machine.** Two background hosts with separate homes create and join a network, see each other's sessions, and move one by request and by offer. Two real machines and a VPN are still to do. |
 
 ## Testing
 
