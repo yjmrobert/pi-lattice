@@ -2,12 +2,13 @@
 
 Agent-to-agent messaging, session trees, composable roles and shared ownership for [Pi](https://pi.dev).
 
-Status: early. `@pi-lattice/a2a` ([try it](examples/minimal-two-agents/README.md)) and `@pi-lattice/roles` ([guide](docs/roles.md)) work on their own. The [host](packages/host/README.md) runs a tree of sessions you can enter at any node, with a full-screen tree interface.
+Status: early. `@pi-lattice/a2a` ([try it](examples/minimal-two-agents/README.md)) and `@pi-lattice/roles` ([guide](docs/roles.md)) work on their own. The [host](packages/host/README.md) runs a tree of sessions you can enter at any node, with a full-screen tree interface, and can [share a tree between people](docs/leases.md) with signed ownership handoff.
 
 - [Architecture](docs/architecture.md)
 - [Decisions](docs/decisions/README.md)
 - [Envelope specification](docs/envelope-spec.md)
 - [Roles](docs/roles.md)
+- [Ownership and handoff](docs/leases.md)
 - Examples: [two agents, no host](examples/minimal-two-agents/README.md), [a feature through the full lifecycle](examples/feature-lifecycle/README.md)
 
 ## Development

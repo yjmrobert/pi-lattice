@@ -46,7 +46,7 @@ Two kinds of thing, kept separate.
 | `roles` | Extension plus markdown fragments. `/role`, `apply_role`, prompt-section injection. | protocol |
 | `graph` | Extension. Node metadata, `spawn_session`, `list_sessions`, `/children`. Needs a host to spawn. | protocol |
 | `host` | Node app. Store, supervisor, broker, socket API, tree UI. | protocol |
-| `collab` | Extension plus remote transport. Ownership handoff, cross-owner approval policy, session transfer. | protocol |
+| `collab` | Library the host loads. Identities, signed ownership logs, a shared git store, cross-owner mail, handoff and session transfer. | protocol |
 
 Rules:
 
@@ -89,17 +89,22 @@ Details in [roles.md](roles.md). Each applied fragment becomes one system prompt
 
 ## Collaboration
 
-Every node has an owner and a version. Ownership changes only by a four-step handoff: offer, accept, confirm release, flip owner and increment version. Writes carrying a stale version are rejected. Offers expire, either side can cancel before the flip, every step is idempotent, and the state machine is specified and tested for a crash at each step. The previous owner keeps a read-only view.
+Each person runs their own host. The hosts agree through a private git repository ([ADR 0011](decisions/0011-collab-transport.md)); [leases.md](leases.md) describes the behaviour.
 
-Inbound mail from another owner never reaches a model without the human approving it, per message by default, with a per-sender trust setting the human sets deliberately.
+Every node has an owner and a version. Ownership changes only by a three-step handoff: the owner offers to a named person, that person accepts, the owner confirms the release. Only the last step moves ownership and increments the version, in the same commit that ships the session and branch. Offers expire, either side can cancel before the release, and every step is idempotent, so a crash mid-handoff is recovered by repeating the last step.
 
-Session transfer is fork-on-receipt ([0007](decisions/0007-session-transfer.md)). Transport is undecided ([0011](decisions/0011-collab-transport.md)).
+Ownership is a log of signed events replayed through the lease state machine, not a field. Stale-version events, events not signed by the person they name, and events from people whose key the human has not trusted are ignored. The previous owner keeps the node in their tree, marked with the new owner, and cannot run it.
+
+Mail from another owner's agents is signed, verified on arrival, and then waits in the recipient's inbox for the human, per message by default.
+
+Session transfer is fork-on-receipt ([ADR 0007](decisions/0007-session-transfer.md)).
 
 ## Security
 
 - Extensions run with the user's full OS permissions. Only trusted code is loaded.
 - Remote-originated content is never executed and never treated as instructions. Every inbound envelope is validated against the schema and delivered as delimited, attributed data.
 - The host socket is private to the user and children authenticate with a per-child token.
+- Shared state is signed. A collaborator's key is trusted only by a deliberate human act, and pinned.
 - Limits on hops, send rate and spawning are enforced by code.
 
 ## Build phases
@@ -114,10 +119,10 @@ Each phase ends with something usable and a stop for review.
 | 3 | `host` (store, supervisor, broker, socket) and `graph` | **Done.** A coordinator spawns a child and both appear in the tree. |
 | 4 | Tree UI: view, attach, spawn with fragment picker, approvals, blocked dialogs | **Done.** Feature, grilling and task nodes can be navigated and typed into. |
 | 5 | Lifecycle fragments, then a full feature run | **Done against a scripted model.** A feature goes through grilling, planning, implementation and verification. A run with a real model is still to do. |
-| 6 | `collab`: transport decision, handoff, cross-owner approvals, session transfer | Two machines share a tree and a node changes owner with both confirming. |
+| 6 | `collab`: transport decision, handoff, cross-owner approvals, session transfer | **Done on one machine.** Two isolated hosts share a tree and a node changes owner with both confirming. A run across two real machines is still to do ([script](two-machine-handoff.md)). |
 
 ## Testing
 
 - Unit tests for `protocol`: validation, inbound machine, lease machine including stale version and crash mid-handoff.
 - Integration tests spawn real Pi processes against the scripted provider ([0002](decisions/0002-testing-with-faux-provider.md)).
-- A manual script for the two-machine handoff.
+- A [manual script](two-machine-handoff.md) for the two-machine handoff.

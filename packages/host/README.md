@@ -38,6 +38,15 @@ When the attached session opens a dialog (a permission prompt, `/inbox`), it app
 
 Opening a sleeping session shows it as asleep and does not start it; sending it a message does.
 
+### Sharing a tree
+
+```bash
+pi-lattice --as alice --name checkout --share <private git url>     # start and share
+pi-lattice --as bob --share <private git url>                       # join
+```
+
+`ctrl+o` (or `o` in the tree) opens sharing: trust a collaborator's key, offer the selected session to someone, accept an offer, confirm a release, or cancel. Other people's sessions appear in the tree marked `@name`; you can see them but not run them. See [Ownership and handoff](../../docs/leases.md).
+
 ### Line interface
 
 `--plain` (or a non-interactive terminal) gives a line-based interface: type to talk to the current session; `:tree`, `:use <name>`, `:inbox`, `:approve <id>`, `:dialogs`, `:answer <n> <text>`, `:quit`.
