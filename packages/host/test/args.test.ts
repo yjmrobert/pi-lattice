@@ -12,6 +12,12 @@ describe("parseArgs", () => {
 		});
 	});
 
+	it("reads sharing options", () => {
+		expect(parseArgs(["--listen", "47610", "--peer", "a@h:1#k", "--peer", "b@h:2#k", "--advertise", "10.0.0.5", "--as", "yan"], "/proj")).toMatchObject({
+			listen: "47610", peers: ["a@h:1#k", "b@h:2#k"], advertise: "10.0.0.5", as: "yan",
+		});
+	});
+
 	it("rejects unknown options and missing values", () => {
 		expect(() => parseArgs(["--nope"], "/proj")).toThrow(/Unknown option/);
 		expect(() => parseArgs(["--name"], "/proj")).toThrow(/needs a value/);

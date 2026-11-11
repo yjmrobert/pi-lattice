@@ -30,6 +30,12 @@ describe("renderTreeRows", () => {
 		expect(rows[0]).not.toContain("@yan");
 	});
 
+	it("greys out the nodes of an owner who is offline, as last seen", () => {
+		const rows = plain(state({ offlineOwners: new Set(["sam"]) }));
+		expect(rows[2]).toBe("  └─ ○ impl task @sam offline");
+		expect(rows[1]).toBe("› ├─ ! grilling task");
+	});
+
 	it("never exceeds the available width", () => {
 		for (const line of renderTreeRows(state(), 12)) expect(visibleWidth(line)).toBeLessThanOrEqual(12);
 	});

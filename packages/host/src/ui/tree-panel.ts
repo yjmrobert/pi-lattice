@@ -13,6 +13,8 @@ export interface TreeViewState {
 	focused: boolean;
 	/** The owner this host acts as; other owners get a badge. */
 	localOwner: string;
+	/** Owners who cannot be reached right now. Their nodes are shown as last seen, greyed out. */
+	offlineOwners?: ReadonlySet<string>;
 	/** Per node: how many dialogs block it and how many messages await approval. */
 	attention: ReadonlyMap<string, { dialogs: number; pending: number }>;
 }
@@ -27,7 +29,10 @@ export function renderTreeRows(state: TreeViewState, width: number): string[] {
 			node.owner !== state.localOwner ? cyan(`@${node.owner}`) : "",
 		].filter(Boolean);
 		const name = node.id === state.current ? bold(node.name) : node.name;
-		const body = `${dim(prefix)}${statusBadge(node.status)} ${name} ${dim(node.kind)}${marks.length > 0 ? ` ${marks.join(" ")}` : ""}`;
+		const offline = state.offlineOwners?.has(node.owner) === true;
+		const body = offline
+			? dim(`${prefix}○ ${node.name} ${node.kind} @${node.owner} offline`)
+			: `${dim(prefix)}${statusBadge(node.status)} ${name} ${dim(node.kind)}${marks.length > 0 ? ` ${marks.join(" ")}` : ""}`;
 		const cursor = node.id === state.selected ? (state.focused ? "›" : dim("›")) : " ";
 		const line = truncateToWidth(`${cursor} ${body}`, width);
 		return node.id === state.selected && state.focused ? inverse(line) : line;

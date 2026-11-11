@@ -2,7 +2,7 @@
 /** `pi-lattice`: start a lattice host for a project. */
 import { basename, join, resolve } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { CollabSession, GitSharedStore, Identity, TrustStore } from "@pi-lattice/collab";
+import { CollabSession, Identity, PeerBook, TcpTransport } from "@pi-lattice/collab";
 import { parseArgs, USAGE } from "./args.ts";
 import { LatticeHost } from "./host.ts";
 import { runPlain } from "./plain.ts";
@@ -34,20 +34,28 @@ async function main(): Promise<number> {
 	process.once("SIGINT", () => void shutdown().then(() => process.exit(130)));
 	process.once("SIGTERM", () => void shutdown().then(() => process.exit(143)));
 	try {
-		if (options.share !== undefined) {
+		const sharing = options.listen !== undefined || options.peers.length > 0;
+		if (sharing) {
+			const listen = options.listen ?? "47610";
+			const colon = listen.lastIndexOf(":");
+			const bindHost = colon > 0 ? listen.slice(0, colon) : "0.0.0.0";
+			const port = Number(listen.slice(colon + 1));
+			if (listen.slice(colon + 1) === "" || !Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`--listen needs [host:]port, got "${listen}".`);
 			collab = new CollabSession({
 				host,
 				identity: Identity.loadOrCreate(join(getAgentDir(), "lattice", "identity"), host.owner),
-				trust: new TrustStore(join(stateDir, "collab", "trusted.json")),
-				store: new GitSharedStore({ remote: options.share, dir: join(stateDir, "collab", "shared"), author: host.owner }),
+				peers: new PeerBook(join(stateDir, "collab", "peers.json")),
+				transport: new TcpTransport({ host: bindHost, port }),
 				dir: join(stateDir, "collab"),
 				projectDir: cwd,
+				...(options.advertise !== undefined ? { advertise: options.advertise } : {}),
 			});
 			await collab.start();
+			for (const invite of options.peers) await collab.addInvite(invite);
 		}
 		let root = host.nodes().find((node) => node.parentId === null);
 		// Joining someone else's shared tree creates nothing: their sessions appear once trusted.
-		const joining = options.share !== undefined && options.name === undefined;
+		const joining = options.peers.length > 0 && options.name === undefined;
 		if (!root && !joining) {
 			root = await host.createRoot({
 				name: options.name ?? basename(cwd),
@@ -56,7 +64,6 @@ async function main(): Promise<number> {
 				...(options.kind !== undefined ? { kind: options.kind } : {}),
 				...(options.brief !== undefined ? { brief: options.brief } : {}),
 			});
-			await collab?.sync();
 		}
 		if (options.plain || !process.stdout.isTTY || !process.stdin.isTTY) {
 			await runPlain(host, root?.id, process.stdin, process.stdout, collab);

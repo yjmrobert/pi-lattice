@@ -8,8 +8,12 @@ export interface CliOptions {
 	fragments: string[];
 	brief: string | undefined;
 	plain: boolean;
-	/** URL or path of a git repository used to share this tree with other people. */
-	share: string | undefined;
+	/** `[host:]port` to accept connections from paired people on. Turns sharing on. */
+	listen: string | undefined;
+	/** Host name or address other people should use to reach this machine. */
+	advertise: string | undefined;
+	/** Invites from people to pair with. */
+	peers: string[];
 	/** The name this person acts as: owner of the nodes created here. */
 	as: string | undefined;
 	help: boolean;
@@ -29,20 +33,23 @@ Options:
   --role <a,b,...>   Role fragments for the root session, in order
   --brief <text>     First prompt for the root session
   --plain            Line-based interface instead of the full-screen tree
-  --share <git url>  Share this tree with other people through a private git repository
+  --listen [host:]port  Share this tree, peer to peer: accept paired people on this port
+  --peer <invite>    Pair with someone by their invite (repeatable); implies sharing
+  --advertise <host> Address others should use to reach you (default: first network address)
   --as <name>        The name you act as (default: your OS user name)
   -h, --help         Show this help
 
 Arguments after -- are passed to every Pi session, for example:
   pi-lattice --role coordinator -- --model sonnet
 
-To join a tree someone else shared, give --share without --name: no root is created,
-and their sessions appear once you have trusted their key.
+Sharing is direct between the two machines; there is no server. To join someone's
+tree, pass their invite with --peer and no --name: no root is created, and their
+sessions appear once they have paired with you too.
 `;
 
 export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 	const options: CliOptions = {
-		cwd, stateDir: undefined, name: undefined, kind: undefined, fragments: [], brief: undefined, plain: false, share: undefined, as: undefined, help: false, piArgs: [],
+		cwd, stateDir: undefined, name: undefined, kind: undefined, fragments: [], brief: undefined, plain: false, listen: undefined, advertise: undefined, peers: [], as: undefined, help: false, piArgs: [],
 	};
 	const value = (flag: string, index: number): string => {
 		const next = argv[index + 1];
@@ -62,7 +69,9 @@ export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 		else if (arg === "--name") options.name = value(arg, i++);
 		else if (arg === "--kind") options.kind = value(arg, i++);
 		else if (arg === "--brief") options.brief = value(arg, i++);
-		else if (arg === "--share") options.share = value(arg, i++);
+		else if (arg === "--listen") options.listen = value(arg, i++);
+		else if (arg === "--advertise") options.advertise = value(arg, i++);
+		else if (arg === "--peer") options.peers.push(value(arg, i++));
 		else if (arg === "--as") options.as = value(arg, i++);
 		else if (arg === "--role" || arg === "--roles") {
 			options.fragments.push(...value(arg, i++).split(/[,+]/).map((name) => name.trim()).filter(Boolean));

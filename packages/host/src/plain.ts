@@ -14,9 +14,10 @@ const HELP = `Type a message to send it to the current session. Commands:
   :answer <n> <text> answer dialog n (for confirm: yes or no)
   :abort             stop the current session's work
   :quit              stop all sessions and exit
-When the tree is shared (--share):
-  :people            who has joined, with key fingerprints   :trust <name>   believe that person's key
-  :handoffs          open ownership handoffs                 :sync           synchronise now
+When the tree is shared (--listen or --peer):
+  :invite            show your invite                        :add <invite>   pair with someone
+  :people            paired people and who is online         :trust <name>   pair with someone who knocked
+  :handoffs          open ownership handoffs                 :sync           refresh from everyone online
   :offer <session> <person>   :accept <session>   :confirm <session>   :cancel <session>`;
 
 export async function runPlain(host: LatticeHost, rootId: string | undefined, input: NodeJS.ReadableStream, output: NodeJS.WritableStream, collab?: CollabSession): Promise<void> {
@@ -87,11 +88,13 @@ export async function runPlain(host: LatticeHost, rootId: string | undefined, in
 				else if (entry.dialog.method === "confirm") host.answerDialog(entry.nodeId, entry.dialog.id, { confirmed: /^(y|yes|true)$/i.test(text) });
 				else host.answerDialog(entry.nodeId, entry.dialog.id, text === "" ? { cancelled: true } : { value: text });
 			} else if (command === "abort") await host.abort(current);
-			else if (["people", "trust", "handoffs", "sync", "offer", "accept", "confirm", "cancel"].includes(command ?? "")) {
-				if (!collab) print("This tree is not shared. Start with --share <git url>.");
-				else if (command === "people") print(collab.people().map((p) => `${p.name}${p.self ? " (you)" : ""}  ${p.trust}  ${p.fingerprint}`).join("\n") || "Nobody has joined.");
+			else if (["invite", "add", "people", "trust", "handoffs", "sync", "offer", "accept", "confirm", "cancel"].includes(command ?? "")) {
+				if (!collab) print("This tree is not shared. Start with --listen <port>.");
+				else if (command === "invite") print(collab.invite());
+				else if (command === "add") print(`Paired with ${await collab.addInvite(arg)}.`);
+				else if (command === "people") print(collab.people().map((p) => `${p.name}${p.self ? " (you)" : ""}  ${p.trust}  ${p.online ? "online" : "offline"}  ${p.fingerprint}`).join("\n"));
 				else if (command === "trust") await collab.trustPerson(arg);
-				else if (command === "sync") await collab.sync();
+				else if (command === "sync") await collab.refresh();
 				else if (command === "handoffs") print(collab.handoffs().map((h) => `${h.nodeName}: ${h.from} -> ${h.to}, ${h.state} (you are the ${h.role})`).join("\n") || "No open handoffs.");
 				else {
 					const target = find(rest[0] ?? "");
