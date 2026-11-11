@@ -12,6 +12,7 @@ import {
 	assignmentToEnv,
 	type Channel,
 	childrenOf,
+	CONFIG_FILE,
 	type DialogInfo,
 	DEFAULT_LIMITS,
 	depthOf,
@@ -23,6 +24,8 @@ import {
 	isRelativeAddress,
 	type Limits,
 	newNodeId,
+	parseConfig,
+	type TreeConfig,
 	type NodeMeta,
 	type NodeStatus,
 	type PeerInfo,
@@ -94,6 +97,8 @@ export interface HostEvents {
 	mail: [nodeId: string, envelope: Envelope, state: InboundState];
 	/** The set of dialogs blocking a node changed. */
 	dialog: [nodeId: string];
+	/** What a background node's agent is doing changed. */
+	activity: [nodeId: string];
 	/** A raw session event or UI request from a node's Pi process, numbered in stream order per process. */
 	session: [nodeId: string, event: RpcRecord, seq: number];
 	log: [level: "info" | "warn" | "error", message: string];
@@ -111,9 +116,54 @@ interface Runtime {
 	/** Envelope ids sent on the current a2a connection and not yet acknowledged. */
 	inflight: Set<string>;
 	lastActive: number;
+	/** The last few things the agent said and did, one line each, and when the latest happened. */
+	recent: string[];
+	recentAt: number;
 	connected: Promise<void>;
 	markConnected: () => void;
 	failConnect: (error: Error) => void;
+}
+
+const RECENT_LINES = 12;
+
+/** What a session is started with: the tree's settings, then anything chosen for the session itself. */
+export function sessionLaunch(node: Pick<NodeMeta, "model">, config: TreeConfig): { args: string[]; env: Record<string, string> } {
+	const model = node.model ?? config.model;
+	return {
+		args: [...(model ? ["--model", model] : []), ...(config.thinking ? ["--thinking", config.thinking] : [])],
+		env: { ...config.env, ...(config.approval ? { LATTICE_APPROVAL: config.approval } : {}) },
+	};
+}
+
+const brief = (text: string, width = 200): string => {
+	const line = text.replace(/\s+/g, " ").trim();
+	return [...line].length > width ? `${[...line].slice(0, width - 1).join("")}…` : line;
+};
+
+/** A tool call in one line: its name and the argument that says most. */
+export function toolLine(name: string, args: unknown): string {
+	const record = (typeof args === "object" && args !== null ? args : {}) as Record<string, unknown>;
+	const value = ["command", "path", "file_path", "name", "to", "pattern", "query", "url"].map((key) => record[key]).find((candidate) => typeof candidate === "string") ?? Object.values(record).find((candidate) => typeof candidate === "string");
+	return brief(`→ ${name}${typeof value === "string" && value !== "" ? `: ${value}` : ""}`);
+}
+
+const textOf = (content: unknown): string =>
+	typeof content === "string" ? content : Array.isArray(content) ? content.filter((part: { type?: string }) => part?.type === "text").map((part: { text?: string }) => part.text ?? "").join("") : "";
+
+/** The end of a conversation, one line per thing said or done, oldest first. */
+export function tailOf(messages: RpcRecord[], limit: number): string[] {
+	const lines: string[] = [];
+	for (const message of messages) {
+		if (message.role === "user") {
+			const text = brief(textOf(message.content));
+			if (text) lines.push(`> ${text}`);
+		} else if (message.role === "assistant") {
+			const text = brief(textOf(message.content));
+			if (text) lines.push(text);
+			for (const part of Array.isArray(message.content) ? message.content : []) if (part?.type === "toolCall") lines.push(toolLine(String(part.name ?? "tool"), part.arguments));
+		}
+	}
+	return lines.slice(-limit);
 }
 
 const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
@@ -141,6 +191,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private remoteRouter: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined;
 	private readonly uiToken = randomBytes(24).toString("hex");
 	private readonly uiClients = new Map<string, Connection>();
+	/** Terminals that only watch this tree from another repository. They do not keep the host awake. */
+	private readonly watchers = new Set<string>();
 	private sharing: SharingPort | undefined;
 	private notifyTimer: NodeJS.Timeout | undefined;
 	private stopped = false;
@@ -174,6 +226,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			onClose: (connection) => {
 				if (connection.channel === "ui") {
 					this.uiClients.delete(connection.id);
+					this.watchers.delete(connection.id);
 					// A terminal that goes away gives its nodes back.
 					for (const [id, runtime] of this.runtimes) if (runtime.foreground === connection.id) this.detachForeground(id, connection.id);
 					return;
@@ -195,6 +248,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			}
 		}
 		writeFileSync(lockPath, String(process.pid));
+		// The state directory usually sits inside a checkout; keep it out of `git status` there.
+		const ignore = join(resolve(options.stateDir), ".gitignore");
+		if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
 		const host = new LatticeHost(options);
 		// Sessions die with the host that ran them, so nothing recorded as live is live now.
 		for (const node of host.store.listNodes()) {
@@ -205,7 +261,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		writeFileSync(join(host.stateDir, "ui.token"), host.uiToken, { mode: 0o600 });
 		chmodSync(join(host.stateDir, "ui.token"), 0o600);
 		writeFileSync(join(host.stateDir, "host.json"), JSON.stringify({ socket: host.socketPath, pid: process.pid, owner: host.owner }));
-		for (const name of ["node", "mail", "dialog", "envelope"] as const) host.on(name, () => host.notifyUi());
+		for (const name of ["node", "mail", "dialog", "envelope", "activity"] as const) host.on(name, () => host.notifyUi());
 		host.on("log", (level, message) => {
 			if (level === "info") return;
 			for (const client of host.uiClients.values()) client.send({ t: "event", kind: "log", message });
@@ -226,6 +282,27 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	isRunning(id: string): boolean {
 		return this.runtimes.has(id);
 	}
+
+	/** The tree's settings as they are now. A file that cannot be read is reported and counts as empty. */
+	config(): TreeConfig {
+		const path = join(this.stateDir, CONFIG_FILE);
+		if (!existsSync(path)) return {};
+		try {
+			const { config, problems } = parseConfig(readFileSync(path, "utf8"));
+			const said = problems.join(" ");
+			if (said && said !== this.configComplaint) this.emit("log", "warn", `Settings in ${path}: ${said}`);
+			this.configComplaint = said;
+			return config;
+		} catch (error) {
+			const said = error instanceof Error ? error.message : String(error);
+			if (said !== this.configComplaint) this.emit("log", "warn", `Settings in ${path} were ignored: ${said}`);
+			this.configComplaint = said;
+			return {};
+		}
+	}
+
+	/** The last problem reported about the settings, so it is said once and not at every session start. */
+	private configComplaint = "";
 
 	/** Dialogs currently blocking a node. */
 	dialogs(id: string): Dialog[] {
@@ -276,6 +353,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const workspace = spec.workspace ?? "shared";
 		if (!(WORKSPACE_MODES as readonly string[]).includes(workspace)) throw new Error(`Unknown workspace "${workspace}". Use shared or worktree.`);
 		const fragments = (spec.fragments ?? []).filter((name) => typeof name === "string" && name.trim() !== "").map((name) => name.trim());
+		const model = typeof spec.model === "string" && spec.model.trim() !== "" ? spec.model.trim() : undefined;
 
 		const id = newNodeId();
 		const name = clean(spec.name, id);
@@ -288,6 +366,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 		const node = this.insert({
 			id, parentId, rootId: parent.rootId, kind: (spec.kind ?? "task").trim() || "task", name, brief: spec.brief, fragments, cwd, workspace, branch,
+			...(model ? { model } : {}),
 		});
 		try {
 			await this.ensureRunning(node.id);
@@ -299,7 +378,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		return this.must(node.id);
 	}
 
-	private insert(fields: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "cwd" | "workspace" | "branch">): NodeMeta {
+	private insert(fields: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "cwd" | "workspace" | "branch"> & Pick<Partial<NodeMeta>, "model">): NodeMeta {
 		const now = new Date().toISOString();
 		const node: NodeMeta = {
 			...fields, owner: this.owner, version: 1, status: "dormant", sessionId: null, sessionFile: null, createdAt: now, updatedAt: now, repo: repoName(fields.cwd),
@@ -354,8 +433,10 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const token = randomBytes(24).toString("hex");
 		const sessionDir = join(this.stateDir, "sessions", id);
 		mkdirSync(sessionDir, { recursive: true });
+		const launch = sessionLaunch(node, this.config());
 		const args = [
 			...(this.options.piArgs ?? []),
+			...launch.args,
 			...(this.options.extensionPaths ?? []).flatMap((path) => ["-e", path]),
 			"--session-dir", sessionDir,
 		];
@@ -368,7 +449,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			args,
 			cwd: existsSync(node.cwd) ? node.cwd : process.cwd(),
 			// LATTICE_HEADLESS tells the pane extension it is inside a host-run session and must stay out of the way.
-			env: { ...process.env, ...this.options.env, ...assignmentToEnv(this.assignment(node, token)), LATTICE_HEADLESS: "1" },
+			env: { ...process.env, ...this.options.env, ...launch.env, ...assignmentToEnv(this.assignment(node, token)), LATTICE_HEADLESS: "1" },
 		});
 		let markConnected!: () => void;
 		let failConnect!: (error: Error) => void;
@@ -378,7 +459,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		});
 		connected.catch(() => {});
 		const runtime: Runtime = {
-			proc, token, channels: new Map(), dialogs: new Map(), streaming: false, inflight: new Set(), lastActive: Date.now(), connected, markConnected, failConnect,
+			proc, token, channels: new Map(), dialogs: new Map(), streaming: false, inflight: new Set(), lastActive: Date.now(), recent: [], recentAt: 0, connected, markConnected, failConnect,
 		};
 		this.runtimes.set(id, runtime);
 		this.update(id, { status: "starting" });
@@ -457,8 +538,30 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			runtime.dialogs.set(dialog.id, dialog);
 			this.refresh(id, runtime);
 			this.emit("dialog", id);
+		} else if (event.type === "tool_execution_start") {
+			this.note(id, runtime, toolLine(String(event.toolName ?? "tool"), event.args));
+		} else if (event.type === "message_end" && event.message?.role === "assistant") {
+			const text = brief(textOf(event.message.content));
+			if (text) this.note(id, runtime, text);
+			const usage = event.message.usage as { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } } | undefined;
+			if (usage) this.addUsage(id, usage.totalTokens ?? (usage.input ?? 0) + (usage.output ?? 0), usage.cost?.total ?? 0);
 		}
 		this.emit("session", id, event, seq);
+	}
+
+	/** Record the latest thing a node's agent said or did. */
+	private note(id: string, runtime: Runtime, line: string): void {
+		runtime.recent.push(line);
+		if (runtime.recent.length > RECENT_LINES) runtime.recent.shift();
+		runtime.recentAt = Date.now();
+		this.emit("activity", id);
+	}
+
+	/** Add to the running total of what a node's agent has used. */
+	addUsage(id: string, tokens: number, cost: number): void {
+		if (!(tokens > 0) && !(cost > 0)) return;
+		this.store.addUsage(id, Number.isFinite(tokens) ? tokens : 0, Number.isFinite(cost) ? cost : 0);
+		this.emit("activity", id);
 	}
 
 	private onExit(id: string, runtime: Runtime, info: ExitInfo): void {
@@ -509,7 +612,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		connected.catch(() => {});
 		return {
 			foreground: clientId, token: randomBytes(24).toString("hex"), channels: new Map(), dialogs: new Map(), streaming: false, inflight: new Set(),
-			lastActive: Date.now(), connected, markConnected, failConnect,
+			lastActive: Date.now(), recent: [], recentAt: 0, connected, markConnected, failConnect,
 		};
 	}
 
@@ -598,7 +701,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 
 	/** How busy the host is, for deciding when a background host may exit. */
 	activity(): { terminals: number; working: number } {
-		return { terminals: this.uiClients.size, working: [...this.runtimes.values()].filter((runtime) => runtime.proc && (runtime.streaming || runtime.dialogs.size > 0)).length };
+		return { terminals: [...this.uiClients.keys()].filter((id) => !this.watchers.has(id)).length, working: [...this.runtimes.values()].filter((runtime) => runtime.proc && (runtime.streaming || runtime.dialogs.size > 0)).length };
 	}
 
 	/** Tell every connected terminal that what the pane shows has changed. Coalesced. */
@@ -620,10 +723,16 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		};
 		for (const [id, runtime] of this.runtimes) if (runtime.dialogs.size > 0) bump(id, "dialogs", runtime.dialogs.size);
 		for (const record of this.pendingMail()) bump(record.recipient, "pending", 1);
+		const activity: NonNullable<UiState["activity"]> = {};
+		for (const [id, runtime] of this.runtimes) {
+			const text = runtime.recent[runtime.recent.length - 1];
+			if (runtime.proc && text) activity[id] = { text, at: runtime.recentAt };
+		}
 		return {
 			owner: this.owner,
-			nodes: this.store.listNodes(),
+			nodes: this.store.listNodes().filter((node) => !node.archived),
 			attention,
+			activity,
 			foreground: [...this.runtimes].filter(([, runtime]) => runtime.foreground).map(([id]) => id),
 			sharing: this.sharing?.state() ?? null,
 		};
@@ -679,6 +788,28 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			}
 			case "sharing":
 				return { text: await this.runSharing(call("sharing").action, call("sharing").args) };
+			case "rename": {
+				const { nodeId, name } = call("rename");
+				return { node: this.rename(nodeId, name) };
+			}
+			case "archive":
+				return { count: await this.archive(call("archive").nodeId, call("archive").archived, connection.id) };
+			case "archived":
+				return { nodes: this.store.listNodes().filter((node) => node.archived) };
+			case "interrupt":
+				await this.interrupt(call("interrupt").nodeId);
+				return {};
+			case "tail":
+				return { lines: await this.tail(call("tail").nodeId) };
+			case "usage": {
+				const { nodeId, tokens, cost } = call("usage");
+				if (this.runtimes.get(nodeId)?.foreground === connection.id) this.addUsage(nodeId, Number(tokens), Number(cost));
+				return {};
+			}
+			case "presence":
+				if (call("presence").here) this.watchers.delete(connection.id);
+				else this.watchers.add(connection.id);
+				return {};
 			case "shutdown":
 				setTimeout(() => this.emit("log", "info", "shutdown requested"), 0);
 				this.shutdownRequested = true;
@@ -712,6 +843,60 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	/** Stop the agent's current work in a node. */
 	async abort(id: string): Promise<void> {
 		await this.runtimes.get(id)?.proc?.request({ type: "abort" });
+	}
+
+	/** Stop what a background node's agent is doing, on a person's say-so. */
+	async interrupt(id: string): Promise<void> {
+		const node = this.must(id);
+		const runtime = this.runtimes.get(id);
+		if (runtime && !runtime.proc) throw new Error(`"${node.name}" is open in a terminal. Stop it there.`);
+		if (!runtime?.streaming) throw new Error(`"${node.name}" is not working.`);
+		await this.abort(id);
+	}
+
+	rename(id: string, name: string): NodeMeta {
+		const node = this.must(id);
+		if (node.owner !== this.owner) throw new Error(`"${node.name}" is owned by ${node.owner}. Only they can rename it.`);
+		const next = clean(name, "");
+		if (next === "") throw new Error("A session needs a name.");
+		return next === node.name ? node : this.update(id, { name: next });
+	}
+
+	/**
+	 * Hide a node and everything under it from the tree, or bring them back. Their sessions are
+	 * stopped and kept; nothing is deleted. Returns how many nodes changed.
+	 */
+	async archive(id: string, archived: boolean, clientId?: string): Promise<number> {
+		const node = this.must(id);
+		if (node.owner !== this.owner) throw new Error(`"${node.name}" is owned by ${node.owner}. Only they can archive it.`);
+		const all = this.store.listNodes();
+		const subtree: NodeMeta[] = [];
+		const collect = (parent: NodeMeta): void => {
+			subtree.push(parent);
+			for (const kid of childrenOf(all, parent.id)) collect(kid);
+		};
+		collect(node);
+		if (archived) {
+			const open = subtree.find((entry) => this.runtimes.get(entry.id)?.foreground !== undefined);
+			if (open) throw new Error(`"${open.name}" is open in ${this.runtimes.get(open.id)?.foreground === clientId ? "this" : "a"} terminal. Leave it first, then archive.`);
+			await Promise.all(subtree.map((entry) => this.sleep(entry.id)));
+		}
+		let count = 0;
+		for (const entry of subtree) {
+			if (entry.owner !== this.owner || Boolean(entry.archived) === archived) continue;
+			this.update(entry.id, { archived });
+			count++;
+		}
+		return count;
+	}
+
+	/** The last few things a node said and did. Reads its session file when it is not running, so looking never starts a process. */
+	async tail(id: string, limit = 8): Promise<string[]> {
+		const runtime = this.runtimes.get(id);
+		if (runtime?.proc && runtime.recent.length > 0) return runtime.recent.slice(-limit);
+		const node = this.must(id);
+		if (node.owner !== this.owner) return [];
+		return tailOf(await this.readMessages(id), limit);
 	}
 
 	/** The headless process of a node, or a clear error when it is not running or is open in a terminal. */

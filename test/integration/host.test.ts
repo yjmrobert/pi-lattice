@@ -253,6 +253,79 @@ describe("host workspaces", () => {
 	});
 });
 
+describe("keeping the tree tidy", () => {
+	it("renames a session", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		expect(h.rename(root.id, "  checkout   flow ").name).toBe("checkout flow");
+		expect(() => h.rename(root.id, " ")).toThrow("needs a name");
+	});
+
+	it("archives a session with everything under it, stops them, and brings them back", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		await h.prompt(root.id, spawnTool({ name: "a", brief: spawnTool({ name: "b", brief: "wait" }) }));
+		const a = await child(h, root.id, "a");
+		const b = await child(h, a.id, "b");
+		await settled(h, b.id);
+
+		expect(await h.archive(a.id, true)).toBe(2);
+		expect(h.uiState().nodes.map((node) => node.name)).toEqual(["root"]);
+		await eventually(() => !h.isRunning(a.id) && !h.isRunning(b.id), "the archived sessions to stop");
+		expect(h.node(b.id)).toMatchObject({ archived: true, status: "dormant" });
+
+		expect(await h.archive(a.id, false)).toBe(2);
+		expect(h.uiState().nodes.map((node) => node.name)).toEqual(["root", "a", "b"]);
+	});
+
+	it("reports what a background session last did, and keeps its conversation's end readable when it sleeps", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		await h.prompt(root.id, "hello there");
+		await settled(h, root.id);
+		await eventually(() => h.uiState().activity?.[root.id]?.text.includes("hello there"), "the activity line");
+		expect(await h.tail(root.id)).toEqual([expect.stringContaining("hello there")]);
+		await h.sleep(root.id);
+		await eventually(() => !h.isRunning(root.id), "the session to stop");
+		expect(await h.tail(root.id)).toEqual(["> hello there", expect.stringContaining("hello there")]);
+		expect(h.isRunning(root.id)).toBe(false);
+	});
+
+	it("refuses to interrupt a session that is not working", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		await expect(h.interrupt(root.id)).rejects.toThrow("is not working");
+	});
+
+	it("starts sessions with the tree's settings, read at each start", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		writeFileSync(join(h.stateDir, "config.json"), JSON.stringify({ approval: "always" }));
+		expect(h.config()).toEqual({ approval: "always" });
+		await h.prompt(root.id, spawnTool({ name: "kid", brief: sendTool("parent", "hi") }));
+		// The parent was started before the setting; a restart picks it up, and the child's report then waits.
+		await child(h, root.id, "kid");
+		writeFileSync(join(h.stateDir, "config.json"), "{ not json");
+		expect(h.config()).toEqual({});
+	});
+
+	it("is not kept awake by a terminal that only watches from another repository", async () => {
+		const h = await startHost();
+		const { connectHost } = await import("../../packages/pane/src/index.ts");
+		const client = await eventually(() => connectHost(h.stateDir), "a terminal connection");
+		try {
+			await client.ui("state", {});
+			expect(h.activity().terminals).toBe(1);
+			await client.ui("presence", { here: false });
+			expect(h.activity().terminals).toBe(0);
+			await client.ui("presence", { here: true });
+			expect(h.activity().terminals).toBe(1);
+		} finally {
+			client.close();
+		}
+	});
+});
+
 describe("graph without a host", () => {
 	it("says clearly that nothing was spawned", async () => {
 		const { startPi, extensionPaths } = await import("../support/harness.ts");

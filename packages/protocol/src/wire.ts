@@ -17,6 +17,8 @@ export interface SpawnSpec {
 	kind?: string;
 	fragments?: string[];
 	workspace?: WorkspaceMode;
+	/** The model the child runs on, as Pi's `--model` takes it. Defaults to the tree's, then Pi's. */
+	model?: string;
 }
 
 export interface RequestMap {
@@ -65,6 +67,8 @@ export interface UiState {
 	attention: Record<string, { dialogs: number; pending: number }>;
 	/** Nodes currently open in someone's terminal. */
 	foreground: string[];
+	/** Per node running in the background: the last thing its agent did, and when. */
+	activity?: Record<string, { text: string; at: number }>;
 	/** Present when the tree is shared peer to peer. */
 	sharing: null | { people: SharingPerson[]; handoffs: SharingHandoff[]; pendingTransfers: Array<{ nodeId: string; to: string }> };
 }
@@ -97,6 +101,22 @@ export interface UiApi {
 	/** Sharing actions: invite, add, trust, offer, accept, confirm, cancel, refresh. Returns text to show. */
 	sharing: { params: { action: string; args: string[] }; result: { text: string } };
 	shutdown: { params: Record<string, never>; result: Record<string, never> };
+	rename: { params: { nodeId: string; name: string }; result: { node: NodeMeta } };
+	/** Hide a session and everything under it from the tree, or bring them back. Nothing is deleted. */
+	archive: { params: { nodeId: string; archived: boolean }; result: { count: number } };
+	/** The sessions that have been archived. */
+	archived: { params: Record<string, never>; result: { nodes: NodeMeta[] } };
+	/** Stop what a background session's agent is doing. The session stays, idle. */
+	interrupt: { params: { nodeId: string }; result: Record<string, never> };
+	/** The last few things a session said and did, one line each, oldest first. */
+	tail: { params: { nodeId: string }; result: { lines: string[] } };
+	/** Add what a turn in a foreground session used; the host cannot see those turns itself. */
+	usage: { params: { nodeId: string; tokens: number; cost: number }; result: Record<string, never> };
+	/**
+	 * Whether this terminal is working in this repository, or only watching it from another.
+	 * A host stays up for terminals that are here; watchers do not keep it awake.
+	 */
+	presence: { params: { here: boolean }; result: Record<string, never> };
 }
 export type UiMethod = keyof UiApi;
 

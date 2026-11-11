@@ -108,6 +108,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 			kind: Type.Optional(Type.String({ description: "Free-form label for the kind of work, for example grilling, planning, task" })),
 			fragments: Type.Optional(Type.Array(Type.String(), { description: "Role fragments to apply to the child, in order" })),
 			workspace: Type.Optional(Type.String({ description: 'Where the child works: "shared" (this directory, the default) or "worktree" (its own git worktree and branch)' })),
+			model: Type.Optional(Type.String({ description: "Model for the child, for example a cheaper one for routine work. Leave out to use the default" })),
 		}),
 		async execute(_toolCallId, params) {
 			const workspace = params.workspace ?? "shared";
@@ -119,6 +120,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 					workspace: workspace as WorkspaceMode,
 					...(params.kind !== undefined ? { kind: params.kind } : {}),
 					...(params.fragments !== undefined ? { fragments: params.fragments } : {}),
+					...(params.model !== undefined ? { model: params.model } : {}),
 				},
 			});
 			const where = node.branch ? `its own worktree on branch ${node.branch} (${node.cwd})` : "this working directory";

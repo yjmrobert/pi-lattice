@@ -30,6 +30,12 @@ export interface NodeMeta {
 	branch: string | null;
 	/** Name of the repository the node works in, for display. */
 	repo?: string;
+	/** Hidden from the tree until restored. */
+	archived?: boolean;
+	/** The model it runs on in the background, when one was chosen for it. */
+	model?: string;
+	/** What its agent has used so far. */
+	usage?: { tokens: number; cost: number };
 	createdAt: string;
 	updatedAt: string;
 }

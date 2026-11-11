@@ -20,6 +20,8 @@ export interface Store {
 	updateNode(id: string, patch: Partial<Omit<NodeMeta, "id">>): NodeMeta;
 	getNode(id: string): NodeMeta | undefined;
 	listNodes(): NodeMeta[];
+	/** Add to what a node's agent has used. Does not count as a change of state. */
+	addUsage(id: string, tokens: number, cost: number): void;
 	/** Record an envelope routed to a recipient. Idempotent per (envelope, recipient). */
 	journal(envelope: Envelope, recipient: string): void;
 	markAcked(envelopeId: string, recipient: string): void;
@@ -66,6 +68,10 @@ const MIGRATIONS: string[] = [
 	);
 	CREATE INDEX journal_recipient ON journal (recipient, acked);`,
 	"ALTER TABLE nodes ADD COLUMN repo TEXT;",
+	`ALTER TABLE nodes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE nodes ADD COLUMN model TEXT;
+	ALTER TABLE nodes ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE nodes ADD COLUMN cost REAL NOT NULL DEFAULT 0;`,
 ];
 
 type Row = Record<string, string | number | null>;
@@ -89,6 +95,9 @@ const toNode = (row: Row): NodeMeta => ({
 	createdAt: row.created_at as string,
 	updatedAt: row.updated_at as string,
 	...(typeof row.repo === "string" ? { repo: row.repo } : {}),
+	...(row.archived === 1 ? { archived: true } : {}),
+	...(typeof row.model === "string" ? { model: row.model } : {}),
+	...((row.tokens as number) > 0 || (row.cost as number) > 0 ? { usage: { tokens: row.tokens as number, cost: row.cost as number } } : {}),
 });
 
 export class SqliteStore implements Store {
@@ -120,12 +129,13 @@ export class SqliteStore implements Store {
 	insertNode(node: NodeMeta): void {
 		this.db
 			.prepare(
-				`INSERT INTO nodes (id, parent_id, root_id, kind, name, brief, fragments, owner, version, status, session_id, session_file, cwd, workspace, branch, created_at, updated_at, repo)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO nodes (id, parent_id, root_id, kind, name, brief, fragments, owner, version, status, session_id, session_file, cwd, workspace, branch, created_at, updated_at, repo, archived, model, tokens, cost)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				node.id, node.parentId, node.rootId, node.kind, node.name, node.brief, JSON.stringify(node.fragments), node.owner, node.version,
 				node.status, node.sessionId, node.sessionFile, node.cwd, node.workspace, node.branch, node.createdAt, node.updatedAt, node.repo ?? null,
+				node.archived ? 1 : 0, node.model ?? null, node.usage?.tokens ?? 0, node.usage?.cost ?? 0,
 			);
 	}
 
@@ -136,11 +146,13 @@ export class SqliteStore implements Store {
 		this.db
 			.prepare(
 				`UPDATE nodes SET parent_id = ?, root_id = ?, kind = ?, name = ?, brief = ?, fragments = ?, owner = ?, version = ?, status = ?,
-				 session_id = ?, session_file = ?, cwd = ?, workspace = ?, branch = ?, updated_at = ?, repo = ? WHERE id = ?`,
+				 session_id = ?, session_file = ?, cwd = ?, workspace = ?, branch = ?, updated_at = ?, repo = ?,
+				 archived = ?, model = ?, tokens = ?, cost = ? WHERE id = ?`,
 			)
 			.run(
 				next.parentId, next.rootId, next.kind, next.name, next.brief, JSON.stringify(next.fragments), next.owner, next.version, next.status,
-				next.sessionId, next.sessionFile, next.cwd, next.workspace, next.branch, next.updatedAt, next.repo ?? null, id,
+				next.sessionId, next.sessionFile, next.cwd, next.workspace, next.branch, next.updatedAt, next.repo ?? null,
+				next.archived ? 1 : 0, next.model ?? null, next.usage?.tokens ?? 0, next.usage?.cost ?? 0, id,
 			);
 		return next;
 	}
@@ -152,6 +164,10 @@ export class SqliteStore implements Store {
 
 	listNodes(): NodeMeta[] {
 		return (this.db.prepare("SELECT * FROM nodes ORDER BY created_at, id").all() as Row[]).map(toNode);
+	}
+
+	addUsage(id: string, tokens: number, cost: number): void {
+		this.db.prepare("UPDATE nodes SET tokens = tokens + ?, cost = cost + ? WHERE id = ?").run(Math.max(0, Math.round(tokens)), Math.max(0, cost), id);
 	}
 
 	journal(envelope: Envelope, recipient: string): void {
