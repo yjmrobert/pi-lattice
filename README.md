@@ -49,6 +49,7 @@ Each package depends only on `protocol` and works on its own; `app` is the one p
 
 - [Architecture](docs/architecture.md)
 - [Decisions](docs/decisions/README.md)
+- [Testing by hand with a real model](docs/testing.md)
 - [Envelope specification](docs/envelope-spec.md)
 - [Roles](docs/roles.md)
 - [Ownership and handoff](docs/leases.md)
