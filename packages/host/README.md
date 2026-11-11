@@ -40,12 +40,23 @@ Opening a sleeping session shows it as asleep and does not start it; sending it 
 
 ### Sharing a tree
 
+Sharing is direct between two machines that can reach each other (same LAN, same VPN, or an SSH tunnel). There is no server.
+
 ```bash
-pi-lattice --as alice --name checkout --share <private git url>     # start and share
-pi-lattice --as bob --share <private git url>                       # join
+pi-lattice --as alice --name checkout --listen 47610                 # start, and accept paired people
+pi-lattice --as bob --listen 47610 --peer '<alice's invite>'         # join using an invite
 ```
 
-`ctrl+o` (or `o` in the tree) opens sharing: trust a collaborator's key, offer the selected session to someone, accept an offer, confirm a release, or cancel. Other people's sessions appear in the tree marked `@name`; you can see them but not run them. See [Ownership and handoff](../../docs/leases.md).
+`ctrl+o` (or `o` in the tree) opens sharing: show your invite, pair using someone's invite, pair with someone who knocked, offer the selected session, accept an offer, confirm a release, or cancel.
+
+Other people's sessions appear in the tree marked `@name`. You can open and read them while their owner is online; you cannot run them. When the owner is offline they are greyed out. See [Ownership and handoff](../../docs/leases.md).
+
+| Option | Does |
+|---|---|
+| `--listen [host:]port` | Accept connections from paired people. Default port 47610 when only `--peer` is given. |
+| `--peer <invite>` | Pair with someone by their invite. Repeatable. |
+| `--advertise <host>` | The address others should use for you, when the guessed one is wrong. |
+| `--as <name>` | The name you act as. |
 
 ### Line interface
 

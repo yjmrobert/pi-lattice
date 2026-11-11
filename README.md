@@ -10,7 +10,7 @@ Agent-to-agent messaging, session trees, composable roles and shared ownership f
 | [`roles`](packages/roles/README.md) | Pi extension. Compose a session's role from markdown fragments and change it mid-session. | Yes ([guide](docs/roles.md)) |
 | [`graph`](packages/graph/README.md) | Pi extension. A session spawns child sessions and sees the tree. | Needs the host |
 | [`host`](packages/host/README.md) | Process that owns a tree of sessions, with a full-screen interface to enter any node. | Yes |
-| [`collab`](packages/collab/README.md) | Library. Share a tree between people, with signed ownership handoff. | Loaded by the host |
+| [`collab`](packages/collab/README.md) | Library. Share a tree between people, peer to peer, with signed ownership handoff. | Loaded by the host |
 | `protocol` | Shared envelope schema, state machines and wire types. | Library |
 
 ## Try it
@@ -46,4 +46,5 @@ Requires Node 22.19 or newer and git. Tests and spikes run real Pi processes aga
 - **Publishing.** Nothing is on npm. The host and `protocol` need a build step first ([ADR 0001](docs/decisions/0001-packaging-and-scope.md)), and the `@pi-lattice` scope has not been claimed.
 - **A run with a real model.** Every flow is tested against a scripted model, which checks the mechanics, not how well a model follows the role fragments.
 - **Two real machines.** Sharing is tested with two isolated hosts on one machine ([manual script](docs/two-machine-handoff.md)).
+- **Sharing across arbitrary networks.** The two machines must reach each other directly (LAN, VPN, SSH tunnel). Hole-punching is not built ([ADR 0012](docs/decisions/0012-peer-to-peer-collab.md)).
 - **Licence.** None has been chosen.
