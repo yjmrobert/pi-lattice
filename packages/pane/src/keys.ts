@@ -28,7 +28,9 @@ export type PaneAction =
 	/** Ask for the same key again before doing something that loses work. `what` names it. */
 	| { do: "confirm"; what: string }
 	/** Show or hide the list of every key. */
-	| { do: "help" };
+	| { do: "help" }
+	/** Open the settings screen. */
+	| { do: "settings" };
 
 /** The key a person must press twice to stop a session, as the view records it. */
 export const stopKey = (nodeId: string): string => `stop:${nodeId}`;
@@ -44,7 +46,7 @@ function cursorSession(view: PaneView): { id: string; repo: string; mine: boolea
 
 /** Every key the pane takes, for the help screen. */
 export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyArray<readonly [key: string, does: string]>]> = [
-	["Moving", [["↑ ↓  j k", "move through what is waiting, then the sessions"], ["1-9", "jump to a waiting item"], ["esc  alt+l", "give the keyboard back to Pi"], ["?", "show or hide this list"]]],
+	["Moving", [["↑ ↓  j k", "move through what is waiting, then the sessions"], ["1-9", "jump to a waiting item"], ["esc  alt+l", "give the keyboard back to Pi"], [",", "settings"], ["?", "show or hide this list"]]],
 	["A session", [["enter", "open it in this terminal"], ["-", "go back to the session you were in before"], ["n", "create a session under it"], ["r", "rename it"], ["s", "stop what its agent is doing (press twice)"], ["d", "archive it and everything under it"], ["o", "share: pair, offer, accept"]]],
 	["Something waiting", [["y  n", "answer a yes/no question"], ["a  x", "approve or reject a message; accept or decline an offer"], ["enter", "answer or review it with Pi's prompts"]]],
 	["A sleeping repository", [["enter", "start its host"]]],
@@ -79,7 +81,7 @@ export function cursorKeys(view: PaneView): Array<readonly [key: string, does: s
 		if (at?.mine) keys.push(["r", "rename"]);
 		if (at?.mine && at.working) keys.push(["s", view.confirm === stopKey(at.id) ? "again to stop" : "stop"]);
 		if (at?.mine && !at.here) keys.push(["d", "archive"]);
-		keys.push(["o", "share"], ["?", "keys"]);
+		keys.push(["o", "share"], [",", "settings"], ["?", "keys"]);
 		return keys;
 	}
 	const { item } = found;
@@ -99,6 +101,7 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 	};
 	if (view.help) return key === "escape" || key === "?" ? [{ do: "help" }] : [];
 	if (key === "?") return [{ do: "help" }];
+	if (key === ",") return [{ do: "settings" }];
 	if (key === "up" || key === "k") return step(-1);
 	if (key === "down" || key === "j") return step(1);
 	if (key === "escape") return [{ do: "leave" }];

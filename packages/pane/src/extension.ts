@@ -15,6 +15,7 @@ import { type ChildForm, type FormKey, formKey, newChildForm, renderForm } from 
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
 import { connectHost, hasTree, inRepository, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
+import { newSettingsScreen, renderSettings, type SettingsData, type SettingsScreen, settingsKey } from "./settings.ts";
 import { readSettings, type SettingsRead, writeSetting } from "./settings-io.ts";
 import { type InboxDetails, inboxItems, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, renderCompact, renderPane, renderStrip } from "./view.ts";
 
@@ -60,6 +61,10 @@ interface Shared {
 	focused: boolean;
 	/** The new-session form, while it is being filled in. It takes the inspector's place and the keyboard. */
 	form: ChildForm | undefined;
+	/** The settings screen, while it is open. Like the form, it takes the inspector's place and the keyboard. */
+	screen: SettingsScreen | undefined;
+	/** Whether closing the settings gives the keyboard back to Pi, because they were opened from there. */
+	screenLeaves: boolean;
 	/** Something waiting for the same key again; see `stopKey`. */
 	confirm: string | undefined;
 	/** Whether the list of keys is showing. */
@@ -83,10 +88,10 @@ interface Shared {
 	pi: ExtensionAPI | undefined;
 	ctx: ExtensionContext | undefined;
 }
-const KEY = Symbol.for("pi-lattice.pane.3");
+const KEY = Symbol.for("pi-lattice.pane.4");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
-	links: new Map(), home: undefined, asleep: [], current: undefined, currentDir: undefined, previous: undefined, assignment: undefined, cursor: undefined, focused: false, form: undefined,
+	links: new Map(), home: undefined, asleep: [], current: undefined, currentDir: undefined, previous: undefined, assignment: undefined, cursor: undefined, focused: false, form: undefined, screen: undefined, screenLeaves: false,
 	confirm: undefined, help: false, tail: undefined, waiting: 0, titled: 0, starting: false,
 	ticker: undefined, scanner: undefined, scanning: false, paint: PLAIN, tui: undefined, wrapped: false, strip: undefined, pi: undefined, ctx: undefined,
 });
@@ -123,7 +128,7 @@ function view(): PaneView {
 		frame: Math.floor(Date.now() / SPINNER_MS),
 		height: shared.tui?.terminal.rows,
 		inspector: inspecting(),
-		note: shared.form ? `new session under ${shared.form.parentName}` : shared.help ? "? or esc closes the keys" : undefined,
+		note: shared.screen ? "settings" : shared.form ? `new session under ${shared.form.parentName}` : shared.help ? "? or esc closes the keys" : undefined,
 		now: Date.now(),
 		confirm: shared.confirm,
 		help: shared.help,
@@ -149,6 +154,29 @@ function autoStarts(): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/** What the settings screen shows: the settings in effect, the files behind them, and the models there are to choose from. */
+function settingsData(): SettingsData {
+	const read = settings();
+	let models: string[] = [];
+	try {
+		models = (shared.ctx?.modelRegistry.getAvailable() ?? []).map((model) => `${model.provider}/${model.id}`).sort();
+	} catch {
+		// Between sessions there is no registry to ask; the model can still be typed.
+	}
+	return { settings: read.settings, files: read.files, paths: read.paths, problems: read.problems, models };
+}
+
+/** Open the settings screen where the chat is, giving the pane the keyboard. */
+function openSettings(): void {
+	shared.screenLeaves = !shared.focused;
+	shared.focused = true;
+	shared.form = undefined;
+	shared.help = false;
+	shared.confirm = undefined;
+	shared.cursor ??= restingCursor();
+	shared.screen = newSettingsScreen(settingsData());
 }
 
 /** Tell each host whether this terminal is working in its repository or only watching it. */
@@ -365,7 +393,9 @@ function installPane(tui: Hooked): void {
 	// While the pane has the keyboard, what the cursor is on is shown in full where the chat was.
 	const inspector: Component = {
 		render: (width) =>
-			(shared.form ? renderForm(shared.form, width, shared.paint, shared.tui?.terminal.rows) : renderInspector(view(), width, shared.paint, shared.tui?.terminal.rows)).map((line) => truncateToWidth(line, width)),
+			(shared.screen
+				? renderSettings(shared.screen, settingsData(), width, shared.paint, shared.tui?.terminal.rows)
+				: shared.form ? renderForm(shared.form, width, shared.paint, shared.tui?.terminal.rows) : renderInspector(view(), width, shared.paint, shared.tui?.terminal.rows)).map((line) => truncateToWidth(line, width)),
 		invalidate() {},
 	};
 	const wrap = (inner: Component): Component =>
@@ -443,7 +473,41 @@ function onFormKey(data: string): void {
 	}
 }
 
+/** Keys while the settings screen is open. A change is written at once; there is nothing to save. */
+function onSettingsKey(data: string): void {
+	const screen = shared.screen;
+	const key = formKeyOf(data);
+	if (!screen || !key) return;
+	const result = settingsKey(screen, settingsData(), key);
+	if ("close" in result) {
+		shared.screen = undefined;
+		if (shared.screenLeaves) {
+			shared.focused = false;
+			shared.cursor = undefined;
+		}
+	} else if ("command" in result) {
+		shared.screen = undefined;
+		shared.focused = false;
+		shared.cursor = undefined;
+		dispatch(result.command);
+	} else {
+		shared.screen = result.screen;
+		if ("write" in result) {
+			try {
+				writeSetting(result.write.scope, shared.home, result.write.key, result.write.value);
+			} catch (error) {
+				shared.screen = { ...result.screen, error: error instanceof Error ? error.message : String(error) };
+			}
+		}
+	}
+}
+
 function onPaneKey(data: string): void {
+	if (shared.screen) {
+		onSettingsKey(data);
+		redraw();
+		return;
+	}
 	if (shared.form) {
 		onFormKey(data);
 		redraw();
@@ -469,8 +533,14 @@ function perform(action: PaneAction): void {
 		shared.focused = false;
 		shared.cursor = undefined;
 		shared.help = false;
+		shared.screen = undefined;
 	} else if (action.do === "command") dispatch(action.text);
 	else if (action.do === "help") shared.help = !shared.help;
+	else if (action.do === "settings") {
+		// The screen needs the room beside the pane; without it the settings are listed as text.
+		if (inspecting()) openSettings();
+		else dispatch("/lattice config");
+	}
 	else if (action.do === "confirm") shared.confirm = action.what;
 	else if (action.do === "interrupt") {
 		const name = nameOf(action.nodeId);
@@ -709,6 +779,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			}
 			shared.focused = !shared.focused;
 			shared.form = undefined;
+			shared.screen = undefined;
 			shared.help = false;
 			shared.confirm = undefined;
 			shared.cursor = shared.focused ? restingCursor() : undefined;
@@ -1052,6 +1123,12 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		const value = rest.join(" ");
 		const current = settings();
 		const from = (name: string): string => ({ default: "default", user: "yours", repo: "this repository", env: "environment" })[current.settings.sources[name] ?? "default"];
+		if (!key && shared.wrapped && ctx.mode === "tui") {
+			// Beside the pane there is room for the whole screen, edited in place.
+			openSettings();
+			redraw();
+			return;
+		}
 		if (!key) {
 			const width = Math.max(...SETTINGS.map((setting) => setting.key.length));
 			const lines: string[] = [];

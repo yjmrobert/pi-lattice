@@ -222,6 +222,7 @@ describe("keys while the pane has the keyboard", () => {
 
 	it("lists every key on ?, and takes nothing else until the list is closed", () => {
 		expect(interpretKey(at(nodeKey("a")), "?")).toEqual([{ do: "help" }]);
+		expect(interpretKey(at(nodeKey("a")), ",")).toEqual([{ do: "settings" }]);
 		const open = { ...at(nodeKey("a")), help: true };
 		expect(interpretKey(open, "d")).toEqual([]);
 		expect(interpretKey(open, "escape")).toEqual([{ do: "help" }]);
@@ -238,10 +239,10 @@ describe("keys while the pane has the keyboard", () => {
 		expect(cursorKeys(at(itemKey("q:a:d2")))).toEqual([["⏎", "answer"]]);
 		expect(cursorKeys(at(itemKey("m:a:e1")))).toEqual([["a", "approve"], ["x", "reject"]]);
 		// A working session of yours that is not the one open here can be renamed, stopped and archived.
-		expect(cursorKeys(at(nodeKey("a")))).toEqual([["⏎", "open"], ["n", "new"], ["r", "rename"], ["s", "stop"], ["d", "archive"], ["o", "share"], ["?", "keys"]]);
+		expect(cursorKeys(at(nodeKey("a")))).toEqual([["⏎", "open"], ["n", "new"], ["r", "rename"], ["s", "stop"], ["d", "archive"], ["o", "share"], [",", "settings"], ["?", "keys"]]);
 		// The one open here cannot be archived from under you; someone else's can only be opened.
-		expect(cursorKeys(at(nodeKey("r")))).toEqual([["n", "new"], ["r", "rename"], ["o", "share"], ["?", "keys"]]);
-		expect(cursorKeys(at(nodeKey("b")))).toEqual([["⏎", "open"], ["n", "new"], ["o", "share"], ["?", "keys"]]);
+		expect(cursorKeys(at(nodeKey("r")))).toEqual([["n", "new"], ["r", "rename"], ["o", "share"], [",", "settings"], ["?", "keys"]]);
+		expect(cursorKeys(at(nodeKey("b")))).toEqual([["⏎", "open"], ["n", "new"], ["o", "share"], [",", "settings"], ["?", "keys"]]);
 		const v = at(itemKey("q:a:d1"));
 		expect(renderPane({ ...v, keys: cursorKeys(v) }, 34).at(-1)).toBe(" y yes  n no  ↑↓ move  esc close");
 	});
@@ -288,7 +289,7 @@ describe("the inspector", () => {
 			" 1 grilling: Run stripe listen in this shell?",
 			"───────────────────────────────────────────────────────────",
 			" ⏎ open  n new  r rename  s stop  d archive  o share",
-			" ? keys",
+			" , settings  ? keys",
 		]);
 	});
 
@@ -323,7 +324,7 @@ describe("the inspector", () => {
 	it("pins its keys to the bottom, and keeps the pane's own footer to the keys that move", () => {
 		const lines = renderInspector(at(nodeKey("a")), 60, PLAIN, 30);
 		expect(lines).toHaveLength(30);
-		expect(lines.slice(-2)).toEqual([" ⏎ open  n new  r rename  s stop  d archive  o share", " ? keys"]);
+		expect(lines.slice(-2)).toEqual([" ⏎ open  n new  r rename  s stop  d archive  o share", " , settings  ? keys"]);
 		expect(renderPane(at(nodeKey("a")), 34).at(-1)).toBe(" ↑↓ move  1-9 jump  esc close");
 	});
 
