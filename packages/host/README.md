@@ -1,8 +1,8 @@
 # @pi-lattice/host
 
-The lattice host: a background process that owns a tree of Pi sessions for a project.
+The lattice host, as a library: it owns a tree of Pi sessions for a project.
 
-Most people never run it. The [pane](../pane/README.md) inside Pi starts it on demand and stops needing it when you quit. This page is for scripting, debugging and using it as a library.
+It depends only on the shared contracts. It knows nothing about sharing or about which extensions exist: it is given the extension paths to load, and an optional `SharingPort`. The [app](../app/README.md) assembles it into the background process a developer's Pi talks to.
 
 What it does:
 
@@ -11,33 +11,14 @@ What it does:
 - Routes every message between sessions and journals it.
 - Keeps the tree in SQLite, so it survives restarts. Sessions sleep when idle and wake for mail.
 - Surfaces what needs a human: questions that block a session, and mail waiting for approval.
-- Shares the tree peer to peer when asked ([Ownership and handoff](../../docs/leases.md)).
-
-## Run it by hand
-
-```bash
-node /path/to/pi-lattice/packages/host/src/cli.ts daemon          # the background host, in the foreground
-node /path/to/pi-lattice/packages/host/src/cli.ts --role coordinator   # a line-based interface
-```
-
-The line interface is for scripting and debugging: type to talk to the current session; `:tree`, `:use <name>`, `:inbox`, `:approve <id>`, `:dialogs`, `:answer <n> <text>`, `:share`, `:quit`.
-
-| Option | Does |
-|---|---|
-| `--cwd <dir>`, `--state <dir>` | Project directory; where the tree is kept (default `<cwd>/.lattice`) |
-| `--as <name>` | The name you act as |
-| `--listen [host:]port`, `--peer <invite>`, `--advertise <host>` | Sharing, peer to peer |
-| `--idle-exit <seconds>` | `daemon`: exit after this long with nobody connected (default 600, 0 never) |
-| `-- <pi arguments>` | Passed to every headless session, for example `-- --model <model>` |
-
-State lives in `<project>/.lattice/`: the database, session files, worktrees, and `daemon.log`. The host adds `.lattice/` to the repository's local `info/exclude` when it creates a worktree.
+- Exposes a `SharingPort` seam, so sharing can be supplied without the host knowing how it works.
 
 ## Use it as a library
 
 ```ts
 import { LatticeHost } from "@pi-lattice/host";
 
-const host = await LatticeHost.start({ stateDir: ".lattice" });
+const host = await LatticeHost.start({ stateDir: ".lattice", extensionPaths: [a2aDir, rolesDir, graphDir] });
 const root = await host.createRoot({ name: "checkout", cwd: process.cwd(), fragments: ["coordinator"] });
 host.on("node", (node) => console.log(node.name, node.status));
 await host.prompt(root.id, "Plan the checkout rewrite.");

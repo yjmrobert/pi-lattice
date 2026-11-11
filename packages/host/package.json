@@ -1,7 +1,7 @@
 {
   "name": "@pi-lattice/host",
   "version": "0.1.0",
-  "description": "The pi-lattice host: owns the session tree, runs sessions headless, brokers their messages, and serves the pane in a person's own Pi.",
+  "description": "The pi-lattice host library: owns a session tree, runs sessions headless, brokers their messages, and hands a session to a person's own Pi.",
   "type": "module",
   "keywords": [
     "pi",
@@ -12,9 +12,6 @@
     "src",
     "README.md"
   ],
-  "bin": {
-    "pi-lattice": "./src/cli.ts"
-  },
   "exports": {
     ".": "./src/index.ts",
     "./package.json": "./package.json"
@@ -24,10 +21,6 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^1.5.2",
-    "@pi-lattice/a2a": "0.1.0",
-    "@pi-lattice/collab": "0.1.0",
-    "@pi-lattice/graph": "0.1.0",
-    "@pi-lattice/protocol": "0.1.0",
-    "@pi-lattice/roles": "0.1.0"
+    "@pi-lattice/protocol": "0.1.0"
   }
 }

@@ -1,8 +1,7 @@
 /** A line-based interface to the host, for terminals without full-screen support and for scripting. */
 import { createInterface } from "node:readline";
 import { formatTree } from "@pi-lattice/protocol";
-import type { LatticeHost } from "./host.ts";
-import type { RpcRecord } from "./pi-process.ts";
+import type { LatticeHost, RpcRecord } from "@pi-lattice/host";
 
 const HELP = `Type a message to send it to the current session. Commands:
   :tree              show the session tree

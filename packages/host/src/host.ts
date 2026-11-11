@@ -8,8 +8,8 @@ import { EventEmitter } from "node:events";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
+	assignmentToEnv,
 	type Channel,
 	childrenOf,
 	type DialogInfo,
@@ -17,11 +17,11 @@ import {
 	depthOf,
 	type Envelope,
 	HOST_ENV,
+	type HostAssignment,
 	type InboundState,
 	isRelativeAddress,
 	type Limits,
 	newNodeId,
-	type NodeEnv,
 	type NodeMeta,
 	type NodeStatus,
 	type PeerInfo,
@@ -50,7 +50,7 @@ export interface HostOptions {
 	piCommand?: string[];
 	/** Extra arguments for every session, for example a provider and model. */
 	piArgs?: string[];
-	/** Extension paths loaded into every session. Defaults to the lattice a2a, roles and graph packages. */
+	/** Extension paths loaded into every headless session: normally the lattice messaging, roles and tree extensions. */
 	extensionPaths?: string[];
 	/** Extra environment for every session. */
 	env?: Record<string, string>;
@@ -116,10 +116,6 @@ interface Runtime {
 }
 
 const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
-
-function defaultExtensionPaths(): string[] {
-	return ["@pi-lattice/a2a", "@pi-lattice/roles", "@pi-lattice/graph"].map((name) => dirname(fileURLToPath(import.meta.resolve(`${name}/package.json`))));
-}
 
 function isProcessAlive(pid: number): boolean {
 	try {
@@ -359,7 +355,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		mkdirSync(sessionDir, { recursive: true });
 		const args = [
 			...(this.options.piArgs ?? []),
-			...(this.options.extensionPaths ?? defaultExtensionPaths()).flatMap((path) => ["-e", path]),
+			...(this.options.extensionPaths ?? []).flatMap((path) => ["-e", path]),
 			"--session-dir", sessionDir,
 		];
 		if (node.sessionFile && existsSync(node.sessionFile)) args.push("--session", node.sessionFile);
@@ -371,7 +367,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			args,
 			cwd: existsSync(node.cwd) ? node.cwd : process.cwd(),
 			// LATTICE_HEADLESS tells the pane extension it is inside a host-run session and must stay out of the way.
-			env: { ...process.env, ...this.options.env, ...this.nodeEnv(node, token), LATTICE_HEADLESS: "1" },
+			env: { ...process.env, ...this.options.env, ...assignmentToEnv(this.assignment(node, token)), LATTICE_HEADLESS: "1" },
 		});
 		let markConnected!: () => void;
 		let failConnect!: (error: Error) => void;
@@ -404,19 +400,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 	}
 
-	/** The environment that lets a session speak as a node, whether the host started it or a person opened it. */
-	private nodeEnv(node: NodeMeta, token: string): NodeEnv {
+	/** What a session needs to speak as a node, whether the host starts it or a person opens it. */
+	private assignment(node: NodeMeta, token: string): HostAssignment {
 		return {
-			[HOST_ENV.socket]: this.socketPath,
-			[HOST_ENV.token]: token,
-			[HOST_ENV.nodeId]: node.id,
-			[HOST_ENV.parentId]: node.parentId ?? "",
-			[HOST_ENV.rootId]: node.rootId,
-			[HOST_ENV.kind]: node.kind,
-			[HOST_ENV.name]: node.name,
-			[HOST_ENV.fragments]: node.fragments.join(","),
-			[HOST_ENV.owner]: node.owner,
-			[HOST_ENV.home]: join(this.stateDir, "home"),
+			socket: this.socketPath, token, nodeId: node.id, parentId: node.parentId, rootId: node.rootId, kind: node.kind, name: node.name,
+			fragments: node.fragments, owner: node.owner, home: join(this.stateDir, "home"),
 		};
 	}
 
@@ -529,7 +517,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	 * session file can only be driven by one process. Returns what that terminal needs to
 	 * open the session and speak as the node.
 	 */
-	async attachForeground(id: string, clientId: string): Promise<{ node: NodeMeta; sessionFile: string; env: NodeEnv }> {
+	async attachForeground(id: string, clientId: string): Promise<{ node: NodeMeta; sessionFile: string; assignment: HostAssignment }> {
 		let node = this.must(id);
 		if (node.owner !== this.owner) throw new Error(`"${node.name}" is owned by ${node.owner} and runs on their machine.`);
 		await this.starting.get(id)?.catch(() => {});
@@ -553,7 +541,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			this.runtimes.set(id, runtime);
 			this.update(id, { status: "starting" });
 		}
-		return { node: this.must(id), sessionFile: node.sessionFile, env: this.nodeEnv(node, runtime.token) };
+		return { node: this.must(id), sessionFile: node.sessionFile, assignment: this.assignment(node, runtime.token) };
 	}
 
 	/** A terminal gives a node back. The host runs it headless again when it has mail waiting. */
@@ -567,7 +555,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	}
 
 	/** Make a session that is already open in a person's terminal the root of a new tree. */
-	adoptSession(spec: UiApi["adopt"]["params"], clientId: string): { node: NodeMeta; env: NodeEnv } {
+	adoptSession(spec: UiApi["adopt"]["params"], clientId: string): { node: NodeMeta; assignment: HostAssignment } {
 		const id = newNodeId();
 		const now = new Date().toISOString();
 		const cwd = resolve(spec.cwd);
@@ -579,7 +567,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const runtime = this.foregroundRuntime(clientId);
 		this.runtimes.set(id, runtime);
 		this.emit("node", node);
-		return { node, env: this.nodeEnv(node, runtime.token) };
+		return { node, assignment: this.assignment(node, runtime.token) };
 	}
 
 	/** Supply sharing, so the pane can show people and run handoffs. */

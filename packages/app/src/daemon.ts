@@ -1,14 +1,19 @@
 /**
+ * The composition root: a host with sharing, run as a background process. This is the one
+ * place that knows about both the host and collab; neither knows about the other.
+ *
  * The lattice host as a background process. A person's own Pi starts it on demand and
  * talks to it over the local socket; it keeps the other sessions running headless, and
  * exits on its own once nobody is connected and nothing is working.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { CollabSession, Identity, PeerBook, TcpTransport } from "@pi-lattice/collab";
 import type { UiState } from "@pi-lattice/protocol";
-import { type HostOptions, LatticeHost, type SharingPort } from "./host.ts";
+import { type HostOptions, LatticeHost, type SharingPort } from "@pi-lattice/host";
 
 export interface DaemonOptions {
 	stateDir: string;
@@ -154,6 +159,24 @@ class Sharing implements SharingPort {
 	}
 }
 
+/**
+ * The extensions every headless session needs to take part in the tree. When this package
+ * runs from the repository checkout that Pi has installed, that checkout is passed whole so
+ * Pi recognises it as the package it already loaded and does not load it twice.
+ */
+export function sessionExtensionPaths(): string[] {
+	const here = dirname(fileURLToPath(import.meta.url));
+	const repo = resolve(here, "..", "..", "..");
+	try {
+		const manifest = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { pi?: { extensions?: string[] } };
+		if (manifest.pi?.extensions?.some((entry) => entry.includes("launcher"))) return [repo];
+	} catch {
+		// Not running from a checkout.
+	}
+	const require = createRequire(import.meta.url);
+	return ["@pi-lattice/a2a", "@pi-lattice/roles", "@pi-lattice/graph"].map((name) => dirname(require.resolve(`${name}/package.json`)));
+}
+
 /** Read a JSON array of strings from an environment variable; used to configure hosts started on demand. */
 function envList(name: string): string[] | undefined {
 	const raw = process.env[name];
@@ -171,13 +194,13 @@ export async function runDaemon(options: DaemonOptions): Promise<Daemon> {
 	mkdirSync(stateDir, { recursive: true });
 	const piCommand = envList("LATTICE_PI_COMMAND");
 	const piArgs = options.piArgs ?? envList("LATTICE_PI_ARGS");
-	const extensionPaths = options.extensionPaths ?? envList("LATTICE_EXTENSION_PATHS");
+	const extensionPaths = options.extensionPaths ?? envList("LATTICE_EXTENSION_PATHS") ?? sessionExtensionPaths();
 	const host = await LatticeHost.start({
 		stateDir,
 		...(options.owner !== undefined ? { owner: options.owner } : {}),
 		...(piCommand ? { piCommand } : {}),
 		...(piArgs ? { piArgs } : {}),
-		...(extensionPaths ? { extensionPaths } : {}),
+		extensionPaths,
 		...options.hostOptions,
 	});
 	const log = (level: string, message: string): void => {
