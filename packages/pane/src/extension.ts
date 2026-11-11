@@ -10,13 +10,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import { emitEvent, formatSetting, HANDOVER_NOTE, type HostAssignment, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, toggleSetting, type UiState } from "@pi-lattice/protocol";
+import { emitEvent, formatSetting, type HostAssignment, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, toggleSetting, type UiState } from "@pi-lattice/protocol";
 import { type ChildForm, type FormKey, formKey, newChildForm, renderForm } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
 import { connectHost, hasTree, inRepository, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
-import { newSettingsScreen, renderSettings, type SettingsData, type SettingsScreen, settingsKey } from "./settings.ts";
-import { readSettings, type SettingsRead, writeSetting } from "./settings-io.ts";
+import { newSettingsScreen, renderSettings, type SettingsData, type SettingsLink, type SettingsScreen, settingsKey } from "./settings.ts";
+import { readSettings, readTemplate, type SettingsRead, templatePath, writeSetting, writeTemplate } from "./settings-io.ts";
 import { type InboxDetails, inboxItems, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, renderCompact, renderPane, renderStrip } from "./view.ts";
 
 const NODE_ENTRY = "lattice:node";
@@ -140,9 +140,14 @@ function view(): PaneView {
 /** The id of the row that stands for a session the form has not created yet. */
 const GHOST = "lattice-new-session";
 
+/** The state directory of this terminal's repository, when it has a tree to keep settings and templates in. */
+function treeDir(): string | undefined {
+	return shared.home && hasTree(shared.home) ? shared.home : undefined;
+}
+
 /** The settings in effect in this terminal: the repository's file, when it has a tree, over the person's own. */
 function settings(): SettingsRead {
-	return readSettings(shared.home && hasTree(shared.home) ? shared.home : undefined);
+	return readSettings(treeDir());
 }
 
 /** Whether a first message here starts a tree by itself: in a git repository, unless switched off. */
@@ -165,7 +170,25 @@ function settingsData(): SettingsData {
 	} catch {
 		// Between sessions there is no registry to ask; the model can still be typed.
 	}
-	return { settings: read.settings, files: read.files, paths: read.paths, problems: read.problems, models };
+	// The role fragments and templates are files; each gets a row that opens it for editing.
+	const WHOSE: Record<string, string> = { builtin: "built in", user: "yours", project: "this project's", repo: "this repository's" };
+	const links: SettingsLink[] = [];
+	const roles: { names: string[]; fragments?: Array<{ name: string; summary: string; source: string; path: string }> } = { names: [] };
+	if (shared.pi) emitEvent(shared.pi.events, "lattice:roles:available", roles);
+	for (const fragment of [...(roles.fragments ?? [])].sort((a, b) => a.name.localeCompare(b.name))) {
+		links.push({
+			section: "Role fragments", label: fragment.name, value: WHOSE[fragment.source] ?? fragment.source, command: `/role edit ${fragment.name}`,
+			help: `${fragment.summary || "A role fragment."} ${fragment.path}. Enter opens it in Pi's editor; saving writes your own copy, used in every repository.`,
+		});
+	}
+	for (const name of TEMPLATE_NAMES) {
+		const template = readTemplate(name, treeDir());
+		links.push({
+			section: "Templates", label: name, value: WHOSE[template.source] ?? template.source, command: `/lattice template ${name}`,
+			help: `${TEMPLATES[name].summary}${template.path ? ` ${template.path}.` : ""} Enter opens it in Pi's editor; saving writes your own copy, used in every repository.`,
+		});
+	}
+	return { settings: read.settings, files: read.files, paths: read.paths, problems: read.problems, models, links };
 }
 
 /** Open the settings screen where the chat is, giving the pane the keyboard. */
@@ -866,7 +889,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			const switched = await ctx.switchSession(result.sessionFile, {
 				// The same in the other direction: a session that was working in the background carries on here.
 				withSession: async (next) => {
-					if (result.wasWorking) await next.sendUserMessage(HANDOVER_NOTE);
+					if (result.wasWorking) await next.sendUserMessage(renderTemplate(readTemplate("handover", shared.currentDir).text, {}));
 				},
 			});
 			if (switched.cancelled) await attach(previous);
@@ -1181,6 +1204,67 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		redraw();
 	};
 
+	/**
+	 * Show everything this session is told that the person did not type: its roles, in full and
+	 * in order, and the texts pi-lattice writes, each with the file it comes from.
+	 */
+	const prompt = async (ctx: ExtensionCommandContext): Promise<void> => {
+		const request: { parts: Array<{ title: string; source: string; where: string; text: string }> } = { parts: [] };
+		emitEvent(pi.events, "lattice:prompt:describe", request);
+		const WHOSE = { builtin: "built in", user: "yours", repo: "this repository's" } as const;
+		const out: string[] = [
+			"What this session is told beyond what you type. Each part says where it comes from; change it with /role edit <name> or /lattice template <name>.",
+			"",
+			request.parts.length > 0 ? `ROLES, as sections of the system prompt (${request.parts.filter((part) => part.title.startsWith("Role: ")).length} applied, in this order)` : "ROLES: none applied to this session. /role add <name> applies one.",
+		];
+		for (const part of request.parts) out.push("", `── ${part.title} · ${part.source}`, `   ${part.where}`, "", part.text);
+		out.push("", "", "TEXTS PI-LATTICE WRITES into a session as it runs");
+		for (const name of TEMPLATE_NAMES) {
+			const template = readTemplate(name, treeDir());
+			out.push("", `── ${name} · ${WHOSE[template.source]}${template.path ? ` · ${template.path}` : ""}`, `   ${TEMPLATES[name].summary}`, "", template.text.trim());
+		}
+		out.push("", "", "NOT EDITABLE: a message from another agent arrives wrapped in <lattice-message>, followed by a line saying it is from a peer and not from you. That wrapper is what keeps one agent from giving another orders in your name, so it is fixed.");
+		const text = out.join("\n");
+		if (ctx.mode === "tui") await ctx.ui.editor("What this session is told (read-only; changes here are not saved)", text);
+		else ctx.ui.notify(text, "info");
+	};
+
+	/** List the templates, or edit one. Saving writes the person's own copy; saving it empty removes that copy. */
+	const template = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
+		const [name = "", scopeWord] = arg.split(/\s+/).filter(Boolean);
+		const WHOSE = { builtin: "built in", user: "yours", repo: "this repository's" } as const;
+		if (!name) {
+			const width = Math.max(...TEMPLATE_NAMES.map((each) => each.length));
+			ctx.ui.notify(
+				["The texts pi-lattice writes into a session. /lattice template <name> edits one.", ...TEMPLATE_NAMES.map((each) => `  ${each.padEnd(width)}  ${WHOSE[readTemplate(each, treeDir()).source].padEnd(17)}  ${TEMPLATES[each].summary}`)].join("\n"),
+				"info",
+			);
+			return;
+		}
+		if (!isTemplateName(name) || (scopeWord !== undefined && scopeWord !== "user" && scopeWord !== "repo")) {
+			ctx.ui.notify(`Usage: /lattice template [${TEMPLATE_NAMES.join("|")}] [user|repo]`, "warning");
+			return;
+		}
+		const scope: SettingScope = scopeWord ?? "user";
+		if (scope === "repo" && !treeDir()) {
+			ctx.ui.notify("There is no session tree here yet to keep a repository's template in.", "warning");
+			return;
+		}
+		const path = templatePath(name, scope, treeDir());
+		const current = existsSync(path) ? readFileSync(path, "utf8") : readTemplate(name, treeDir()).text;
+		const names = TEMPLATES[name].vars.map((each) => `{{${each}}}`).join(" ");
+		const text = await ctx.ui.editor(`Template "${name}"${names ? ` · may mention ${names}` : ""} · saving writes ${scope === "user" ? "your own copy" : "this repository's copy"}: ${path} · save it empty to remove that copy`, current);
+		if (text === undefined) return;
+		if (text.trim() === "") {
+			writeTemplate(name, scope, treeDir(), undefined);
+			ctx.ui.notify(`Removed ${path}. "${name}" is the ${WHOSE[readTemplate(name, treeDir()).source]} text again.`, "info");
+			return;
+		}
+		writeTemplate(name, scope, treeDir(), text);
+		const used = readTemplate(name, treeDir());
+		ctx.ui.notify(`Saved ${path}.${used.path !== path ? ` Another copy wins here: ${used.path}.` : ""} It is used from the next time pi-lattice writes it.`, "info");
+	};
+
 	/** Stop the host of this repository and start it again, keeping this terminal's session where it is. */
 	const restart = async (ctx: ExtensionCommandContext): Promise<void> => {
 		const stateDir = shared.home;
@@ -1255,13 +1339,15 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		["share", "pair with someone, offer or accept a session"],
 		["status", "list the tree"],
 		["config [user] [setting] [value]", "show or change the settings, for this repository or for all of yours"],
+		["prompt", "show what this session is told beyond what you type, and where each part comes from"],
+		["template [name] [user|repo]", "list or edit the texts pi-lattice writes: the brief, the handover note, the reminders"],
 		["doctor", "check that everything the pane needs is working"],
 		["restart", "restart this repository's background host"],
 		["stop", "stop this repository's background host"],
 		["inbox · role · peers · node · children", "the other lattice commands, also reachable here"],
 	];
 	const FORWARDED = ["inbox", "role", "peers", "node", "children"];
-	const SUBCOMMANDS = ["open", "back", "new", "rename", "interrupt", "sleep", "archive", "restore", "answer", "approvals", "share", "status", "config", "doctor", "restart", "stop", "help", ...FORWARDED];
+	const SUBCOMMANDS = ["open", "back", "new", "rename", "interrupt", "sleep", "archive", "restore", "answer", "approvals", "share", "status", "config", "prompt", "template", "doctor", "restart", "stop", "help", ...FORWARDED];
 
 	pi.registerCommand("lattice", {
 		description: "Session tree. /lattice help lists everything it does",
@@ -1324,6 +1410,8 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				else if (sub === "restore") await restore(ctx, arg);
 				else if (sub === "interrupt") await interrupt(ctx, arg);
 				else if (sub === "config") await configure(ctx, arg);
+				else if (sub === "prompt") await prompt(ctx);
+				else if (sub === "template") await template(ctx, arg);
 				else if (sub === "restart") await restart(ctx);
 				else if (sub === "doctor") await doctor(ctx);
 				// The other lattice commands answer here too, so there is one name to remember.

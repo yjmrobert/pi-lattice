@@ -1,8 +1,8 @@
 /** Reading and writing the two settings files. What they may hold is the contract's business; this is only the files. */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
-import { latticeHome, parseSettings, repoConfigPath, resolveSettings, type SettingScope, type Settings, type SettingsFile, type SettingValue, userConfigPath, withSetting } from "@pi-lattice/protocol";
+import { latticeHome, parseSettings, repoConfigPath, resolveSettings, type SettingScope, type Settings, type SettingsFile, type SettingValue, type TemplateName, TEMPLATES, templatePaths, userConfigPath, withSetting } from "@pi-lattice/protocol";
 
 /** Where this person's own settings, roles and templates are kept. */
 export function userDir(): string {
@@ -70,5 +70,45 @@ export function writeSetting(scope: SettingScope, stateDir: string | undefined, 
 	// The file can hold credentials for background sessions, so only this person may read it.
 	writeFileSync(path, withSetting(text, key, value), { mode: 0o600 });
 	cache = undefined;
+	return path;
+}
+
+/** A template as it is used here: the text, and whose it is. */
+export interface TemplateRead {
+	name: TemplateName;
+	text: string;
+	source: "builtin" | "user" | "repo";
+	/** The file it was read from, when someone has replaced the built-in text. */
+	path: string | undefined;
+}
+
+/** The text pi-lattice uses for a template in a tree: this repository's, else the person's own, else the built-in one. */
+export function readTemplate(name: TemplateName, stateDir: string | undefined): TemplateRead {
+	for (const { path, source } of templatePaths(name, { stateDir, userDir: userDir() })) {
+		try {
+			const text = readFileSync(path, "utf8");
+			if (text.trim() !== "") return { name, text, source, path };
+		} catch {
+			// Not replaced there.
+		}
+	}
+	return { name, text: TEMPLATES[name].text, source: "builtin", path: undefined };
+}
+
+/** Where a person's replacement for a template goes. */
+export function templatePath(name: TemplateName, scope: SettingScope, stateDir: string | undefined): string {
+	const found = templatePaths(name, { stateDir, userDir: userDir() }).find((entry) => entry.source === scope);
+	if (!found) throw new Error("There is no session tree here to keep a repository's template in.");
+	return found.path;
+}
+
+/** Replace a template's text, or with `undefined` remove the replacement so the one under it is used again. */
+export function writeTemplate(name: TemplateName, scope: SettingScope, stateDir: string | undefined, text: string | undefined): string {
+	const path = templatePath(name, scope, stateDir);
+	if (text === undefined) rmSync(path, { force: true });
+	else {
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, text.endsWith("\n") ? text : `${text}\n`);
+	}
 	return path;
 }

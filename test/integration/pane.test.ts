@@ -378,4 +378,42 @@ describe("the tree inside Pi", () => {
 		const child = await until((s) => childrenOf(s.nodes, root.id)[0], "the child created from the dialogs");
 		expect(child).toMatchObject({ name: "grilling", kind: "grilling", fragments: ["protocol", "reporting", "worker", "grilling"], workspace: "shared", brief: "find the gaps in the checkout story" });
 	}, 120_000);
+	it("shows what a session is told and where each part comes from, and lets the texts be replaced", async () => {
+		const pi = await terminal();
+		await pi.prompt("hello");
+		await pi.command("/lattice");
+		await until((s) => s.nodes[0]?.status === "idle" && s.nodes[0], "the root");
+
+		// The first session of a tree is told the protocol, and nothing else it did not ask for.
+		await pi.prompt("which roles?");
+		await pi.waitForAssistant("echo[user] roles=[lattice-role-protocol] which roles?");
+		await pi.command("/lattice prompt");
+		const told = await pi.waitFor(() => pi.notifications().find((text) => text.startsWith("What this session is told")), "what the session is told");
+		expect(told).toContain("ROLES, as sections of the system prompt (1 applied, in this order)");
+		expect(told).toMatch(/── Role: protocol · built in · .*protocol\.md/);
+		expect(told).toContain("system prompt, section <lattice-role-protocol>");
+		expect(told).toContain("A `<lattice-message>` block is from another agent session.");
+		expect(told).toContain("── brief · built in");
+		expect(told).toContain("── child-stopped · built in");
+		expect(told).toContain("NOT EDITABLE");
+
+		// A template is replaced by saving the person's own copy of it; the host uses it for the next child.
+		const flow = pi.command("/lattice template brief");
+		const dialog = await pi.waitFor(() => pi.events.find((e) => e.type === "extension_ui_request" && e.method === "editor"), "the editor");
+		expect(String(dialog.title)).toContain("may mention {{parent.name}}");
+		expect(String(dialog.prefill)).toContain("Brief:\n{{brief}}");
+		pi.answer(dialog.id, { value: "FROM {{parent.name}}: {{brief}}" });
+		await flow;
+		await pi.waitFor(() => pi.notifications().find((text) => text.startsWith(`Saved ${join(sandbox.home, "templates", "brief.md")}`)), "the save");
+		await pi.command("/lattice template");
+		await pi.waitFor(() => pi.notifications().find((text) => /brief\s+yours/.test(text) && /handover\s+built in/.test(text)), "the templates listed");
+		await pi.command("/lattice prompt");
+		await pi.waitFor(() => pi.notifications().find((text) => text.includes("── brief · yours") && text.includes("FROM {{parent.name}}: {{brief}}")), "the replaced text shown");
+
+		await pi.prompt(spawnTool({ name: "kid", brief: "the word is heliotrope" }));
+		const kid = await until((s) => s.nodes.find((n) => n.name === "kid" && n.status === "idle"), "the child to settle");
+		expect(kid.fragments).toEqual(["protocol", "reporting", "worker"]);
+		const history = JSON.stringify((await (observer as HostClient).ui("messages", { nodeId: kid.id })).messages);
+		expect(history).toContain("FROM work: the word is heliotrope");
+	}, 120_000);
 });
