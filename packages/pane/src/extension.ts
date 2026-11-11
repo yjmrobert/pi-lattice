@@ -9,14 +9,13 @@
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
-import { HOST_ENV, type HostClient, type NodeEnv, type NodeMeta, type UiState } from "@pi-lattice/protocol";
-import { connectHost, hasTree, startHost, stateDirFor } from "./locate.ts";
+import { emitEvent, type HostAssignment, type HostClient, type NodeMeta, type UiState } from "@pi-lattice/protocol";
+import { connectHost, hasTree, launchHost, stateDirFor } from "./locate.ts";
 import { type Paint, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "./view.ts";
 
 const NODE_ENTRY = "lattice:node";
 const PANE_WIDTH = 34;
 const MIN_TERMINAL_WIDTH = 90;
-const ENV_KEYS = Object.values(HOST_ENV);
 
 type Hooked = TUI & { layoutRoot?: Component; setLayoutRoot?(component: Component | undefined): void };
 
@@ -31,6 +30,8 @@ interface Shared {
 	state: UiState | undefined;
 	/** The node open in this terminal. */
 	current: string | undefined;
+	/** What lets the open session speak as that node. Announced to the other extensions at each session start. */
+	assignment: HostAssignment | undefined;
 	selected: string | undefined;
 	focused: boolean;
 	paint: Paint;
@@ -43,7 +44,7 @@ interface Shared {
 const KEY = Symbol.for("pi-lattice.pane");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
-	client: undefined, stateDir: undefined, state: undefined, current: undefined, selected: undefined, focused: false, paint: PLAIN,
+	client: undefined, stateDir: undefined, state: undefined, current: undefined, assignment: undefined, selected: undefined, focused: false, paint: PLAIN,
 	tui: undefined, wrapped: false, pi: undefined, ctx: undefined, refreshing: undefined,
 });
 
@@ -59,13 +60,13 @@ function view(): PaneView {
 
 function redraw(): void {
 	shared.tui?.requestRender();
-	const ctx = shared.ctx;
-	if (ctx?.mode === "tui" && !shared.wrapped) ctx.ui.setWidget("lattice", shared.client ? renderCompact(view()) : undefined);
-}
-
-function setEnv(env: NodeEnv | undefined): void {
-	for (const key of ENV_KEYS) delete process.env[key];
-	if (env) Object.assign(process.env, env);
+	// Between one session ending and the next starting there is no usable context; a redraw then simply waits.
+	try {
+		const ctx = shared.ctx;
+		if (ctx?.mode === "tui" && !shared.wrapped) ctx.ui.setWidget("lattice", shared.client ? renderCompact(view()) : undefined);
+	} catch {
+		shared.ctx = undefined;
+	}
 }
 
 /** The node id recorded in a session, if it is a lattice node. */
@@ -103,7 +104,13 @@ function adoptClient(client: HostClient, stateDir: string): void {
 	client.onFrame((frame) => {
 		if (frame.t !== "event") return;
 		if (frame.kind === "changed") void refresh();
-		else if (frame.kind === "log" && frame.message && shared.ctx?.hasUI) shared.ctx.ui.notify(frame.message, "info");
+		else if (frame.kind === "log" && frame.message) {
+			try {
+				if (shared.ctx?.hasUI) shared.ctx.ui.notify(frame.message, "info");
+			} catch {
+				shared.ctx = undefined; // the session that context belonged to has ended
+			}
+		}
 	});
 }
 
@@ -189,12 +196,12 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		if (shared.current && shared.current !== nodeId) {
 			await client.ui("detach", { nodeId: shared.current }).catch(() => {});
 			shared.current = undefined;
-			setEnv(undefined);
+			shared.assignment = undefined;
 		}
 		if (!nodeId) return undefined;
 		const result = await client.ui("attach", { nodeId });
 		shared.current = nodeId;
-		setEnv(result.env);
+		shared.assignment = result.assignment;
 		return { sessionFile: result.sessionFile };
 	};
 
@@ -205,7 +212,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		try {
 			if (!shared.client || shared.client.isClosed) {
 				shared.client = undefined;
-				const client = (await connectHost(stateDir)) ?? (hasTree(stateDir) ? await startHost(stateDir, ctx.cwd) : undefined);
+				const client = (await connectHost(stateDir)) ?? (hasTree(stateDir) ? await launchHost(pi.events, stateDir, ctx.cwd) : undefined);
 				if (client) adoptClient(client, stateDir);
 			}
 			if (shared.client) {
@@ -218,6 +225,9 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				const here = mine(node) ? node.id : undefined;
 				if (here !== shared.current) await attach(here);
 			}
+			// Tell the messaging, roles and tree extensions which node this session is, if any.
+			// They rebind whenever they hear this, so it does not matter which of us started first.
+			emitEvent(pi.events, "lattice:host:assigned", { assignment: shared.current ? (shared.assignment ?? null) : null });
 		} catch (error) {
 			if (ctx.hasUI) ctx.ui.notify(`pi-lattice: ${error instanceof Error ? error.message : String(error)}`, "warning");
 		}
@@ -247,6 +257,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async (event) => {
+		// This session's objects are about to go stale. The next session's start supplies fresh ones.
+		if (shared.pi === pi) {
+			shared.pi = undefined;
+			shared.ctx = undefined;
+		}
 		if (event.reason !== "quit") return; // a session switch keeps the terminal's connection
 		if (shared.current) await shared.client?.ui("detach", { nodeId: shared.current }).catch(() => {});
 		shared.current = undefined;
@@ -283,22 +298,23 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		const stateDir = stateDirFor(ctx.cwd);
-		adoptClient(await startHost(stateDir, ctx.cwd), stateDir);
+		adoptClient(await launchHost(pi.events, stateDir, ctx.cwd), stateDir);
 		await refresh();
 		const existing = recordedNode(ctx);
 		if (existing && mine(find(existing))) {
 			await attach(existing);
 		} else {
 			const client = shared.client as HostClient;
-			const { node, env } = await client.ui("adopt", {
+			const { node, assignment } = await client.ui("adopt", {
 				sessionFile, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, name: pi.getSessionName() ?? basename(ctx.cwd),
 			});
 			shared.current = node.id;
-			setEnv(env);
+			shared.assignment = assignment;
 		}
+		// The messaging, roles and tree extensions take up the node's identity as soon as they hear of it.
+		emitEvent(pi.events, "lattice:host:assigned", { assignment: shared.assignment ?? null });
+		await refresh();
 		ctx.ui.notify("This session is now part of a lattice tree. alt+l moves to the session pane; /lattice new creates a child.", "info");
-		// The messaging and tree extensions pick up their node identity when the session reloads.
-		await ctx.reload();
 	};
 
 	const open = async (ctx: ExtensionCommandContext, text: string): Promise<void> => {
@@ -458,7 +474,10 @@ export default function paneExtension(pi: ExtensionAPI): void {
 							"This stops the session here and sends its whole conversation, including any file contents and command output in it, directly to them, with its branch if it has one. After this you can no longer run it.",
 						);
 						if (!sure) return;
-						if (handoff.nodeId === shared.current) await attach(undefined);
+						if (handoff.nodeId === shared.current) {
+							await attach(undefined);
+							emitEvent(pi.events, "lattice:host:assigned", { assignment: null });
+						}
 						await run("confirm", [handoff.nodeId]);
 					},
 				});
@@ -525,7 +544,8 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			const [sub = "", ...rest] = args.trim().split(/\s+/).filter(Boolean);
 			const arg = rest.join(" ");
 			try {
-				if (sub === "" && !shared.client) await begin(ctx);
+				// With no argument: bring this session into the tree if it is not in it yet; otherwise show the tree.
+				if (sub === "" && !shared.current) await begin(ctx);
 				else if (sub === "" || sub === "status") {
 					await refresh();
 					const state = shared.state;
@@ -546,6 +566,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 					const client = need(ctx);
 					if (!client) return;
 					await attach(undefined);
+					emitEvent(pi.events, "lattice:host:assigned", { assignment: null });
 					await client.ui("shutdown", {}).catch(() => {});
 					client.close();
 					shared.client = undefined;

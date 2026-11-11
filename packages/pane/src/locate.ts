@@ -1,11 +1,9 @@
-/** Finding, starting and connecting to the project's background host. */
-import { execFileSync, spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+/** Finding and connecting to the project's background host. */
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { HostClient } from "@pi-lattice/protocol";
+import { emitEvent, type EventBus, HostClient } from "@pi-lattice/protocol";
 
 /** The directory that owns the tree for a working directory: the main checkout of its repository, else itself. */
 export function projectRoot(cwd: string): string {
@@ -73,50 +71,23 @@ export async function connectHost(stateDir: string): Promise<HostClient | undefi
 	}
 }
 
-/** The host's command-line entry point, found through this package's dependency on it. */
-function hostCli(): string {
-	try {
-		return join(dirname(createRequire(import.meta.url).resolve("@pi-lattice/host/package.json")), "src", "cli.ts");
-	} catch {
-		return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "host", "src", "cli.ts");
-	}
-}
-
 /**
- * The Pi package the headless sessions should load so they get the same lattice
- * extensions as this terminal: the bundle this file ships in.
+ * Ask for a host to be started for a project, then connect to it. The pane does not know
+ * how hosts are started: it asks on the event bus, and whoever can start one does.
  */
-function bundlePaths(): string[] {
-	const here = dirname(fileURLToPath(import.meta.url));
-	const repo = resolve(here, "..", "..", "..");
-	try {
-		const manifest = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { pi?: { extensions?: string[] } };
-		if (manifest.pi?.extensions?.some((entry) => entry.includes("pane"))) return [repo];
-	} catch {
-		// Not running from the bundle.
-	}
-	return ["pane", "a2a", "roles", "graph"].map((name) => resolve(here, "..", "..", name));
-}
-
-/** Start the background host for a project and connect to it. */
-export async function startHost(stateDir: string, cwd: string, timeoutMs = 20_000): Promise<HostClient> {
+export async function launchHost(bus: EventBus, stateDir: string, cwd: string, timeoutMs = 20_000): Promise<HostClient> {
 	const existing = await connectHost(stateDir);
 	if (existing) return existing;
-	mkdirSync(stateDir, { recursive: true });
-	const log = openSync(join(stateDir, "daemon.err"), "a");
-	const child = spawn(process.execPath, [hostCli(), "daemon", "--state", stateDir, "--cwd", projectRoot(cwd)], {
-		cwd: projectRoot(cwd),
-		detached: true,
-		stdio: ["ignore", log, log],
-		env: { ...process.env, LATTICE_EXTENSION_PATHS: process.env.LATTICE_EXTENSION_PATHS ?? JSON.stringify(bundlePaths()) },
-	});
-	child.unref();
-	closeSync(log);
+	const request = { stateDir, cwd: projectRoot(cwd), claimed: false };
+	emitEvent(bus, "lattice:host:launch", request);
+	if (!request.claimed) {
+		throw new Error("Nothing here can start a lattice host. Install the pi-lattice package into Pi, or start a host yourself with `pi-lattice daemon`.");
+	}
 	const end = Date.now() + timeoutMs;
 	for (;;) {
 		const client = await connectHost(stateDir);
 		if (client) return client;
-		if (child.exitCode !== null || Date.now() > end) {
+		if (Date.now() > end) {
 			let detail = "";
 			try {
 				detail = readFileSync(join(stateDir, "daemon.err"), "utf8").trim().split("\n").slice(-3).join(" ");

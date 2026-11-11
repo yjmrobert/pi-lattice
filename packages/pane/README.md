@@ -2,7 +2,7 @@
 
 The session tree inside Pi. A left pane lists the tree's sessions with who owns each and which repository it works in; you open any of them in this terminal and get all of Pi for it.
 
-It is one of the four extensions in the pi-lattice bundle. Install the bundle, not this package alone.
+It is one of the extensions in the pi-lattice bundle, and that is the usual way to get it. On its own it depends only on the shared contracts: it shows the tree of any host already running for the project, and asks on the event bus for one to be started. If nothing answers, it says what is missing.
 
 ## Use it
 
