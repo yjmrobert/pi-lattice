@@ -44,6 +44,22 @@ describe("secure channel", () => {
 		close();
 	});
 
+	it("holds frames that arrive before anyone is listening", async () => {
+		const { client, server, close } = await tcpPair();
+		const [a, b] = await Promise.all([
+			openChannel(client, { identity: yan, initiator: true, keyOf: book(sam) }),
+			openChannel(server, { identity: sam, initiator: false, keyOf: book(yan) }),
+		]);
+		a.send("early one");
+		a.send("early two");
+		await new Promise((resolve) => setTimeout(resolve, 50)); // b has not attached a listener yet
+		const received: unknown[] = [];
+		const done = new Promise<void>((resolve) => b.on("message", (m) => { received.push(m); if (received.length === 2) resolve(); }));
+		await done;
+		expect(received).toEqual(["early one", "early two"]);
+		close();
+	});
+
 	it("delivers many frames in order, including one large one", async () => {
 		const { client, server, close } = await tcpPair();
 		const [a, b] = await Promise.all([

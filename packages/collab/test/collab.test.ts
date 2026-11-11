@@ -1,19 +1,22 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEnvelope, type Envelope, type NodeMeta, newNodeId } from "@pi-lattice/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CollabSession, GitSharedStore, type HostPort, Identity, TrustStore } from "../src/index.ts";
+import { CollabSession, formatInvite, type HostPort, Identity, parseInvite, PeerBook, TcpTransport } from "../src/index.ts";
 
 /** An in-memory stand-in for a lattice host. */
-class FakeHost implements HostPort {
+class FakeHost extends EventEmitter implements HostPort {
 	readonly owner: string;
 	readonly store = new Map<string, NodeMeta>();
 	readonly delivered: Array<{ envelope: Envelope; recipient: string }> = [];
 	readonly slept: string[] = [];
+	readonly conversations = new Map<string, unknown[]>();
 	router: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined;
+	failNextAdoption = false;
 	constructor(owner: string) {
+		super();
 		this.owner = owner;
 	}
 	add(name: string, parentId: string | null = null, over: Partial<NodeMeta> = {}): NodeMeta {
@@ -22,200 +25,270 @@ class FakeHost implements HostPort {
 			id, parentId, rootId: parentId ? (this.store.get(parentId)?.rootId ?? parentId) : id, kind: "task", name, brief: "brief", fragments: ["worker"], owner: this.owner, version: 1,
 			status: "idle", sessionId: null, sessionFile: null, cwd: "/local/only", workspace: "shared", branch: null, createdAt: new Date().toISOString(), updatedAt: "", ...over,
 		};
-		this.store.set(id, node);
+		this.set(node);
 		return node;
+	}
+	set(node: NodeMeta): void {
+		this.store.set(node.id, node);
+		this.emit("node", node);
 	}
 	nodes = () => [...this.store.values()];
 	node = (id: string) => this.store.get(id);
 	sleep = async (id: string) => void this.slept.push(id);
+	readMessages = async (id: string) => this.conversations.get(id) ?? [];
 	setRemoteRouter = (router: typeof this.router) => {
 		this.router = router;
 	};
 	importRemoteNode: HostPort["importRemoteNode"] = (node) => {
 		const existing = this.store.get(node.id);
 		if (existing?.owner === this.owner) return;
-		this.store.set(node.id, { ...(existing ?? { sessionId: null, sessionFile: null, cwd: "", updatedAt: "" }), ...node });
+		this.set({ ...(existing ?? { sessionId: null, sessionFile: null, cwd: "", updatedAt: "" }), ...node });
 	};
 	deliverExternal = (envelope: unknown, recipient: string) => void this.delivered.push({ envelope: envelope as Envelope, recipient });
 	releaseNode = async (id: string, toOwner: string, version: number) => {
 		const node = this.store.get(id);
-		if (node) this.store.set(id, { ...node, owner: toOwner, version });
+		if (node) this.set({ ...node, owner: toOwner, version });
 	};
 	adoptNode: HostPort["adoptNode"] = (id, options) => {
+		if (this.failNextAdoption) {
+			this.failNextAdoption = false;
+			throw new Error("disk full");
+		}
 		const node = { ...(this.store.get(id) as NodeMeta), owner: this.owner, version: options.version, cwd: options.cwd, branch: options.branch, workspace: options.workspace };
-		this.store.set(id, node);
+		this.set(node);
 		return node;
 	};
 }
 
 let root: string;
-let remote: string;
 let clock: number;
+let sessions: CollabSession[];
 beforeEach(() => {
 	root = mkdtempSync(join(tmpdir(), "pi-lattice-collab-"));
-	remote = join(root, "shared.git");
-	execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
 	clock = Date.now();
+	sessions = [];
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(async () => {
+	await Promise.all(sessions.map((session) => session.stop().catch(() => {})));
+	rmSync(root, { recursive: true, force: true });
+});
 
-const join_ = (name: string) => {
+const until = async (probe: () => unknown, what = "condition", ms = 5000) => {
+	const end = Date.now() + ms;
+	while (!probe()) {
+		if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+};
+
+interface Seat {
+	host: FakeHost;
+	collab: CollabSession;
+	logs: string[];
+	dir: string;
+}
+const seat = (name: string, keyDir?: string): Seat => {
 	const host = new FakeHost(name);
-	const dir = join(root, name);
+	const dir = join(root, keyDir ?? name);
 	mkdirSync(join(dir, "project"), { recursive: true });
 	const collab = new CollabSession({
-		host, identity: Identity.loadOrCreate(join(dir, "keys"), name), trust: new TrustStore(join(dir, "trusted.json")),
-		store: new GitSharedStore({ remote, dir: join(dir, "shared"), author: name }), dir: join(dir, "collab"), projectDir: join(dir, "project"),
-		pollMs: 0, offerTtlMs: 60_000, now: () => clock,
+		host, identity: Identity.loadOrCreate(join(dir, "keys"), name), peers: new PeerBook(join(dir, "peers.json")),
+		transport: new TcpTransport({ host: "127.0.0.1", port: 0 }), dir: join(dir, "collab"), projectDir: join(dir, "project"),
+		advertise: "127.0.0.1", redialMs: 0, offerTtlMs: 60_000, requestTimeoutMs: 5000, now: () => clock,
 	});
+	sessions.push(collab);
 	const logs: string[] = [];
 	collab.on("log", (_level, message) => logs.push(message));
 	return { host, collab, logs, dir };
 };
-/** Two people who have joined and trusted each other; yan has a root with one child. */
+/** Two people, paired by exchanging invites and connected; yan has a root with one child. */
 const pair = async () => {
-	const yan = join_("yan");
-	const sam = join_("sam");
+	const yan = seat("yan");
+	const sam = seat("sam");
 	const top = yan.host.add("checkout");
 	const kid = yan.host.add("impl", top.id);
 	await yan.collab.start();
 	await sam.collab.start();
-	await yan.collab.sync();
-	await yan.collab.trustPerson("sam");
-	await sam.collab.trustPerson("yan");
+	await sam.collab.addInvite(yan.collab.invite());
+	await yan.collab.addInvite(sam.collab.invite());
+	await until(() => yan.collab.isOnline("sam") && sam.collab.isOnline("yan"), "both to be online");
+	await until(() => sam.host.node(kid.id), "sam to see yan's nodes");
 	return { yan, sam, top, kid };
 };
+const handOver = async (from: Seat, to: Seat, nodeId: string) => {
+	await from.collab.offer(nodeId, to.host.owner);
+	await until(() => to.collab.handoffs().some((h) => h.nodeId === nodeId && h.state === "offered"), "the offer to arrive");
+	await to.collab.accept(nodeId);
+	await from.collab.confirm(nodeId);
+	await until(() => to.host.node(nodeId)?.owner === to.host.owner, "the new owner to take over");
+};
 
-describe("sharing a tree", () => {
-	it("shows nothing from a person until the human trusts their key", async () => {
-		const yan = join_("yan");
-		const sam = join_("sam");
+describe("invites", () => {
+	it("round-trip a name, address and key, and reject anything else", () => {
+		const identity = Identity.loadOrCreate(join(root, "k"), "yan");
+		const invite = formatInvite({ name: "yan", address: "10.0.0.5:47610", publicKey: identity.publicKey });
+		expect(invite).toMatch(/^yan@10\.0\.0\.5:47610#[A-Za-z0-9_-]{43}$/); // short enough to stay on one line
+		expect(parseInvite(` ${invite}\n`)).toEqual({ name: "yan", address: "10.0.0.5:47610", publicKey: identity.publicKey });
+		for (const bad of ["", "yan", "yan@host#key", "../x@h:1#k", "yan@h:1#"]) expect(() => parseInvite(bad)).toThrow(/not an invite/);
+	});
+});
+
+describe("pairing", () => {
+	it("lets nobody in until the human pairs with them, and shows who knocked", async () => {
+		const yan = seat("yan");
+		const sam = seat("sam");
 		yan.host.add("checkout");
 		await yan.collab.start();
 		await sam.collab.start();
+
+		await sam.collab.addInvite(yan.collab.invite()); // sam knows yan; yan does not know sam yet
+		await until(() => yan.collab.people().some((p) => p.name === "sam"), "yan to see the knock");
+		expect(yan.collab.people().find((p) => p.name === "sam")).toMatchObject({ trust: "unknown", online: false });
+		expect(yan.collab.people().find((p) => p.name === "sam")?.fingerprint).toBe(sam.collab.people().find((p) => p.self)?.fingerprint);
+		expect(sam.collab.isOnline("yan")).toBe(false);
 		expect(sam.host.nodes()).toEqual([]);
-		expect(sam.collab.people().find((p) => p.name === "yan")).toMatchObject({ trust: "unknown", self: false });
-		expect(sam.logs.join("\n")).toContain("you have not trusted yan yet");
 
-		await sam.collab.trustPerson("yan");
+		await yan.collab.trustPerson("sam");
+		expect(await sam.collab.dial("yan")).toBe(true);
+		await until(() => sam.host.nodes().length === 1, "yan's node to appear for sam");
 		expect(sam.host.nodes().map((n) => [n.name, n.owner])).toEqual([["checkout", "yan"]]);
+		expect(yan.collab.people().find((p) => p.name === "sam")).toMatchObject({ trust: "trusted", online: true });
 	});
 
-	it("shares the tree without local paths, and keeps remote nodes marked with their owner", async () => {
+	it("shares nodes without local paths", async () => {
 		const { sam, top, kid } = await pair();
-		const seen = sam.host.node(kid.id);
-		expect(seen).toMatchObject({ name: "impl", owner: "yan", parentId: top.id, version: 1, fragments: ["worker"] });
-		expect(seen?.cwd).toBe("");
+		expect(sam.host.node(kid.id)).toMatchObject({ name: "impl", owner: "yan", parentId: top.id, version: 1, fragments: ["worker"], cwd: "" });
 	});
 
-	it("reflects a renamed or re-roled node on the other side", async () => {
+	it("pushes a change to connected peers without polling", async () => {
 		const { yan, sam, kid } = await pair();
-		yan.host.store.set(kid.id, { ...kid, name: "implementation", fragments: ["worker", "implementation"], status: "running" });
-		await yan.collab.sync();
-		await sam.collab.sync();
-		expect(sam.host.node(kid.id)).toMatchObject({ name: "implementation", fragments: ["worker", "implementation"], status: "running" });
+		yan.host.set({ ...kid, name: "implementation", fragments: ["worker", "implementation"], status: "running" });
+		await until(() => sam.host.node(kid.id)?.name === "implementation", "the rename to arrive");
+		expect(sam.host.node(kid.id)).toMatchObject({ fragments: ["worker", "implementation"], status: "running" });
 	});
 
-	it("stops believing a person whose published key changes", async () => {
-		const { sam, top } = await pair();
-		// Someone replaces yan's published key with their own.
-		const impostor = join_("yan2");
-		rmSync(join(impostor.dir, "keys"), { recursive: true, force: true });
-		const fake = Identity.loadOrCreate(join(impostor.dir, "keys"), "yan");
-		const store = new GitSharedStore({ remote, dir: join(impostor.dir, "raw"), author: "impostor" });
-		await store.commit("swap key", (tx) => tx.write("people/yan.json", JSON.stringify(fake.sign({ name: "yan", publicKey: fake.publicKey, at: "x" }))));
-		await sam.collab.sync();
-		expect(sam.collab.people().find((p) => p.name === "yan")?.trust).toBe("changed");
-		expect(sam.host.node(top.id)?.owner).toBe("yan"); // what was already verified stays; nothing new is believed
+	it("shows a peer as offline when they leave, keeps their nodes as last seen, and reconnects", async () => {
+		const { yan, sam, kid } = await pair();
+		await sam.collab.stop();
+		await until(() => !yan.collab.isOnline("sam"), "yan to notice sam left");
+		expect(yan.collab.people().find((p) => p.name === "sam")?.online).toBe(false);
+
+		const back = seat("sam"); // same key and peer book, new process
+		await back.collab.start();
+		await until(() => back.collab.isOnline("yan"), "sam to reconnect");
+		await until(() => back.host.node(kid.id), "the tree to be fetched again");
+		expect(yan.collab.isOnline("sam")).toBe(true);
+	});
+
+	it("refuses someone using a paired name with a different key, and says so", async () => {
+		const { yan, sam } = await pair();
+		await sam.collab.stop();
+		await until(() => !yan.collab.isOnline("sam"));
+		const impostor = seat("sam", "impostor");
+		await impostor.collab.start();
+		await impostor.collab.addInvite(yan.collab.invite());
+		await until(() => yan.collab.people().find((p) => p.name === "sam")?.trust === "changed", "the changed key to be flagged");
+		expect(yan.collab.isOnline("sam")).toBe(false);
+		expect(impostor.host.nodes()).toEqual([]);
+		expect(yan.logs.join("\n")).toContain("with a different key");
 	});
 });
 
 describe("handoff", () => {
-	it("moves a node only after offer, accept and confirm, with both sides agreeing", async () => {
+	it("moves a node only after offer, accept and confirm", async () => {
 		const { yan, sam, kid } = await pair();
 		await yan.collab.offer(kid.id, "sam");
-		await sam.collab.sync();
+		await until(() => sam.collab.handoffs().length === 1, "sam to see the offer");
 		expect(sam.collab.handoffs()).toMatchObject([{ nodeId: kid.id, from: "yan", to: "sam", state: "offered", role: "recipient" }]);
-		expect(yan.host.node(kid.id)?.owner).toBe("yan");
-
 		await expect(yan.collab.confirm(kid.id)).rejects.toThrow(/has not accepted yet/);
+
 		await sam.collab.accept(kid.id);
 		expect(sam.host.node(kid.id)?.owner).toBe("yan"); // accepted, not yet released
+		expect(yan.collab.handoffs()[0]?.state).toBe("accepted");
 
 		await yan.collab.confirm(kid.id);
 		expect(yan.host.node(kid.id)).toMatchObject({ owner: "sam", version: 2 });
 		expect(yan.host.slept).toContain(kid.id);
-
-		await sam.collab.sync();
-		expect(sam.host.node(kid.id)).toMatchObject({ owner: "sam", version: 2, cwd: join(root, "sam", "project") });
-		expect(sam.collab.handoffs()).toEqual([]);
-		expect(yan.collab.handoffs()).toEqual([]);
+		await until(() => sam.host.node(kid.id)?.owner === "sam", "sam to take over");
+		expect(sam.host.node(kid.id)).toMatchObject({ version: 2, cwd: join(root, "sam", "project") });
+		expect(yan.collab.pendingTransfers()).toEqual([]);
+		expect([yan.collab.handoffs(), sam.collab.handoffs()]).toEqual([[], []]);
 	});
 
-	it("refuses to offer to someone who is unknown or untrusted", async () => {
-		const yan = join_("yan");
-		const sam = join_("sam");
-		const top = yan.host.add("checkout");
-		await yan.collab.start();
-		await expect(yan.collab.offer(top.id, "sam")).rejects.toThrow(/Nobody called "sam"/);
-		await sam.collab.start();
-		await expect(yan.collab.offer(top.id, "sam")).rejects.toThrow(/Trust sam first/);
-	});
-
-	it("lets only the owner offer, and only the named recipient accept", async () => {
+	it("refuses to offer to someone unpaired, and to offer what is not yours", async () => {
 		const { yan, sam, kid } = await pair();
+		await expect(yan.collab.offer(kid.id, "kim")).rejects.toThrow(/not paired with anyone called "kim"/);
 		await expect(sam.collab.offer(kid.id, "yan")).rejects.toThrow(/only its owner can offer it/);
-		const kim = join_("kim");
-		await kim.collab.start();
-		await kim.collab.trustPerson("yan");
-		await yan.collab.offer(kid.id, "sam");
-		await kim.collab.sync();
-		expect(kim.collab.handoffs()).toEqual([]);
-		await expect(kim.collab.accept(kid.id)).rejects.toThrow(/no open handoff/);
 	});
 
-	it("lets either side cancel before the release, leaving the owner in place", async () => {
+	it("lets the recipient decline and the owner withdraw, leaving the owner in place", async () => {
 		const { yan, sam, kid } = await pair();
 		await yan.collab.offer(kid.id, "sam");
+		await until(() => sam.collab.handoffs().length === 1);
 		await sam.collab.accept(kid.id);
 		await sam.collab.cancel(kid.id);
 		await expect(yan.collab.confirm(kid.id)).rejects.toThrow(/no open handoff/);
+
+		await yan.collab.offer(kid.id, "sam");
+		await until(() => sam.collab.handoffs().length === 1);
+		await yan.collab.cancel(kid.id);
+		await until(() => sam.collab.handoffs().length === 0, "sam to see the withdrawal");
 		expect(yan.host.node(kid.id)).toMatchObject({ owner: "yan", version: 1 });
 	});
 
 	it("voids an offer that is not completed in time", async () => {
 		const { yan, sam, kid } = await pair();
 		await yan.collab.offer(kid.id, "sam");
+		await until(() => sam.collab.handoffs().length === 1);
 		clock += 61_000;
-		await sam.collab.sync();
 		expect(sam.collab.handoffs()).toEqual([]);
 		await expect(sam.collab.accept(kid.id)).rejects.toThrow(/no open handoff/);
 	});
 
-	it("rejects the previous owner's attempt to act after the handoff", async () => {
+	it("needs both people online for accept and for confirm", async () => {
 		const { yan, sam, kid } = await pair();
 		await yan.collab.offer(kid.id, "sam");
+		await until(() => sam.collab.handoffs().length === 1);
+		await yan.collab.stop();
+		await until(() => !sam.collab.isOnline("yan"));
+		await expect(sam.collab.accept(kid.id)).rejects.toThrow(/yan is offline/);
+	});
+
+	it("keeps a released session until the new owner confirms receiving it, and sends it again", async () => {
+		const { yan, sam, kid } = await pair();
+		await yan.collab.offer(kid.id, "sam");
+		await until(() => sam.collab.handoffs().length === 1);
 		await sam.collab.accept(kid.id);
+		sam.host.failNextAdoption = true; // the first delivery fails on sam's side
 		await yan.collab.confirm(kid.id);
-		await expect(yan.collab.offer(kid.id, "sam")).rejects.toThrow(/only its owner can offer it/);
-		// Even with a stale local view that still says "mine", the shared log refuses it.
-		yan.host.store.set(kid.id, { ...(yan.host.node(kid.id) as NodeMeta), owner: "yan", version: 1 });
-		await yan.collab.sync();
-		expect(yan.host.node(kid.id)).toMatchObject({ owner: "sam", version: 2 });
+
+		expect(yan.host.node(kid.id)?.owner).toBe("sam"); // the release is committed
+		expect(yan.collab.pendingTransfers()).toEqual([{ nodeId: kid.id, to: "sam" }]); // but the package is kept
+		expect(sam.host.node(kid.id)?.owner).toBe("yan");
+		expect(yan.logs.join("\n")).toContain("has not reached them yet");
+
+		await yan.collab.refresh(); // any later contact retries
+		await until(() => sam.host.node(kid.id)?.owner === "sam", "the retry to land");
+		expect(yan.collab.pendingTransfers()).toEqual([]);
 	});
 
 	it("can hand a node back", async () => {
 		const { yan, sam, kid } = await pair();
-		await yan.collab.offer(kid.id, "sam");
-		await sam.collab.accept(kid.id);
-		await yan.collab.confirm(kid.id);
-		await sam.collab.sync();
-		await sam.collab.offer(kid.id, "yan");
-		await yan.collab.accept(kid.id);
-		await sam.collab.confirm(kid.id);
-		await yan.collab.sync();
+		await handOver(yan, sam, kid.id);
+		await until(() => yan.host.node(kid.id)?.owner === "sam");
+		await handOver(sam, yan, kid.id);
 		expect(yan.host.node(kid.id)).toMatchObject({ owner: "yan", version: 3 });
-		expect(sam.host.node(kid.id)).toMatchObject({ owner: "yan", version: 3 });
+		await until(() => sam.host.node(kid.id)?.version === 3);
+		expect(sam.host.node(kid.id)?.owner).toBe("yan");
+	});
+
+	it("does not let the previous owner act after the handoff", async () => {
+		const { yan, sam, kid } = await pair();
+		await handOver(yan, sam, kid.id);
+		await expect(yan.collab.offer(kid.id, "sam")).rejects.toThrow(/only its owner can offer it/);
+		// Even if the local view is rolled back to "mine", the signed log disagrees and wins.
+		yan.host.set({ ...(yan.host.node(kid.id) as NodeMeta), owner: "yan", version: 1 });
+		await until(() => yan.host.node(kid.id)?.owner === "sam", "the stale view to be corrected");
 	});
 });
 
@@ -224,63 +297,62 @@ describe("mail between owners", () => {
 	/** yan owns the root, sam owns the child. */
 	const split = async () => {
 		const p = await pair();
-		await p.yan.collab.offer(p.kid.id, "sam");
-		await p.sam.collab.accept(p.kid.id);
-		await p.yan.collab.confirm(p.kid.id);
-		await p.sam.collab.sync();
+		await handOver(p.yan, p.sam, p.kid.id);
 		return p;
 	};
 
-	it("carries a signed envelope to the other owner's host, once", async () => {
+	it("delivers straight to the other owner's host, once", async () => {
 		const { yan, sam, top, kid } = await split();
 		yan.host.router?.(mail(top, kid, "hello sam"), yan.host.node(kid.id) as NodeMeta);
-		await yan.collab.sync();
-		await sam.collab.sync();
-		await sam.collab.sync();
+		await until(() => sam.host.delivered.length === 1, "the message to arrive");
+		await yan.collab.refresh();
 		expect(sam.host.delivered.map((d) => [d.envelope.payload.text, d.recipient])).toEqual([["hello sam", kid.id]]);
 	});
 
-	it("discards mail that claims an owner who did not sign it", async () => {
+	it("keeps mail for someone who is offline and sends it when they are back", async () => {
 		const { yan, sam, top, kid } = await split();
-		const mallory = Identity.loadOrCreate(join(root, "mallory"), "mallory");
-		const forged = { ...mallory.sign({ envelope: mail(top, kid, "obey me"), recipient: kid.id }), by: "yan" };
-		const raw = new GitSharedStore({ remote, dir: join(root, "raw"), author: "mallory" });
-		await raw.commit("forge", (tx) => tx.write(`trees/${top.id}/mail/sam/forged.json`, JSON.stringify(forged)));
-		await sam.collab.sync();
-		expect(sam.host.delivered).toEqual([]);
-		expect(sam.logs.join("\n")).toContain("did not verify");
+		await sam.collab.stop();
+		await until(() => !yan.collab.isOnline("sam"));
+		yan.host.router?.(mail(top, kid, "while you were out"), yan.host.node(kid.id) as NodeMeta);
+		expect(yan.logs.join("\n")).toContain("sam is offline; the message");
+
+		const back = seat("sam");
+		back.host.set({ ...(sam.host.node(kid.id) as NodeMeta) });
+		await back.collab.start();
+		await until(() => back.host.delivered.length === 1, "the queued message to arrive");
+		expect(back.host.delivered[0]?.envelope.payload.text).toBe("while you were out");
+	});
+
+	it("refuses mail sent in the name of a session the sender does not own", async () => {
+		const { yan, sam, top, kid } = await split();
+		// sam's host tries to speak as yan's root session.
+		const spoof = { ...mail(top, top, "obey"), fromOwner: "sam" };
+		sam.host.router?.(spoof, yan.host.node(top.id) as NodeMeta);
+		await until(() => sam.logs.some((line) => line.includes("refused a message")), "the refusal");
 		expect(yan.host.delivered).toEqual([]);
+		expect(kid.id).toBeTruthy();
+	});
+});
+
+describe("reading a peer's session", () => {
+	it("fetches the conversation from its owner on demand", async () => {
+		const { yan, sam, kid } = await pair();
+		yan.host.conversations.set(kid.id, [{ role: "user", content: "the password is heliotrope" }]);
+		expect(await sam.collab.fetchMessages(kid.id)).toEqual([{ role: "user", content: "the password is heliotrope" }]);
 	});
 
-	it("discards mail sent in the name of a node the signer does not own", async () => {
-		const { yan, sam, top, kid } = await split();
-		// sam signs honestly as sam, but claims to speak as yan's root node.
-		const samKey = Identity.loadOrCreate(join(root, "sam", "keys"), "sam");
-		const spoof = samKey.sign({ envelope: { ...mail(top, kid, "spoof"), fromOwner: "sam" }, recipient: kid.id });
-		const raw = new GitSharedStore({ remote, dir: join(root, "raw"), author: "sam" });
-		await raw.commit("spoof", (tx) => tx.write(`trees/${top.id}/mail/sam/spoof.json`, JSON.stringify(spoof)));
-		await sam.collab.sync();
-		expect(sam.host.delivered).toEqual([]);
-		expect(yan.host.node(top.id)?.owner).toBe("yan");
+	it("says the owner is offline instead of hanging", async () => {
+		const { yan, sam, kid } = await pair();
+		await yan.collab.stop();
+		await until(() => !sam.collab.isOnline("yan"));
+		await expect(sam.collab.fetchMessages(kid.id)).rejects.toThrow(/yan is offline/);
 	});
 
-	it("holds mail from a person not yet trusted instead of dropping it", async () => {
-		const yan = join_("yan");
-		const sam = join_("sam");
-		const top = yan.host.add("checkout");
-		const kid = sam.host.add("helper", null, { rootId: top.id, parentId: top.id });
-		await yan.collab.start();
-		await sam.collab.start();
-		await yan.collab.sync();
-		await yan.collab.trustPerson("sam"); // yan trusts sam; sam has not trusted yan
-		yan.host.router?.(mail(top, yan.host.node(kid.id) as NodeMeta, "are you there"), yan.host.node(kid.id) as NodeMeta);
-		await yan.collab.sync();
-		await sam.collab.sync();
-		expect(sam.host.delivered).toEqual([]);
-		expect(sam.logs.join("\n")).toContain("you have not trusted yan yet");
-
-		await sam.collab.trustPerson("yan");
-		expect(sam.host.delivered.map((d) => d.envelope.payload.text)).toEqual(["are you there"]);
+	it("only serves sessions that are owned here", async () => {
+		const { yan, sam, kid } = await pair();
+		await handOver(yan, sam, kid.id);
+		sam.host.conversations.set(kid.id, [{ role: "user", content: "now sam's" }]);
+		expect(await yan.collab.fetchMessages(kid.id)).toEqual([{ role: "user", content: "now sam's" }]);
 	});
 });
 
@@ -290,10 +362,9 @@ describe("setup", () => {
 		expect(
 			() =>
 				new CollabSession({
-					host: new FakeHost("yan"), identity: Identity.loadOrCreate(join(dir, "keys"), "sam"), trust: new TrustStore(join(dir, "t.json")),
-					store: new GitSharedStore({ remote, dir: join(dir, "shared"), author: "x" }), dir: join(dir, "collab"), projectDir: dir,
+					host: new FakeHost("yan"), identity: Identity.loadOrCreate(join(dir, "keys"), "sam"), peers: new PeerBook(join(dir, "peers.json")),
+					transport: new TcpTransport({ host: "127.0.0.1" }), dir: join(dir, "collab"), projectDir: dir,
 				}),
 		).toThrow(/must match the host owner/);
-		writeFileSync(join(root, "unused"), "");
 	});
 });
