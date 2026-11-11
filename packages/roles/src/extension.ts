@@ -110,7 +110,10 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 	onEvent(pi.events, "lattice:host:assigned", ({ assignment }) => {
 		assigned = assignment ?? undefined;
 		if (!context || everSet || !assignment || assignment.fragments.length === 0) return;
-		change("set", assignment.fragments);
+		// A role this installation does not have adds nothing; it must not stop the others from being applied.
+		reload(context);
+		const known = assignment.fragments.filter((name) => available.has(name));
+		if (known.length > 0) change("set", known);
 	});
 
 	// Whoever builds a form for choosing roles asks what there is to choose from.
