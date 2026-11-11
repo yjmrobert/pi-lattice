@@ -55,8 +55,23 @@ export class Identity {
 		return fingerprint(this.publicKey);
 	}
 
+	/** Sign raw bytes; returns a base64 signature. */
+	signBytes(bytes: Buffer): string {
+		return sign(null, bytes, this.privateKey).toString("base64");
+	}
+
 	sign<T>(body: T): Signed<T> {
 		return { body, by: this.name, sig: sign(null, Buffer.from(canonicalJson(body)), this.privateKey).toString("base64") };
+	}
+}
+
+/** True when `signature` over `bytes` was made by the holder of `publicKey`. Never throws. */
+export function verifyBytes(bytes: Buffer, signature: string, publicKey: string): boolean {
+	try {
+		const key = createPublicKey({ key: Buffer.from(publicKey, "base64"), type: "spki", format: "der" });
+		return verify(null, bytes, key, Buffer.from(signature, "base64"));
+	} catch {
+		return false;
 	}
 }
 
