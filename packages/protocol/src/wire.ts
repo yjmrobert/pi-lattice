@@ -178,11 +178,3 @@ export class FrameDecoder {
 		return out;
 	}
 }
-
-/**
- * What an agent is told when its session moved between the background and a terminal in
- * the middle of a turn. The turn itself cannot move between processes, so it is stopped
- * on one side and picked up again on the other.
- */
-export const HANDOVER_NOTE =
-	"[pi-lattice] This session was moved between the background and a terminal while you were working, which interrupted your last step. This note is from pi-lattice, not from the user. Carry on from where you left off.";

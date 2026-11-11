@@ -34,6 +34,8 @@ export interface NodeMeta {
 	archived?: boolean;
 	/** The model it runs on in the background, when one was chosen for it. */
 	model?: string;
+	/** It has sent its parent the result of the work it was given, and has been given nothing since. */
+	done?: boolean;
 	/** What its agent has used so far. */
 	usage?: { tokens: number; cost: number };
 	createdAt: string;

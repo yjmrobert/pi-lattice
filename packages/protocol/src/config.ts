@@ -60,6 +60,7 @@ export const SETTINGS: readonly Setting[] = [
 	{ key: "roles.child", section: "Roles", label: "Child with no roles", help: "Roles for a child that was created without any.", kind: "list", default: ["worker"], applies: NEW_SESSIONS },
 
 	{ key: "approval", section: "Messaging", label: "Approval", help: "Which messages between agents wait for you: those from other people's sessions (cross-owner), all of them (always), or none (never).", kind: "choice", choices: APPROVAL_POLICIES, default: "cross-owner", env: "LATTICE_APPROVAL", applies: "Applies at once to the session open here, and to background sessions started from now on." },
+	{ key: "reports.remind", section: "Messaging", label: "Remind a child", help: "When a background child ends its turn without reporting to its parent, remind it once; if it still says nothing, tell its parent.", kind: "toggle", default: true, applies: AT_ONCE },
 	limit("maxHops", "Messaging", "Hops", "How many times an exchange may pass between agents before a person has to speak. Stops two agents answering each other forever.", "LATTICE_MAX_HOPS", NEXT_SESSION),
 	limit("maxSendsPerMinute", "Messaging", "Sends a minute", "How many messages one session may send in a minute.", "LATTICE_MAX_SENDS_PER_MINUTE", NEXT_SESSION),
 	limit("maxPayloadBytes", "Messaging", "Message size", "The largest message, in bytes. Anything bigger should travel as a file.", "LATTICE_MAX_PAYLOAD_BYTES", NEXT_SESSION),
