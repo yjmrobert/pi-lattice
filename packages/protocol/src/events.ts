@@ -43,10 +43,11 @@ export interface LatticeEvents {
 	/** Ask which role fragments exist here. The asker passes an empty list; the roles extension fills it in. */
 	"lattice:roles:available": { names: string[] };
 	/**
-	 * Ask which approval policy the tree this terminal is in has been set to. The asker leaves
-	 * `policy` out; whoever knows the tree's settings fills it in, if one is set.
+	 * Ask what the settings in effect here are. The asker leaves `values` out; whoever reads
+	 * the settings files fills it in, by setting name. With no answer, each extension falls back
+	 * to its own environment and defaults.
 	 */
-	"lattice:approval:query": { policy?: string };
+	"lattice:settings:query": { values?: Record<string, unknown> };
 	/** Ask the roles extension to replace the applied fragments. */
 	"lattice:roles:set": { fragments: string[] };
 }
