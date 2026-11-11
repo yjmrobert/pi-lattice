@@ -1,7 +1,7 @@
 /**
  * Who a person is, cryptographically. Each person has an Ed25519 key pair; the private key
- * never leaves their machine. Everything a person writes to shared state is signed, and a
- * reader only believes it after the human has deliberately trusted that person's key.
+ * never leaves their machine. Ownership events are signed with it, and peer connections
+ * are authenticated with it. Whose keys to believe is decided by pairing (see peers.ts).
  */
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject, sign, verify } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -82,49 +82,5 @@ export function verifySigned(signed: Signed<unknown>, publicKey: string): boolea
 		return verify(null, Buffer.from(canonicalJson(signed.body)), key, Buffer.from(signed.sig, "base64"));
 	} catch {
 		return false;
-	}
-}
-
-export type TrustState = "trusted" | "unknown" | "changed";
-
-/**
- * The keys this human has decided to believe, pinned on first trust. A person whose
- * published key later differs from the pinned one is reported as changed and not believed.
- */
-export class TrustStore {
-	private readonly path: string;
-	private pinned: Record<string, string>;
-
-	constructor(path: string) {
-		this.path = path;
-		let loaded: unknown;
-		try {
-			loaded = JSON.parse(readFileSync(path, "utf8"));
-		} catch {
-			loaded = {};
-		}
-		this.pinned = typeof loaded === "object" && loaded !== null ? (loaded as Record<string, string>) : {};
-	}
-
-	state(name: string, publicKey: string): TrustState {
-		const pinned = this.pinned[name];
-		if (pinned === undefined) return "unknown";
-		return pinned === publicKey ? "trusted" : "changed";
-	}
-
-	/** The pinned key for a person, if the human trusts them. */
-	keyOf(name: string): string | undefined {
-		return this.pinned[name];
-	}
-
-	/** Pin a key for a person. Replaces any earlier pin: call only on a deliberate human decision. */
-	trust(name: string, publicKey: string): void {
-		this.pinned = { ...this.pinned, [name]: publicKey };
-		mkdirSync(dirname(this.path), { recursive: true });
-		writeFileSync(this.path, JSON.stringify(this.pinned, null, 2));
-	}
-
-	names(): string[] {
-		return Object.keys(this.pinned).sort();
 	}
 }

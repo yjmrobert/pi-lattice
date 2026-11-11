@@ -86,12 +86,17 @@ export class SecureChannel extends EventEmitter<ChannelEvents> {
 		});
 		stream.on("close", () => this.finish());
 		stream.on("error", () => this.finish());
-		queueMicrotask(() => this.drain());
+		// Frames can arrive in the same packet as the end of the handshake, before the caller
+		// has had a chance to listen. They wait in the buffer until someone does.
+		(this as EventEmitter).on("newListener", (event: string | symbol) => {
+			if (event === "message") queueMicrotask(() => this.drain());
+		});
 	}
 
 	private drain(): void {
 		try {
 			for (;;) {
+				if (this.listenerCount("message") === 0) return;
 				const result = readFrame(this.buffer, this.receiveKey, this.receiveCounter);
 				if (!result) return;
 				this.buffer = result.rest;

@@ -1,23 +1,24 @@
 /**
- * Sharing a session tree between people. Each person runs their own host; this keeps the
- * hosts in agreement through a shared store:
+ * Sharing a session tree between people, peer to peer. Each person runs their own host,
+ * and the hosts talk directly over an authenticated, encrypted channel. There is no
+ * server and no shared storage: a peer's sessions are fetched from that peer while they
+ * are online, and shown as last seen when they are not.
  *
- *   people/<name>.json                              a person's public key, self-signed
- *   trees/<root>/nodes/<node>.json                  metadata plus the signed ownership log
- *   trees/<root>/mail/<owner>/<env>--<node>.json    signed envelopes for nodes that owner holds
- *   trees/<root>/transfer/<node>/<handoff>/         session and branch shipped by a confirmed handoff
- *
- * Nothing from another person is believed until the human has trusted that person's key,
- * and nothing from another person reaches a model without passing the recipient's inbox.
+ * Each node's ownership log has exactly one writer, its current owner. Everyone else asks
+ * the owner to append (for example, the recipient's acceptance of an offer), and verifies
+ * the signed log they get back. That is what makes a compare-and-swap store unnecessary.
  */
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { networkInterfaces } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { type Envelope, type LeaseEvent, newHandoffId, type NodeMeta, validateEnvelope } from "@pi-lattice/protocol";
-import { fingerprint, type Identity, isPersonName, type Signed, type TrustState, type TrustStore, verifySigned } from "./identity.ts";
-import { appendEvent, foldRecord, type KeyLookup, type NodeRecord, parseRecord, type SharedMeta, toSharedMeta } from "./ledger.ts";
-import type { SharedStore, Tx } from "./shared-store.ts";
+import { type Envelope, isId, type LeaseEvent, newHandoffId, type NodeMeta, validateEnvelope } from "@pi-lattice/protocol";
+import { HandshakeError, openChannel, type SecureChannel } from "./channel.ts";
+import { fingerprint, type Identity, type Signed } from "./identity.ts";
+import { appendEvent, type Folded, foldRecord, type KeyLookup, type NodeRecord, parseRecord, toSharedMeta } from "./ledger.ts";
+import { formatInvite, parseInvite, type PeerBook } from "./peers.ts";
+import { type PeerTransport, splitAddress } from "./transport.ts";
 
 /** The part of a lattice host that sharing needs. `LatticeHost` satisfies it. */
 export interface HostPort {
@@ -25,34 +26,47 @@ export interface HostPort {
 	nodes(): NodeMeta[];
 	node(id: string): NodeMeta | undefined;
 	sleep(id: string): Promise<void>;
+	/** A node's conversation, without starting its session. */
+	readMessages(id: string): Promise<unknown[]>;
 	setRemoteRouter(router: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined): void;
 	importRemoteNode(node: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt">): void;
 	deliverExternal(envelope: unknown, recipientId: string): void;
 	releaseNode(id: string, toOwner: string, version: number): Promise<void>;
 	adoptNode(id: string, options: { cwd: string; branch: string | null; workspace: NodeMeta["workspace"]; version: number; sessionFile?: string }): NodeMeta;
+	on(event: "node", listener: (node: NodeMeta) => void): unknown;
+	off(event: "node", listener: (node: NodeMeta) => void): unknown;
 }
 
 export interface CollabOptions {
 	host: HostPort;
-	store: SharedStore;
 	identity: Identity;
-	trust: TrustStore;
-	/** Private working directory for queued mail. */
+	/** The people this human has paired with. */
+	peers: PeerBook;
+	transport: PeerTransport;
+	/** Private working directory: ownership logs, queued mail, transfers in flight. */
 	dir: string;
 	/** The local checkout of the project, where adopted nodes work. */
 	projectDir: string;
-	/** How often to synchronise, in milliseconds. 0 disables the timer; call sync() yourself. */
-	pollMs?: number;
+	/** Host name or address other people should use to reach this host. Guessed when omitted. */
+	advertise?: string;
+	/** How often to retry unreachable peers, in milliseconds. 0 disables the timer. */
+	redialMs?: number;
 	/** How long an offer stays open, in milliseconds. */
 	offerTtlMs?: number;
+	requestTimeoutMs?: number;
 	now?: () => number;
 }
+
+export type PersonTrust = "trusted" | "unknown" | "changed";
 
 export interface PersonView {
 	name: string;
 	publicKey: string;
 	fingerprint: string;
-	trust: TrustState;
+	/** `unknown`: knocked, not paired. `changed`: someone used this name with a different key. */
+	trust: PersonTrust;
+	online: boolean;
+	address?: string;
 	self: boolean;
 }
 
@@ -64,491 +78,743 @@ export interface HandoffView {
 	to: string;
 	state: "offered" | "accepted";
 	expiresAt: number;
-	/** What this person is in the handoff. */
 	role: "owner" | "recipient";
 }
 
-interface PersonRecord {
-	name: string;
-	publicKey: string;
-	at: string;
+export interface CollabEvents {
+	/** People, connections or shared nodes changed; views may differ. */
+	changed: [];
+	log: [level: "info" | "warn" | "error", message: string];
 }
-interface MailRecord {
+
+interface OutboxItem {
 	envelope: Envelope;
 	recipient: string;
-}
-interface OutboxItem extends MailRecord {
-	rootId: string;
 	toOwner: string;
 }
-interface TransferMeta {
-	branch: string | null;
-	workspace: NodeMeta["workspace"];
-}
-interface Adoption {
+interface Transfer {
 	nodeId: string;
-	meta: SharedMeta;
-	version: number;
-	transferDir: string;
+	to: string;
+	record: NodeRecord;
+	branch: string | null;
+	session: string | null;
+	bundle: string | null;
 }
-interface Plan {
-	imports: Array<Parameters<HostPort["importRemoteNode"]>[0]>;
-	releases: Array<{ nodeId: string; owner: string; version: number }>;
-	adoptions: Adoption[];
-	sentOutbox: string[];
-	people: PersonView[];
-	handoffs: HandoffView[];
-	notes: string[];
-}
+type Frame =
+	| { t: "req"; id: number; op: string; p: unknown }
+	| { t: "res"; id: number; ok: true; r: unknown }
+	| { t: "res"; id: number; ok: false; e: string }
+	| { t: "note"; kind: "changed" };
 
-const nodePath = (rootId: string, nodeId: string): string => `trees/${rootId}/nodes/${nodeId}.json`;
-const transferPath = (rootId: string, nodeId: string, handoffId: string): string => `trees/${rootId}/transfer/${nodeId}/${handoffId}`;
-const json = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
-
-function git(cwd: string, ...args: string[]): Promise<string> {
-	return new Promise((resolvePromise, reject) => {
+const git = (cwd: string, ...args: string[]): Promise<string> =>
+	new Promise((resolvePromise, reject) => {
 		execFile("git", args, { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }, (error, stdout, stderr) => {
 			if (error) reject(new Error(stderr.trim() || error.message));
 			else resolvePromise(stdout.trim());
 		});
 	});
-}
 
-export interface CollabEvents {
-	/** Shared state was synchronised; views may have changed. */
-	changed: [];
-	log: [level: "info" | "warn" | "error", message: string];
-}
+const sameLog = (a: NodeRecord, b: NodeRecord, upTo: number): boolean => {
+	if (a.genesis.sig !== b.genesis.sig) return false;
+	for (let i = 0; i < upTo; i++) if (a.events[i]?.sig !== b.events[i]?.sig) return false;
+	return true;
+};
 
 export class CollabSession extends EventEmitter<CollabEvents> {
 	private readonly options: CollabOptions;
 	private readonly host: HostPort;
-	private readonly store: SharedStore;
 	private readonly identity: Identity;
-	private readonly trust: TrustStore;
+	private readonly book: PeerBook;
 	private readonly now: () => number;
-	private timer: NodeJS.Timeout | undefined;
+	private readonly channels = new Map<string, { channel: SecureChannel; initiator: string }>();
+	private readonly dialing = new Set<string>();
+	private readonly strangers = new Map<string, string>(); // name -> key they knocked with
+	private readonly waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; peer: string }>();
+	private readonly timers = new Map<string, NodeJS.Timeout>();
+	private requestId = 0;
+	private bound: string | undefined;
+	private redial: NodeJS.Timeout | undefined;
 	private chain: Promise<unknown> = Promise.resolve();
-	private peopleView: PersonView[] = [];
-	private handoffView: HandoffView[] = [];
-	private soon: NodeJS.Timeout | undefined;
 	private stopped = false;
+	private readonly onNode = (node: NodeMeta): void => {
+		if (node.owner === this.identity.name) this.debounce("publish", () => this.publishOwn());
+	};
 
 	constructor(options: CollabOptions) {
 		super();
 		this.options = options;
 		this.host = options.host;
-		this.store = options.store;
 		this.identity = options.identity;
-		this.trust = options.trust;
+		this.book = options.peers;
 		this.now = options.now ?? Date.now;
 		if (this.identity.name !== this.host.owner) throw new Error(`The sharing identity "${this.identity.name}" must match the host owner "${this.host.owner}".`);
-		for (const name of ["outbox", "inbox"]) mkdirSync(join(options.dir, name), { recursive: true });
-		// A person always trusts their own key.
-		if (this.trust.state(this.identity.name, this.identity.publicKey) !== "trusted") this.trust.trust(this.identity.name, this.identity.publicKey);
+		for (const name of ["ledger", "outbox", "transfers", "incoming"]) mkdirSync(join(options.dir, name), { recursive: true });
 	}
 
 	// --- lifecycle -------------------------------------------------------------
 
-	/** Begin sharing: route mail for other owners through the shared store and synchronise on a timer. */
+	/** Start listening, publish this host's nodes, and reach out to paired peers. */
 	async start(): Promise<void> {
+		this.bound = await this.options.transport.listen((stream) => {
+			openChannel(stream, {
+				identity: this.identity,
+				initiator: false,
+				keyOf: (name) => this.book.keyOf(name),
+				onStranger: (name, key) => this.knocked(name, key),
+				onChangedKey: (name, key) => this.knocked(name, key),
+			}).then(
+				(channel) => this.adopted(channel, channel.peer),
+				() => {}, // refused: strangers are surfaced through knocked()
+			);
+		});
 		this.host.setRemoteRouter((envelope, recipient) => this.queueOutbound(envelope, recipient));
-		await this.sync();
-		const pollMs = this.options.pollMs ?? 5000;
-		if (pollMs > 0) {
-			this.timer = setInterval(() => void this.sync().catch((error: unknown) => this.emit("log", "warn", `Sharing sync failed: ${error instanceof Error ? error.message : String(error)}`)), pollMs);
-			this.timer.unref();
+		this.host.on("node", this.onNode);
+		await this.publishOwn();
+		const redialMs = this.options.redialMs ?? 5000;
+		if (redialMs > 0) {
+			this.redial = setInterval(() => this.dialAll(), redialMs);
+			this.redial.unref();
 		}
+		this.dialAll();
 	}
 
 	async stop(): Promise<void> {
 		this.stopped = true;
-		if (this.timer) clearInterval(this.timer);
-		if (this.soon) clearTimeout(this.soon);
+		if (this.redial) clearInterval(this.redial);
+		for (const timer of this.timers.values()) clearTimeout(timer);
+		this.host.off("node", this.onNode);
 		this.host.setRemoteRouter(undefined);
+		for (const { channel } of this.channels.values()) channel.close();
+		await this.options.transport.close();
 		await this.chain.catch(() => {});
-		await this.store.close();
 	}
 
-	/** Run one piece of shared-state work at a time. */
 	private exclusive<T>(work: () => Promise<T>): Promise<T> {
 		const run = this.chain.then(work, work);
 		this.chain = run.catch(() => {});
 		return run;
 	}
 
-	private syncSoon(): void {
-		if (this.soon || this.stopped) return;
-		this.soon = setTimeout(() => {
-			this.soon = undefined;
-			void this.sync().catch(() => {});
-		}, 50);
-		this.soon.unref();
+	private debounce(key: string, work: () => unknown, ms = 60): void {
+		if (this.timers.has(key) || this.stopped) return;
+		const timer = setTimeout(() => {
+			this.timers.delete(key);
+			if (this.stopped) return;
+			Promise.resolve()
+				.then(work)
+				.catch((error: unknown) => this.emit("log", "warn", error instanceof Error ? error.message : String(error)));
+		}, ms);
+		timer.unref();
+		this.timers.set(key, timer);
 	}
 
-	// --- views -----------------------------------------------------------------
+	// --- people and connections ------------------------------------------------
 
-	/** Everyone who has published a key, with whether this human trusts them. */
-	people(): PersonView[] {
-		return this.peopleView;
-	}
-
-	/** Open handoffs this person is part of. */
-	handoffs(): HandoffView[] {
-		return this.handoffView;
-	}
-
-	/** Pin a person's currently published key. Call only after the human has checked the fingerprint. */
-	async trustPerson(name: string): Promise<void> {
-		const person = this.peopleView.find((candidate) => candidate.name === name);
-		if (!person) throw new Error(`Nobody called "${name}" has joined this shared tree.`);
-		this.trust.trust(name, person.publicKey);
-		await this.sync();
-	}
-
-	private keys(published: Map<string, string>): KeyLookup {
-		return (person) => {
-			if (person === this.identity.name) return this.identity.publicKey;
-			const key = published.get(person);
-			return key !== undefined && this.trust.state(person, key) === "trusted" ? key : undefined;
-		};
-	}
-
-	// --- synchronisation -------------------------------------------------------
-
-	/** One round: publish what is ours, take in what is theirs, move mail both ways. */
-	sync(): Promise<void> {
-		return this.exclusive(() => this.round());
-	}
-
-	private async round(): Promise<void> {
-		if (this.stopped) return;
-		let plan: Plan | undefined;
-		await this.store.commit(`sync by ${this.identity.name}`, (tx) => {
-			plan = this.reconcile(tx);
-		});
-		if (!plan) return;
-		await this.apply(plan);
+	private knocked(name: string, key: string): void {
+		if (this.strangers.get(name) === key) return;
+		this.strangers.set(name, key);
+		this.emit("log", "info", this.book.get(name) ? `Someone tried to connect as ${name} with a different key.` : `${name} wants to connect. Pair with them to allow it.`);
 		this.emit("changed");
 	}
 
-	/** Run a handoff step against fresh shared state, then bring local state in line with the result. */
-	private step(work: () => Promise<void>): Promise<void> {
-		return this.exclusive(async () => {
-			await this.round();
-			await work();
-			await this.round();
+	/** This host's invite: pass it to a collaborator over a channel you trust. */
+	invite(): string {
+		if (!this.bound) throw new Error("Sharing has not started.");
+		const { port } = splitAddress(this.bound);
+		return formatInvite({ name: this.identity.name, publicKey: this.identity.publicKey, address: `${this.options.advertise ?? guessHost()}:${port}` });
+	}
+
+	/** Pair with the person who sent an invite, and try to reach them. */
+	async addInvite(invite: string): Promise<string> {
+		const peer = parseInvite(invite);
+		if (peer.name === this.identity.name) throw new Error("That is your own invite.");
+		this.book.pin(peer.name, peer.publicKey, peer.address);
+		this.strangers.delete(peer.name);
+		this.emit("changed");
+		await this.dial(peer.name);
+		return peer.name;
+	}
+
+	/** Pair with someone who knocked, or accept a changed key. Call only after the human checked the fingerprint. */
+	async trustPerson(name: string): Promise<void> {
+		const key = this.strangers.get(name);
+		if (!key) {
+			if (this.book.get(name)) return;
+			throw new Error(`Nobody called "${name}" has tried to connect.`);
+		}
+		this.channels.get(name)?.channel.close();
+		this.book.pin(name, key);
+		this.strangers.delete(name);
+		this.emit("changed");
+		await this.dial(name);
+	}
+
+	isOnline(name: string): boolean {
+		return name === this.identity.name || this.channels.has(name);
+	}
+
+	people(): PersonView[] {
+		const view = new Map<string, PersonView>();
+		view.set(this.identity.name, {
+			name: this.identity.name, publicKey: this.identity.publicKey, fingerprint: this.identity.fingerprint, trust: "trusted", online: true, self: true,
+		});
+		for (const peer of this.book.list()) {
+			view.set(peer.name, {
+				name: peer.name, publicKey: peer.publicKey, fingerprint: fingerprint(peer.publicKey), trust: "trusted", online: this.channels.has(peer.name), self: false,
+				...(peer.address !== undefined ? { address: peer.address } : {}),
+			});
+		}
+		for (const [name, key] of this.strangers) {
+			const known = view.get(name);
+			if (known?.self) continue;
+			view.set(name, { name, publicKey: key, fingerprint: fingerprint(key), trust: known ? "changed" : "unknown", online: false, self: false, ...(known?.address !== undefined ? { address: known.address } : {}) });
+		}
+		return [...view.values()].sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name));
+	}
+
+	private dialAll(): void {
+		for (const peer of this.book.list()) void this.dial(peer.name);
+	}
+
+	/** Try to connect to a paired person. Resolves true when a channel to them is open. */
+	async dial(name: string): Promise<boolean> {
+		if (this.stopped) return false;
+		if (this.channels.has(name)) return true;
+		const peer = this.book.get(name);
+		if (!peer?.address || this.dialing.has(name)) return false;
+		this.dialing.add(name);
+		try {
+			const stream = await this.options.transport.connect(peer.address);
+			const channel = await openChannel(stream, { identity: this.identity, initiator: true, expect: name, keyOf: (who) => this.book.keyOf(who) });
+			this.adopted(channel, this.identity.name);
+			return true;
+		} catch (error) {
+			if (error instanceof HandshakeError && !/not someone you have paired with/.test(error.message)) this.emit("log", "warn", `Could not connect to ${name}: ${error.message}`);
+			return false;
+		} finally {
+			this.dialing.delete(name);
+		}
+	}
+
+	/** Register an authenticated channel. When both sides dialled at once, both keep the same one. */
+	private adopted(channel: SecureChannel, initiator: string): void {
+		if (this.stopped) {
+			channel.close();
+			return;
+		}
+		const peer = channel.peer;
+		const existing = this.channels.get(peer);
+		if (existing) {
+			if (existing.initiator <= initiator) {
+				channel.close();
+				return;
+			}
+			existing.channel.removeAllListeners("close");
+			existing.channel.close();
+			this.failWaiting(peer);
+		}
+		this.channels.set(peer, { channel, initiator });
+		channel.on("message", (value) => this.onFrame(peer, channel, value as Frame));
+		channel.on("close", () => {
+			if (this.channels.get(peer)?.channel !== channel) return;
+			this.channels.delete(peer);
+			this.failWaiting(peer);
+			this.emit("changed");
+		});
+		this.emit("changed");
+		void this.greet(peer);
+	}
+
+	private failWaiting(peer: string): void {
+		for (const [id, entry] of this.waiting) {
+			if (entry.peer !== peer) continue;
+			clearTimeout(entry.timer);
+			this.waiting.delete(id);
+			entry.reject(new Error(`${peer} went offline.`));
+		}
+	}
+
+	/** Everything owed to a peer the moment they are reachable. */
+	private async greet(peer: string): Promise<void> {
+		try {
+			await this.fetchTree(peer);
+			await this.flushOutbox(peer);
+			await this.sendTransfers(peer);
+		} catch (error) {
+			this.emit("log", "warn", `Talking to ${peer}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	// --- requests --------------------------------------------------------------
+
+	private request<T>(peer: string, op: string, params: unknown): Promise<T> {
+		const entry = this.channels.get(peer);
+		if (!entry) return Promise.reject(new Error(`${peer} is offline.`));
+		const id = ++this.requestId;
+		return new Promise<T>((resolvePromise, reject) => {
+			const timer = setTimeout(() => {
+				this.waiting.delete(id);
+				reject(new Error(`${peer} did not answer in time.`));
+			}, this.options.requestTimeoutMs ?? 60_000);
+			timer.unref();
+			this.waiting.set(id, { resolve: resolvePromise as (value: unknown) => void, reject, timer, peer });
+			entry.channel.send({ t: "req", id, op, p: params } satisfies Frame);
 		});
 	}
 
-	private readPeople(tx: Tx): Map<string, string> {
-		const published = new Map<string, string>();
-		for (const file of tx.list("people")) {
-			if (!file.endsWith(".json")) continue;
-			try {
-				const signed = JSON.parse(tx.read(`people/${file}`) ?? "") as Signed<PersonRecord>;
-				const name = signed.body?.name;
-				if (!isPersonName(name) || `${name}.json` !== file || signed.by !== name) continue;
-				if (verifySigned(signed, signed.body.publicKey)) published.set(name, signed.body.publicKey);
-			} catch {
-				// Unreadable entry: that person simply is not known.
-			}
+	private onFrame(peer: string, channel: SecureChannel, frame: Frame): void {
+		if (frame?.t === "res") {
+			const entry = this.waiting.get(frame.id);
+			if (!entry || entry.peer !== peer) return;
+			this.waiting.delete(frame.id);
+			clearTimeout(entry.timer);
+			if (frame.ok) entry.resolve(frame.r);
+			else entry.reject(new Error(frame.e));
+		} else if (frame?.t === "note") {
+			if (frame.kind === "changed") this.debounce(`fetch:${peer}`, () => this.fetchTree(peer));
+		} else if (frame?.t === "req") {
+			this.serve(peer, frame.op, frame.p).then(
+				(r) => channel.send({ t: "res", id: frame.id, ok: true, r } satisfies Frame),
+				(error: unknown) => channel.send({ t: "res", id: frame.id, ok: false, e: error instanceof Error ? error.message : String(error) } satisfies Frame),
+			);
 		}
-		return published;
 	}
 
-	private reconcile(tx: Tx): Plan {
-		const me = this.identity.name;
-		const now = this.now();
-		const plan: Plan = { imports: [], releases: [], adoptions: [], sentOutbox: [], people: [], handoffs: [], notes: [] };
-
-		// People.
-		const mine = this.identity.sign<PersonRecord>({ name: me, publicKey: this.identity.publicKey, at: new Date(now).toISOString() });
-		const published = this.readPeople(tx);
-		if (published.get(me) !== this.identity.publicKey) {
-			tx.write(`people/${me}.json`, json(mine));
-			published.set(me, this.identity.publicKey);
+	private async serve(peer: string, op: string, params: unknown): Promise<unknown> {
+		const p = (params ?? {}) as Record<string, unknown>;
+		switch (op) {
+			case "tree":
+				return { records: this.ownRecords() };
+			case "messages": {
+				const node = typeof p.nodeId === "string" ? this.host.node(p.nodeId) : undefined;
+				if (!node || node.owner !== this.identity.name) throw new Error("That session is not here.");
+				return { messages: await this.host.readMessages(node.id) };
+			}
+			case "mail":
+				return this.receiveMail(peer, p.envelope, p.recipient);
+			case "accept":
+			case "cancel":
+				return this.exclusive(async () => this.appendFromPeer(peer, p.nodeId, p.event as Signed<LeaseEvent>, op));
+			case "transfer":
+				return this.exclusive(() => this.receiveTransfer(peer, p as unknown as Transfer));
+			default:
+				throw new Error(`Unknown request "${op}".`);
 		}
-		const keys = this.keys(published);
-		plan.people = [...published].sort(([a], [b]) => a.localeCompare(b)).map(([name, publicKey]) => ({
-			name, publicKey, fingerprint: fingerprint(publicKey), self: name === me, trust: name === me ? "trusted" : this.trust.state(name, publicKey),
-		}));
+	}
 
-		// Publish the nodes held here.
-		const local = new Map(this.host.nodes().map((node) => [node.id, node]));
-		for (const node of local.values()) {
+	private broadcastChanged(): void {
+		for (const { channel } of this.channels.values()) channel.send({ t: "note", kind: "changed" } satisfies Frame);
+		this.emit("changed");
+	}
+
+	// --- ownership logs --------------------------------------------------------
+
+	private keys(): KeyLookup {
+		return (person) => (person === this.identity.name ? this.identity.publicKey : this.book.keyOf(person));
+	}
+
+	private recordPath(nodeId: string): string {
+		return join(this.options.dir, "ledger", `${nodeId}.json`);
+	}
+
+	private record(nodeId: string): NodeRecord | undefined {
+		if (!isId(nodeId)) return undefined;
+		try {
+			return parseRecord(readFileSync(this.recordPath(nodeId), "utf8"));
+		} catch {
+			return undefined;
+		}
+	}
+
+	private save(record: NodeRecord): void {
+		const path = this.recordPath(record.meta.body.id);
+		writeFileSync(`${path}.tmp`, JSON.stringify(record));
+		renameSync(`${path}.tmp`, path);
+	}
+
+	private allRecords(): NodeRecord[] {
+		const out: NodeRecord[] = [];
+		for (const file of readdirSync(join(this.options.dir, "ledger"))) {
+			if (!file.endsWith(".json")) continue;
+			const record = this.record(file.slice(0, -5));
+			if (record) out.push(record);
+		}
+		return out;
+	}
+
+	private fold(record: NodeRecord): Folded {
+		return foldRecord(record, this.keys(), this.now());
+	}
+
+	/** Records for the nodes this host currently owns: what a peer is given when it asks for our tree. */
+	private ownRecords(): NodeRecord[] {
+		return this.allRecords().filter((record) => {
+			const folded = this.fold(record);
+			return folded.valid && folded.ownership.owner === this.identity.name;
+		});
+	}
+
+	/** Create or refresh the signed record of every node owned here. Tells peers when anything changed. */
+	private async publishOwn(): Promise<void> {
+		const me = this.identity.name;
+		let changed = false;
+		for (const node of this.host.nodes()) {
 			if (node.owner !== me) continue;
-			const path = nodePath(node.rootId, node.id);
-			const record = parseRecord(tx.read(path));
 			const meta = toSharedMeta(node);
+			const record = this.record(node.id);
 			if (!record) {
-				const created: NodeRecord = { genesis: this.identity.sign({ nodeId: node.id, owner: me, at: node.createdAt }), meta: this.identity.sign(meta), events: [] };
-				tx.write(path, json(created));
+				this.save({ genesis: this.identity.sign({ nodeId: node.id, owner: me, at: node.createdAt }), meta: this.identity.sign(meta), events: [] });
+				changed = true;
 				continue;
 			}
-			const folded = foldRecord(record, keys, now);
+			const folded = this.fold(record);
 			if (!folded.valid) continue;
 			if (folded.ownership.owner !== me) {
-				plan.releases.push({ nodeId: node.id, owner: folded.ownership.owner, version: folded.ownership.version });
+				// The log says this node was handed on; the local view is stale.
+				await this.host.releaseNode(node.id, folded.ownership.owner, folded.ownership.version);
 				continue;
 			}
-			if (JSON.stringify(record.meta.body) !== JSON.stringify(meta) || record.meta.by !== me) tx.write(path, json({ ...record, meta: this.identity.sign(meta) }));
-			if (tx.exists(`trees/${node.rootId}/transfer/${node.id}`)) tx.remove(`trees/${node.rootId}/transfer/${node.id}`); // adopted; the copy is no longer needed
-		}
-
-		// Take in every shared node.
-		const owners = new Map<string, string>(); // node id -> verified owner
-		const needTrust = new Set<string>();
-		for (const rootId of tx.list("trees")) {
-			for (const file of tx.list(`trees/${rootId}/nodes`)) {
-				const record = parseRecord(tx.read(`trees/${rootId}/nodes/${file}`));
-				if (!record || `${record.meta.body.id}.json` !== file || record.genesis.body.nodeId !== record.meta.body.id) continue;
-				const folded = foldRecord(record, keys, now);
-				for (const person of folded.unverified) needTrust.add(person);
-				if (!folded.valid || !folded.metaTrusted) continue;
-				const meta = record.meta.body;
-				const { owner, version, handoff } = folded.ownership;
-				owners.set(meta.id, owner);
-				const here = local.get(meta.id);
-				if (owner !== me) {
-					if (!here || here.owner !== me) plan.imports.push({ ...meta, owner, version });
-				} else if (!here || here.owner !== me) {
-					const handoffId = folded.ownership.lastHandoffId;
-					if (handoffId) plan.adoptions.push({ nodeId: meta.id, meta, version, transferDir: tx.resolve(transferPath(rootId, meta.id, handoffId)) });
-				}
-				if (handoff && (handoff.from === me || handoff.to === me)) {
-					plan.handoffs.push({
-						nodeId: meta.id, nodeName: meta.name, handoffId: handoff.id, from: handoff.from, to: handoff.to, state: handoff.state,
-						expiresAt: handoff.expiresAt, role: handoff.from === me ? "owner" : "recipient",
-					});
-				}
+			if (JSON.stringify(record.meta.body) !== JSON.stringify(meta) || record.meta.by !== me) {
+				this.save({ ...record, meta: this.identity.sign(meta) });
+				changed = true;
 			}
 		}
-		if (needTrust.size > 0) plan.notes.push(`Not showing everything: you have not trusted ${[...needTrust].sort().join(", ")} yet.`);
-
-		// Mail out.
-		for (const file of readdirSync(join(this.options.dir, "outbox")).sort()) {
-			if (!file.endsWith(".json")) continue;
-			try {
-				const item = JSON.parse(readFileSync(join(this.options.dir, "outbox", file), "utf8")) as OutboxItem;
-				if (isPersonName(item.toOwner)) {
-					tx.write(`trees/${item.rootId}/mail/${item.toOwner}/${file}`, json(this.identity.sign<MailRecord>({ envelope: item.envelope, recipient: item.recipient })));
-				}
-				plan.sentOutbox.push(file);
-			} catch {
-				plan.sentOutbox.push(file);
-			}
-		}
-
-		// Mail in. Verified mail is copied to a local inbox before it is removed from the shared store.
-		for (const rootId of tx.list("trees")) {
-			for (const file of tx.list(`trees/${rootId}/mail/${me}`)) {
-				const path = `trees/${rootId}/mail/${me}/${file}`;
-				let signed: Signed<MailRecord> | undefined;
-				try {
-					signed = JSON.parse(tx.read(path) ?? "") as Signed<MailRecord>;
-				} catch {
-					signed = undefined;
-				}
-				const checked = signed ? validateEnvelope(signed.body?.envelope) : undefined;
-				if (!signed || !checked?.ok) {
-					tx.remove(path);
-					plan.notes.push("Discarded a malformed message from the shared store.");
-					continue;
-				}
-				const envelope = checked.envelope;
-				const key = keys(signed.by);
-				if (!key) {
-					plan.notes.push(`A message from ${signed.by} is waiting, but you have not trusted ${signed.by} yet.`);
-					continue; // stays in the shared store until the human decides
-				}
-				const genuine = verifySigned(signed, key) && envelope.fromOwner === signed.by && owners.get(envelope.from) === signed.by && owners.get(signed.body.recipient) === me;
-				if (genuine) writeFileSync(join(this.options.dir, "inbox", file), JSON.stringify(signed.body));
-				else plan.notes.push(`Discarded a message claiming to be from ${signed.by}: it did not verify.`);
-				tx.remove(path);
-			}
-		}
-		return plan;
+		if (changed) this.broadcastChanged();
 	}
 
-	private async apply(plan: Plan): Promise<void> {
-		this.peopleView = plan.people;
-		this.handoffView = plan.handoffs;
-		for (const file of plan.sentOutbox) {
-			try {
-				unlinkSync(join(this.options.dir, "outbox", file));
-			} catch {
-				// Already gone.
+	/**
+	 * Weigh a record received from a peer against what is held. A record is only taken when
+	 * its signatures verify and its log extends the one already known; a log that disagrees
+	 * with a known one is refused and reported.
+	 */
+	private consider(incoming: NodeRecord): boolean {
+		const id = incoming.meta.body.id;
+		if (!isId(id) || incoming.genesis.body.nodeId !== id) return false;
+		const folded = this.fold(incoming);
+		if (!folded.valid || !folded.metaTrusted) return false;
+		const verified: NodeRecord = { ...incoming, events: incoming.events.slice(0, folded.applied) };
+		const held = this.record(id);
+		let news = true;
+		if (held) {
+			const heldFold = this.fold(held);
+			const shorter = Math.min(heldFold.applied, folded.applied);
+			if (!sameLog(held, verified, shorter)) {
+				this.emit("log", "error", `Conflicting ownership histories for "${verified.meta.body.name}". Keeping the one already known; ask its owner what happened.`);
+				return false;
 			}
+			if (folded.applied < heldFold.applied) return false; // older than what is known
+			news = folded.applied > heldFold.applied || JSON.stringify(held.meta) !== JSON.stringify(verified.meta);
 		}
-		for (const node of plan.imports) this.host.importRemoteNode(node);
-		for (const release of plan.releases) await this.host.releaseNode(release.nodeId, release.owner, release.version);
-		for (const adoption of plan.adoptions) {
-			try {
-				await this.adopt(adoption);
-			} catch (error) {
-				this.emit("log", "error", `Could not take over "${adoption.meta.name}": ${error instanceof Error ? error.message : String(error)}`);
-			}
+		if (news) this.save(verified);
+		// Bring the host's tree in line even when the record itself is not news: the host may
+		// have lost the node, or still think a node that was handed on is its own.
+		const me = this.identity.name;
+		const { owner, version } = folded.ownership;
+		const here = this.host.node(id);
+		if (owner !== me) {
+			if (here?.owner === me) void this.host.releaseNode(id, owner, version);
+			else if (!here || news) this.host.importRemoteNode({ ...verified.meta.body, owner, version });
 		}
-		const inbox = join(this.options.dir, "inbox");
-		for (const file of readdirSync(inbox).sort()) {
-			try {
-				const mail = JSON.parse(readFileSync(join(inbox, file), "utf8")) as MailRecord;
-				this.host.deliverExternal(mail.envelope, mail.recipient);
-			} catch (error) {
-				this.emit("log", "warn", `Dropped a shared message: ${error instanceof Error ? error.message : String(error)}`);
-			}
-			unlinkSync(join(inbox, file));
-		}
-		for (const note of plan.notes) this.emit("log", "info", note);
+		return news || !here;
 	}
+
+	private async fetchTree(peer: string): Promise<void> {
+		const { records } = await this.request<{ records: NodeRecord[] }>(peer, "tree", {});
+		let changed = false;
+		for (const record of Array.isArray(records) ? records : []) {
+			const parsed = parseRecord(JSON.stringify(record));
+			if (parsed && this.consider(parsed)) changed = true;
+		}
+		if (changed) this.emit("changed");
+	}
+
+	/** Ask every connected peer for their current tree. */
+	async refresh(): Promise<void> {
+		await this.publishOwn();
+		await Promise.all([...this.channels.keys()].map((peer) => this.fetchTree(peer).catch(() => {})));
+		for (const peer of this.channels.keys()) {
+			await this.flushOutbox(peer).catch(() => {});
+			await this.sendTransfers(peer).catch(() => {});
+		}
+	}
+
+	/** A peer's node's conversation, fetched from its owner. Read-only. */
+	async fetchMessages(nodeId: string): Promise<unknown[]> {
+		const node = this.host.node(nodeId);
+		if (!node) throw new Error(`No node ${nodeId} in this tree.`);
+		const { messages } = await this.request<{ messages: unknown[] }>(node.owner, "messages", { nodeId });
+		return Array.isArray(messages) ? messages : [];
+	}
+
+	// --- mail ------------------------------------------------------------------
 
 	private queueOutbound(envelope: Envelope, recipient: NodeMeta): void {
-		const item: OutboxItem = { envelope, recipient: recipient.id, rootId: recipient.rootId, toOwner: recipient.owner };
+		const item: OutboxItem = { envelope, recipient: recipient.id, toOwner: recipient.owner };
 		const path = join(this.options.dir, "outbox", `${envelope.id}--${recipient.id}.json`);
 		writeFileSync(`${path}.tmp`, JSON.stringify(item));
 		renameSync(`${path}.tmp`, path);
-		this.syncSoon();
+		if (this.channels.has(recipient.owner)) void this.flushOutbox(recipient.owner).catch(() => {});
+		else this.emit("log", "info", `${recipient.owner} is offline; the message for "${recipient.name}" will be sent when they are back.`);
+	}
+
+	private async flushOutbox(peer: string): Promise<void> {
+		const dir = join(this.options.dir, "outbox");
+		for (const file of readdirSync(dir).sort()) {
+			if (!file.endsWith(".json")) continue;
+			let item: OutboxItem;
+			try {
+				item = JSON.parse(readFileSync(join(dir, file), "utf8")) as OutboxItem;
+			} catch {
+				unlinkSync(join(dir, file));
+				continue;
+			}
+			if (item.toOwner !== peer) continue;
+			try {
+				await this.request(peer, "mail", { envelope: item.envelope, recipient: item.recipient });
+			} catch (error) {
+				if (!this.channels.has(peer)) return; // went offline; keep it queued
+				this.emit("log", "warn", `${peer} refused a message: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			if (existsSync(join(dir, file))) unlinkSync(join(dir, file));
+		}
+	}
+
+	/** Mail from a peer's agent. The channel proves who sent it; the logs prove they may speak for that node. */
+	private receiveMail(peer: string, value: unknown, recipient: unknown): Record<string, never> {
+		const checked = validateEnvelope(value);
+		if (!checked.ok) throw new Error(`Malformed message: ${checked.errors[0] ?? "invalid"}`);
+		const envelope = checked.envelope;
+		if (envelope.fromOwner !== peer) throw new Error("A message must come from its sender's owner.");
+		const sender = this.record(envelope.from);
+		if (!sender || this.fold(sender).ownership.owner !== peer) throw new Error("The sending session does not belong to you, as far as this host knows.");
+		const target = typeof recipient === "string" ? this.host.node(recipient) : undefined;
+		if (!target || target.owner !== this.identity.name) throw new Error("That session is not here.");
+		this.host.deliverExternal(envelope, target.id);
+		return {};
 	}
 
 	// --- handoff ---------------------------------------------------------------
 
-	/** Append an ownership event to a node's log, atomically, and optionally change other shared files with it. */
-	private async lease(nodeId: string, build: () => LeaseEvent, alongside?: (tx: Tx, rootId: string) => void): Promise<void> {
-		const node = this.host.node(nodeId);
-		if (!node) throw new Error(`No node ${nodeId} in this tree.`);
-		let failure: string | undefined;
-		await this.store.commit(`${build().type} ${node.name} by ${this.identity.name}`, (tx) => {
-			failure = undefined;
-			const path = nodePath(node.rootId, nodeId);
-			const record = parseRecord(tx.read(path));
-			if (!record) {
-				failure = `"${node.name}" has not been shared yet.`;
-				return false;
-			}
-			const result = appendEvent(record, this.identity.sign(build()), this.keys(this.readPeople(tx)), this.now());
-			if (!result.ok) {
-				failure = result.error;
-				return false;
-			}
-			if (!result.changed) return false;
-			tx.write(path, json(result.record));
-			alongside?.(tx, node.rootId);
-			return true;
-		});
-		if (failure) throw new Error(failure);
+	handoffs(): HandoffView[] {
+		const me = this.identity.name;
+		const out: HandoffView[] = [];
+		for (const record of this.allRecords()) {
+			const folded = this.fold(record);
+			const handoff = folded.ownership.handoff;
+			if (!folded.valid || !handoff || (handoff.from !== me && handoff.to !== me)) continue;
+			out.push({
+				nodeId: record.meta.body.id, nodeName: record.meta.body.name, handoffId: handoff.id, from: handoff.from, to: handoff.to,
+				state: handoff.state, expiresAt: handoff.expiresAt, role: handoff.from === me ? "owner" : "recipient",
+			});
+		}
+		return out;
 	}
 
 	private openHandoff(nodeId: string): HandoffView {
-		const handoff = this.handoffView.find((candidate) => candidate.nodeId === nodeId);
+		const handoff = this.handoffs().find((candidate) => candidate.nodeId === nodeId);
 		if (!handoff) throw new Error("There is no open handoff for this session.");
 		return handoff;
 	}
 
-	/** Step 1, by the owner: offer a node to a named, trusted person. */
+	/** Append an event to a log this host owns. */
+	private appendOwn(nodeId: string, event: Signed<LeaseEvent>): NodeRecord {
+		const record = this.record(nodeId);
+		if (!record) throw new Error("That session has not been shared yet.");
+		if (this.fold(record).ownership.owner !== this.identity.name) throw new Error("That session is not owned here.");
+		const result = appendEvent(record, event, this.keys(), this.now());
+		if (!result.ok) throw new Error(result.error);
+		if (result.changed) {
+			this.save(result.record);
+			this.broadcastChanged();
+		}
+		return result.record;
+	}
+
+	/** A peer asks the owner (this host) to record their side of a handoff. */
+	private appendFromPeer(peer: string, nodeId: unknown, event: Signed<LeaseEvent>, op: "accept" | "cancel"): { record: NodeRecord } {
+		if (typeof nodeId !== "string" || event?.by !== peer || event.body?.type !== op) throw new Error("That request does not match who sent it.");
+		return { record: this.appendOwn(nodeId, event) };
+	}
+
+	/** Step 1, by the owner: offer a node to a paired person. */
 	offer(nodeId: string, to: string): Promise<void> {
-		return this.step(async () => {
+		return this.exclusive(async () => {
+			await this.publishOwn();
 			const node = this.host.node(nodeId);
 			if (!node) throw new Error(`No node ${nodeId} in this tree.`);
 			if (node.owner !== this.identity.name) throw new Error(`"${node.name}" is owned by ${node.owner}; only its owner can offer it.`);
-			const person = this.peopleView.find((candidate) => candidate.name === to);
-			if (!person) throw new Error(`Nobody called "${to}" has joined this shared tree.`);
-			if (person.trust !== "trusted") throw new Error(`Trust ${to} first: compare their key fingerprint (${person.fingerprint}) with them directly.`);
-			const id = newHandoffId(this.now());
+			if (!this.book.get(to)) throw new Error(`You have not paired with anyone called "${to}".`);
 			const now = this.now();
-			await this.lease(nodeId, () => ({ type: "offer", id, by: this.identity.name, to, expectedVersion: node.version, expiresAt: now + (this.options.offerTtlMs ?? 24 * 3600_000), now }));
+			this.appendOwn(nodeId, this.identity.sign<LeaseEvent>({
+				type: "offer", id: newHandoffId(now), by: this.identity.name, to, expectedVersion: node.version, expiresAt: now + (this.options.offerTtlMs ?? 24 * 3600_000), now,
+			}));
 		});
 	}
 
-	/** Step 2, by the recipient: accept an offer. Ownership has not moved yet. */
+	/** Step 2, by the recipient: accept. The owner records it; ownership has not moved yet. */
 	accept(nodeId: string): Promise<void> {
-		return this.step(async () => {
+		return this.exclusive(async () => {
 			const handoff = this.openHandoff(nodeId);
-			await this.lease(nodeId, () => ({ type: "accept", id: handoff.handoffId, by: this.identity.name, now: this.now() }));
+			if (handoff.role !== "recipient") throw new Error("Only the person it was offered to can accept.");
+			if (!this.channels.has(handoff.from)) throw new Error(`${handoff.from} is offline. A handoff needs both of you online.`);
+			const event = this.identity.sign<LeaseEvent>({ type: "accept", id: handoff.handoffId, by: this.identity.name, now: this.now() });
+			const { record } = await this.request<{ record: NodeRecord }>(handoff.from, "accept", { nodeId, event });
+			this.consider(record);
+			this.emit("changed");
 		});
 	}
 
-	/** Either side, any time before the release is confirmed: call the handoff off. */
+	/** Either side, before the release is confirmed: call the handoff off. */
 	cancel(nodeId: string): Promise<void> {
-		return this.step(async () => {
+		return this.exclusive(async () => {
 			const handoff = this.openHandoff(nodeId);
-			await this.lease(nodeId, () => ({ type: "cancel", id: handoff.handoffId, by: this.identity.name, now: this.now() }));
+			const event = this.identity.sign<LeaseEvent>({ type: "cancel", id: handoff.handoffId, by: this.identity.name, now: this.now() });
+			if (handoff.role === "owner") {
+				this.appendOwn(nodeId, event);
+				return;
+			}
+			if (!this.channels.has(handoff.from)) throw new Error(`${handoff.from} is offline. Try again when they are back.`);
+			const { record } = await this.request<{ record: NodeRecord }>(handoff.from, "cancel", { nodeId, event });
+			this.consider(record);
+			this.emit("changed");
 		});
 	}
 
 	/**
-	 * Step 3, by the owner: confirm the release. The session is stopped, its conversation and
-	 * branch are shipped, and the ownership flip is committed together with them. Only when
-	 * that commit lands does this host give the node up.
+	 * Step 3, by the owner: confirm the release. This is the commit point. The session is
+	 * stopped, the signed confirmation is recorded, and the conversation and branch are sent
+	 * straight to the new owner. If the connection drops first, the package is kept and sent
+	 * again when they are next reachable; it is deleted only on their signed receipt.
 	 */
 	confirm(nodeId: string): Promise<void> {
-		return this.step(async () => {
+		return this.exclusive(async () => {
 			const handoff = this.openHandoff(nodeId);
 			if (handoff.role !== "owner") throw new Error("Only the current owner confirms a release.");
 			if (handoff.state !== "accepted") throw new Error(`${handoff.to} has not accepted yet.`);
+			if (!this.channels.has(handoff.to)) throw new Error(`${handoff.to} is offline. A handoff needs both of you online.`);
 			await this.host.sleep(nodeId);
 			const node = this.host.node(nodeId);
 			if (!node) throw new Error(`No node ${nodeId} in this tree.`);
-			const session = node.sessionFile && existsSync(node.sessionFile) ? readFileSync(node.sessionFile) : undefined;
-			const bundle = node.branch ? await this.bundleBranch(node) : undefined;
-			const transfer: TransferMeta = { branch: bundle ? node.branch : null, workspace: bundle ? "worktree" : "shared" };
-			await this.lease(
-				nodeId,
-				() => ({ type: "confirm", id: handoff.handoffId, by: this.identity.name, now: this.now() }),
-				(tx, rootId) => {
-					const dir = transferPath(rootId, nodeId, handoff.handoffId);
-					tx.write(`${dir}/meta.json`, json(transfer));
-					if (session) tx.write(`${dir}/session.jsonl`, session);
-					if (bundle) tx.write(`${dir}/branch.bundle`, bundle);
-				},
-			);
+			const session = node.sessionFile && existsSync(node.sessionFile) ? readFileSync(node.sessionFile).toString("base64") : null;
+			const bundle = await this.bundleBranch(node);
+			const record = this.appendOwn(nodeId, this.identity.sign<LeaseEvent>({ type: "confirm", id: handoff.handoffId, by: this.identity.name, now: this.now() }));
+			const transfer: Transfer = { nodeId, to: handoff.to, record, branch: bundle ? node.branch : null, session, bundle };
+			writeFileSync(join(this.options.dir, "transfers", `${nodeId}.json`), JSON.stringify(transfer));
 			await this.host.releaseNode(nodeId, handoff.to, node.version + 1);
+			this.emit("changed");
+			await this.sendTransfers(handoff.to);
 		});
 	}
 
-	/** Pack a node's branch so the new owner can recreate it without a shared code remote. */
-	private async bundleBranch(node: NodeMeta): Promise<Buffer | undefined> {
-		if (!node.branch || !node.cwd || !existsSync(node.cwd)) return undefined;
-		const out = join(this.options.dir, `bundle-${node.id}.tmp`);
-		try {
-			await git(node.cwd, "bundle", "create", out, node.branch);
-			return readFileSync(out);
-		} catch (error) {
-			this.emit("log", "warn", `Could not pack branch ${node.branch}; handing off the conversation only. ${error instanceof Error ? error.message : String(error)}`);
-			return undefined;
-		} finally {
-			if (existsSync(out)) unlinkSync(out);
+	/** Sessions released to someone who has not yet confirmed receiving them. */
+	pendingTransfers(): Array<{ nodeId: string; to: string }> {
+		const out: Array<{ nodeId: string; to: string }> = [];
+		for (const file of readdirSync(join(this.options.dir, "transfers"))) {
+			try {
+				const transfer = JSON.parse(readFileSync(join(this.options.dir, "transfers", file), "utf8")) as Transfer;
+				out.push({ nodeId: transfer.nodeId, to: transfer.to });
+			} catch {
+				// Unreadable: ignore.
+			}
+		}
+		return out;
+	}
+
+	private async sendTransfers(peer: string): Promise<void> {
+		const dir = join(this.options.dir, "transfers");
+		for (const file of readdirSync(dir)) {
+			let transfer: Transfer;
+			try {
+				transfer = JSON.parse(readFileSync(join(dir, file), "utf8")) as Transfer;
+			} catch {
+				continue;
+			}
+			if (transfer.to !== peer) continue;
+			try {
+				const { receipt } = await this.request<{ receipt: Signed<{ nodeId: string; received: true }> }>(peer, "transfer", transfer);
+				if (receipt?.by === peer && receipt.body?.nodeId === transfer.nodeId) {
+					unlinkSync(join(dir, file));
+					this.emit("changed");
+				}
+			} catch (error) {
+				this.emit("log", "warn", `"${transfer.record.meta.body.name}" is released to ${peer} but has not reached them yet: ${error instanceof Error ? error.message : String(error)}`);
+			}
 		}
 	}
 
-	private async adopt(adoption: Adoption): Promise<void> {
-		const project = resolve(this.options.projectDir);
-		let cwd = project;
-		let branch: string | null = null;
-		let workspace: NodeMeta["workspace"] = "shared";
-		let transfer: TransferMeta = { branch: null, workspace: "shared" };
+	/** The new owner's side of the release: verify the log says so, take the session and branch, and sign a receipt. */
+	private async receiveTransfer(peer: string, transfer: Transfer): Promise<{ receipt: Signed<{ nodeId: string; received: true }> }> {
+		const me = this.identity.name;
+		const record = parseRecord(JSON.stringify(transfer?.record));
+		if (!record) throw new Error("Malformed transfer.");
+		const id = record.meta.body.id;
+		const folded = this.fold(record);
+		if (!folded.valid || folded.ownership.owner !== me) throw new Error("That transfer does not make you the owner.");
+		const receipt = { receipt: this.identity.sign({ nodeId: id, received: true as const }) };
+		if (this.host.node(id)?.owner === me) return receipt; // sent again after a dropped connection
+		const held = this.record(id);
+		if (held && !sameLog(held, record, Math.min(this.fold(held).applied, folded.applied))) throw new Error("That transfer contradicts the ownership history known here.");
+		const signers = new Set(record.events.map((event) => event.by));
+		if (!signers.has(peer) && record.genesis.by !== peer) throw new Error("That transfer is not yours to send.");
+
+		const incoming = join(this.options.dir, "incoming");
+		const sessionPath = join(incoming, `${id}.jsonl`);
+		const bundlePath = join(incoming, `${id}.bundle`);
 		try {
-			transfer = JSON.parse(readFileSync(join(adoption.transferDir, "meta.json"), "utf8")) as TransferMeta;
-		} catch {
-			// No transfer metadata: adopt with the conversation only, or with nothing.
-		}
-		const bundle = join(adoption.transferDir, "branch.bundle");
-		if (transfer.branch && existsSync(bundle)) {
-			const common = await git(project, "rev-parse", "--git-common-dir");
-			const mainRoot = dirname(isAbsolute(common) ? common : resolve(project, common));
-			const path = join(mainRoot, ".lattice", "worktrees", adoption.nodeId);
-			await git(project, "fetch", "-q", bundle, `+refs/heads/${transfer.branch}:refs/heads/${transfer.branch}`);
-			if (!existsSync(path)) {
-				mkdirSync(dirname(path), { recursive: true });
-				await git(project, "worktree", "add", path, transfer.branch);
+			if (typeof transfer.session === "string") writeFileSync(sessionPath, Buffer.from(transfer.session, "base64"));
+			const project = resolve(this.options.projectDir);
+			let cwd = project;
+			let branch: string | null = null;
+			let workspace: NodeMeta["workspace"] = "shared";
+			if (typeof transfer.bundle === "string" && typeof transfer.branch === "string" && /^[\w./-]+$/.test(transfer.branch)) {
+				writeFileSync(bundlePath, Buffer.from(transfer.bundle, "base64"));
+				const common = await git(project, "rev-parse", "--git-common-dir");
+				const mainRoot = dirname(isAbsolute(common) ? common : resolve(project, common));
+				const path = join(mainRoot, ".lattice", "worktrees", id);
+				await git(project, "fetch", "-q", bundlePath, `+refs/heads/${transfer.branch}:refs/heads/${transfer.branch}`);
+				if (!existsSync(path)) {
+					mkdirSync(dirname(path), { recursive: true });
+					await git(project, "worktree", "add", path, transfer.branch);
+				}
+				cwd = path;
+				branch = transfer.branch;
+				workspace = "worktree";
 			}
-			cwd = path;
-			branch = transfer.branch;
-			workspace = "worktree";
+			this.save({ ...record, events: record.events.slice(0, folded.applied) });
+			if (!this.host.node(id)) this.host.importRemoteNode({ ...record.meta.body, owner: peer, version: folded.ownership.version });
+			this.host.adoptNode(id, { cwd, branch, workspace, version: folded.ownership.version, ...(existsSync(sessionPath) ? { sessionFile: sessionPath } : {}) });
+		} finally {
+			rmSync(sessionPath, { force: true });
+			rmSync(bundlePath, { force: true });
 		}
-		const session = join(adoption.transferDir, "session.jsonl");
-		if (!this.host.node(adoption.nodeId)) this.host.importRemoteNode({ ...adoption.meta, owner: "unknown", version: adoption.version });
-		this.host.adoptNode(adoption.nodeId, { cwd, branch, workspace, version: adoption.version, ...(existsSync(session) ? { sessionFile: session } : {}) });
-		this.emit("log", "info", `You now own "${adoption.meta.name}".`);
+		this.emit("log", "info", `You now own "${record.meta.body.name}".`);
+		this.debounce("publish", () => this.publishOwn());
+		this.emit("changed");
+		return receipt;
 	}
+
+	/** Pack a node's branch so the new owner can recreate it without a shared code remote. */
+	private async bundleBranch(node: NodeMeta): Promise<string | null> {
+		if (!node.branch || !node.cwd || !existsSync(node.cwd)) return null;
+		const out = join(this.options.dir, `bundle-${node.id}.tmp`);
+		try {
+			await git(node.cwd, "bundle", "create", out, node.branch);
+			return readFileSync(out).toString("base64");
+		} catch (error) {
+			this.emit("log", "warn", `Could not pack branch ${node.branch}; handing off the conversation only. ${error instanceof Error ? error.message : String(error)}`);
+			return null;
+		} finally {
+			rmSync(out, { force: true });
+		}
+	}
+}
+
+/** A reachable address for this machine: the first non-internal IPv4, else loopback. */
+function guessHost(): string {
+	for (const addresses of Object.values(networkInterfaces())) {
+		for (const address of addresses ?? []) {
+			if (address.family === "IPv4" && !address.internal) return address.address;
+		}
+	}
+	return "127.0.0.1";
 }
