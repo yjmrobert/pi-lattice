@@ -9,7 +9,7 @@
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
-import { emitEvent, type HostAssignment, type HostClient, type NodeMeta, type UiState } from "@pi-lattice/protocol";
+import { emitEvent, HANDOVER_NOTE, type HostAssignment, type HostClient, type NodeMeta, type UiState } from "@pi-lattice/protocol";
 import { connectHost, hasTree, launchHost, stateDirFor } from "./locate.ts";
 import { type Paint, type PaneView, paneOrder, PLAIN, renderCompact, renderPane } from "./view.ts";
 
@@ -37,6 +37,8 @@ interface Shared {
 	paint: Paint;
 	tui: Hooked | undefined;
 	wrapped: boolean;
+	/** Whether the compact fallback list is currently showing. */
+	compact: boolean;
 	pi: ExtensionAPI | undefined;
 	ctx: ExtensionContext | undefined;
 	refreshing: Promise<void> | undefined;
@@ -45,7 +47,7 @@ const KEY = Symbol.for("pi-lattice.pane");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
 	client: undefined, stateDir: undefined, state: undefined, current: undefined, assignment: undefined, selected: undefined, focused: false, paint: PLAIN,
-	tui: undefined, wrapped: false, pi: undefined, ctx: undefined, refreshing: undefined,
+	tui: undefined, wrapped: false, compact: false, pi: undefined, ctx: undefined, refreshing: undefined,
 });
 
 function view(): PaneView {
@@ -54,7 +56,7 @@ function view(): PaneView {
 		current: shared.current,
 		selected: shared.selected ?? shared.current,
 		focused: shared.focused,
-		hint: shared.client ? "No sessions yet." : "Run /lattice to start a\nsession tree here.",
+		hint: shared.client ? "No sessions yet. Your next\nmessage starts one here." : "No sessions in this\nproject yet.\n\n/lattice starts a tree\nfrom this session.",
 	};
 }
 
@@ -63,7 +65,15 @@ function redraw(): void {
 	// Between one session ending and the next starting there is no usable context; a redraw then simply waits.
 	try {
 		const ctx = shared.ctx;
-		if (ctx?.mode === "tui" && !shared.wrapped) ctx.ui.setWidget("lattice", shared.client ? renderCompact(view()) : undefined);
+		if (ctx?.mode !== "tui") return;
+		// The compact list is only for terminals where the side pane could not be installed.
+		if (!shared.wrapped) {
+			ctx.ui.setWidget("lattice", shared.client ? renderCompact(view()) : undefined);
+			shared.compact = true;
+		} else if (shared.compact) {
+			ctx.ui.setWidget("lattice", undefined);
+			shared.compact = false;
+		}
 	} catch {
 		shared.ctx = undefined;
 	}
@@ -124,7 +134,8 @@ function installPane(tui: Hooked): void {
 	};
 	const wrap = (inner: Component): Component =>
 		new HStack([
-			{ component: pane, basis: PANE_WIDTH, shrink: 0, visible: (viewport) => viewport.width >= MIN_TERMINAL_WIDTH && shared.client !== undefined },
+			// Always there, so opening pi shows the sessions without typing anything.
+			{ component: pane, basis: PANE_WIDTH, shrink: 0, visible: (viewport) => viewport.width >= MIN_TERMINAL_WIDTH },
 			{ component: inner, basis: 0, grow: 1, minSize: 20 },
 		]);
 	const set = tui.setLayoutRoot.bind(tui);
@@ -144,11 +155,12 @@ function dispatch(command: string): void {
 	const pi = shared.pi;
 	const ctx = shared.ctx;
 	if (!pi || !ctx) return;
-	if (!ctx.isIdle()) {
-		ctx.ui.notify("The agent is working. Press escape to stop it, or wait, then try again.", "warning");
-		return;
+	try {
+		// While the agent is working the input path needs to be told how to take this; a command runs at once either way.
+		pi.sendUserMessage(command, ctx.isIdle() ? { expandPromptTemplates: true } : { expandPromptTemplates: true, deliverAs: "steer" });
+	} catch {
+		// The session ended between the key press and now; the next session's pane will be current.
 	}
-	pi.sendUserMessage(command, { expandPromptTemplates: true });
 }
 
 function onPaneKey(data: string): void {
@@ -190,11 +202,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	const mine = (node: NodeMeta | undefined): node is NodeMeta => node !== undefined && node.owner === shared.state?.owner;
 
 	/** Tell the host which node this terminal has open, taking it over or giving back the previous one. */
-	const attach = async (nodeId: string | undefined): Promise<{ sessionFile: string } | undefined> => {
+	const attach = async (nodeId: string | undefined, leaveWorking = false): Promise<{ sessionFile: string; wasWorking: boolean } | undefined> => {
 		const client = shared.client;
 		if (!client) return undefined;
 		if (shared.current && shared.current !== nodeId) {
-			await client.ui("detach", { nodeId: shared.current }).catch(() => {});
+			await client.ui("detach", { nodeId: shared.current, resume: leaveWorking }).catch(() => {});
 			shared.current = undefined;
 			shared.assignment = undefined;
 		}
@@ -202,7 +214,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		const result = await client.ui("attach", { nodeId });
 		shared.current = nodeId;
 		shared.assignment = result.assignment;
-		return { sessionFile: result.sessionFile };
+		return { sessionFile: result.sessionFile, wasWorking: result.wasWorking };
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -243,10 +255,30 @@ export default function paneExtension(pi: ExtensionAPI): void {
 					inverse: (text) => theme.inverse(text),
 				};
 				installPane(tui as Hooked);
+				queueMicrotask(redraw); // the side pane is in place: drop the compact list if it was shown meanwhile
 				return { render: () => [], invalidate() {} };
 			});
 		}
 		redraw();
+	});
+
+	// In a project that has a tree, a new session joins it with its first message, named after
+	// that message, so every real session shows in the pane without anyone asking.
+	pi.on("before_agent_start", async (event, ctx) => {
+		const client = shared.client;
+		if (!client || shared.current || event.messageType !== "user" || process.env.LATTICE_AUTO_JOIN === "0") return;
+		const sessionFile = ctx.sessionManager.getSessionFile();
+		if (!sessionFile) return;
+		try {
+			const title = pi.getSessionName() ?? (event.prompt.replace(/\s+/g, " ").trim().slice(0, 40) || basename(ctx.cwd));
+			const { node, assignment } = await client.ui("adopt", { sessionFile, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, name: title });
+			shared.current = node.id;
+			shared.assignment = assignment;
+			emitEvent(pi.events, "lattice:host:assigned", { assignment });
+			void refresh();
+		} catch {
+			// Joining is a convenience; the session works without it.
+		}
 	});
 
 	pi.on("agent_start", async () => {
@@ -331,10 +363,6 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			await read(ctx, node);
 			return;
 		}
-		if (!ctx.isIdle()) {
-			ctx.ui.notify("The agent here is working. Press escape to stop it, or wait, before opening another session.", "warning");
-			return;
-		}
 		const waiting = shared.state?.attention[node.id]?.dialogs ?? 0;
 		if (waiting > 0 && !shared.state?.foreground.includes(node.id)) {
 			const choice = await ctx.ui.select(`"${node.name}" is waiting on a question.`, ["Answer it here", "Open the session (the question is dropped)"]);
@@ -346,9 +374,21 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		}
 		const previous = shared.current;
 		try {
-			const result = await attach(node.id);
+			// A turn cannot move between processes. If the agent here is mid-turn, stop it on this
+			// side; the host picks the session up in the background and tells it to carry on.
+			const working = !ctx.isIdle();
+			if (working) {
+				ctx.abort();
+				await ctx.waitForIdle();
+			}
+			const result = await attach(node.id, working);
 			if (!result) return;
-			const switched = await ctx.switchSession(result.sessionFile);
+			const switched = await ctx.switchSession(result.sessionFile, {
+				// The same in the other direction: a session that was working in the background carries on here.
+				withSession: async (next) => {
+					if (result.wasWorking) await next.sendUserMessage(HANDOVER_NOTE);
+				},
+			});
 			if (switched.cancelled) await attach(previous);
 		} catch (error) {
 			await attach(previous).catch(() => {});
