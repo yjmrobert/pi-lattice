@@ -3,6 +3,12 @@
   "private": true,
   "version": "0.0.0",
   "description": "Agent-to-agent messaging, session trees, composable roles and shared ownership for Pi",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yjmrobert/pi-lattice.git"
+  },
+  "homepage": "https://github.com/yjmrobert/pi-lattice#readme",
   "type": "module",
   "workspaces": [
     "packages/*"

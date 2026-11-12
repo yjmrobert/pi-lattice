@@ -47,13 +47,15 @@ afterEach(async () => {
 });
 
 describe("the published package", () => {
-	it("holds only built JavaScript, the role fragments and a manifest, and depends on nothing", () => {
-		const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8")) as { name: string; dependencies?: object; pi: { extensions: string[] }; bin: Record<string, string> };
+	it("holds only built JavaScript, the role fragments, the licence and a manifest, and depends on nothing", () => {
+		const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8")) as { name: string; license: string; repository: { url: string }; dependencies?: object; pi: { extensions: string[] }; bin: Record<string, string> };
 		expect(manifest.name).toBe("pi-lattice");
+		expect(manifest.license).toBe("MIT");
+		expect(manifest.repository.url).toContain("pi-lattice");
 		expect(manifest.dependencies).toBeUndefined();
 		expect(manifest.pi.extensions.map((path) => existsSync(join(installed, path)))).toEqual([true, true, true, true, true, true]);
 		expect(existsSync(join(installed, "node_modules"))).toBe(false);
-		expect(readdirSync(installed).sort()).toEqual(["README.md", "extensions", "fragments", "host", "package.json"].sort());
+		expect(readdirSync(installed).sort()).toEqual(["LICENSE", "README.md", "extensions", "fragments", "host", "package.json"].sort());
 	});
 
 	it("runs its host as a plain Node program from where it is installed", () => {
