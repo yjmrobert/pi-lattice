@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSandbox, eventually, extensionPaths, piCli, type Sandbox } from "../support/harness.ts";
+import { joinServer, WorkClient, WorkServer } from "../../packages/server/src/index.ts";
 import { canRunTui, KEY, PiTui } from "../support/tui.ts";
 
 let sandbox: Sandbox;
@@ -198,6 +199,44 @@ describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 		await pi.submit("still here?");
 		await pi.see("echo[user] roles=[lattice-role-protocol] still here?");
 	}, 60_000);
+
+	it("joins a team's server by its address, draws the team's issues in the canopy, and puts this session on one with s", async () => {
+		const server = new WorkServer({ file: ":memory:", host: "127.0.0.1" });
+		const address = `http://127.0.0.1:${await server.start()}/#${server.tracker.code}`;
+		const sam = new WorkClient(await joinServer(address, "sam"));
+		try {
+			await sam.create({ title: "Checkout", type: "epic" });
+			await sam.create({ title: "Pay by card", parent: 1, assignee: "sam" });
+			const pi = await withTree({ cols: 150, rows: 40 });
+			await pi.submit(`/lattice server ${address}`);
+			await pi.see(/Joined http:\/\/127\.0\.0\.1:\d+ as tester\. It has 2 issues\./);
+
+			await pi.submit("/lattice canopy");
+			await pi.see("/lattice canopy");
+			pi.press(KEY.enter);
+			const canopy = await pi.see("next that needs someone");
+			expect(canopy[0]).toMatch(/1 @tester/);
+			expect(canopy[0]).toMatch(/2 @sam/);
+			expect(canopy.join("\n")).toContain("Checkout");
+			expect(canopy.join("\n")).toContain("Pay by card");
+			// The session open here is on no issue yet, so it is shown at the foot, beside the work.
+			expect(canopy.join("\n")).toMatch(/◉ work/);
+
+			// Select the feature and put this session on it: the issue starts, and everyone sees who is on it.
+			pi.press("h");
+			await pi.see(/Checkout {2}epic #1/);
+			pi.press("k");
+			await pi.see(/Pay by card {2}feature #2/);
+			pi.press("s");
+			await eventually(async () => (await sam.read(2)).issue.state === "doing", "the feature to be started");
+			await sam.refresh();
+			await eventually(async () => (await sam.refresh(), sam.state().sessions.some((session) => session.owner === "tester" && session.issue === 2)), "sam to see the session on #2");
+			pi.press(KEY.escape);
+			await pi.see("This session is on #2: Pay by card (doing).");
+		} finally {
+			await server.stop();
+		}
+	}, 90_000);
 
 	it("in a narrow terminal, puts the sessions in two rows above the editor and opens the pane on alt+l", async () => {
 		const pi = await withTree({ cols: 80, rows: 30 });

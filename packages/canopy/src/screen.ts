@@ -27,7 +27,16 @@ export interface CanopyState {
 
 export type CanopyKey = "up" | "down" | "left" | "right" | "shift+up" | "shift+down" | "shift+left" | "shift+right" | "home" | "tab" | "enter" | "escape" | (string & {});
 
-export type CanopyAction = { do: "close" } | { do: "open"; id: string; tree: string } | { do: "start"; id: string; tree: string } | { do: "say"; text: string };
+export type CanopyAction =
+	| { do: "close" }
+	| { do: "open"; id: string; tree: string }
+	| { do: "start"; id: string; tree: string }
+	/** Put the session open in this terminal on an issue. */
+	| { do: "on"; number: number }
+	| { do: "say"; text: string };
+
+/** What an item is called beside its name: an issue's type, a helper's kind, or the name of its level. */
+const kindOf = (world: World, item: Item): string => (item.issue || item.parent?.buds.includes(item) ? item.kind : (world.levels[item.level] ?? item.kind));
 
 /** Narrower or shorter than this, a label and its branch cannot both be read. */
 export const FLOOR = { cols: 60, rows: 20 };
@@ -144,9 +153,14 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 	}
 	if (key === "enter") {
 		if (state.folded.has(item.id)) return interpret(world, state, "f", width, height);
-		if (item.planned) return keep(state, [{ do: "say", text: `Nobody is on "${item.name}" yet. Press s to put a session on it.` }]);
-		return keep(state, [{ do: "open", id: item.id, tree: item.tree }]);
+		if (item.planned) return keep(state, [{ do: "say", text: item.issue ? `Nobody is on #${item.issue.number} yet. Press s to put the session open here on it.` : `Nobody is on "${item.name}" yet. Press s to put a session on it.` }]);
+		// With a server, a teammate's session is known only as the server tells it: there is nothing here to open.
+		if (!item.node && (item.issue || item.agent?.owner)) {
+			return keep(state, [{ do: "say", text: item.agent ? `That is ${item.agent.owner ?? item.owner}'s session, running on their machine.` : `#${item.issue?.number} is finished, and nobody is on it.` }]);
+		}
+		return keep(state, [{ do: "open", id: item.node?.id ?? item.id, tree: item.tree }]);
 	}
+	if (key === "s" && item.issue) return keep(state, [{ do: "on", number: item.issue.number }]);
 	if (key === "s") {
 		if (!item.planned && item.waitsOn.length === 0) return keep(state, [{ do: "say", text: `"${item.name}" has already started.` }]);
 		if (item.owner !== world.me) return keep(state, [{ do: "say", text: `"${item.name}" is ${item.owner}'s to start.` }]);
@@ -156,6 +170,19 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 }
 
 // --- drawing --------------------------------------------------------------------
+
+/** Break text into lines of at most `width`, at spaces. */
+function wrap(text: string, width: number): string[] {
+	const out: string[] = [];
+	let line = "";
+	for (const word of text.split(/\s+/)) {
+		if (line && line.length + 1 + word.length > width) {
+			out.push(line);
+			line = word;
+		} else line = line ? `${line} ${word}` : word;
+	}
+	return line ? [...out, line] : out;
+}
 
 const DIM: Style = { fg: COLOR.dim };
 const KEYCAP: Style = { fg: COLOR.bright, bg: "#272e3d" };
@@ -200,7 +227,7 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 		const final = index === path.length - 1;
 		at = run(grid, at, 1, [[cut(step.name), final ? { fg: COLOR.bright, bold: true } : DIM], [final ? "" : " ▸ ", DIM]]);
 	});
-	if (item && item.level >= 0) run(grid, at, 1, [[`  ${item.parent?.buds.includes(item) ? item.kind : (world.levels[item.level] ?? item.kind)}`, DIM]]);
+	if (item && item.level >= 0) run(grid, at, 1, [[`  ${kindOf(world, item)}${item.issue ? ` #${item.issue.number}` : ""}`, DIM]]);
 	return grid;
 }
 
@@ -208,8 +235,11 @@ function footer(world: World, state: CanopyState, width: number): Grid {
 	const grid = new Grid(width, FOOTER);
 	const item = state.selected ? world.items.get(state.selected) : undefined;
 	const keys: Array<[string, string]> = [["←↑↓→", "move"], ["tab", "next that needs someone"]];
-	if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
-	else if (item && !item.planned) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
+	if (item?.issue) {
+		if (item.node) keys.push(["⏎", "open"]);
+		keys.push(["s", "put this session on it"]);
+	} else if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
+	else if (item && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
 	if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
 	keys.push(["1-9", "one person"], ["a", "panel"], ["shift+←→", "pan"], ["esc", "back"]);
 	let at = 1;
@@ -235,10 +265,19 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 		if (row < height) run(grid, 2, row, parts);
 		row++;
 	};
-	const kind = item.parent?.buds.includes(item) ? item.kind : (world.levels[item.level] ?? item.kind);
+	const kind = kindOf(world, item);
 	line([[cut(item.name, inner - kind.length - 1), { fg: COLOR.bright, bold: true }]]);
 	grid.text(width - 1 - kind.length, 0, kind, DIM);
-	line([[`@${item.owner}`, { fg: color }], [item.away ? " away: as last heard" : "", DIM], [item.repo ? `  ◆ ${item.repo}` : "", DIM]]);
+	if (item.issue) {
+		const issue = item.issue;
+		line([[`#${issue.number}`, { fg: COLOR.text }], [`  ${issue.state}  `, DIM], issue.assignee ? [`@${issue.assignee}`, { fg: color }] : ["unassigned", DIM]]);
+		const extra = [...issue.labels.map((label) => `+${label}`), ...Object.entries(issue.fields).map(([name, value]) => `${name} ${value}`)].join("  ");
+		if (extra) line([[cut(extra, inner), DIM]]);
+		if (item.misfit) {
+			line([["▲ misplaced", { fg: COLOR.attention, bold: true }]]);
+			for (const part of wrap(item.misfit, inner - 2).slice(0, 3)) line([[`  ${part}`, DIM]]);
+		}
+	} else line([[`@${item.owner}`, { fg: color }], [item.away ? " away: as last heard" : "", DIM], [item.repo ? `  ◆ ${item.repo}` : "", DIM]]);
 	if (item.leaves > 0 && item.children.length > 0) {
 		const [full, rest] = bar(item.landed, item.leaves, 14);
 		line([[full, { fg: color }], [rest, { fg: COLOR.faint }], [` ${item.landed} of ${item.leaves} done`, DIM]]);
@@ -247,13 +286,15 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 	row++;
 	line([["SITTING HERE", DIM]]);
 	if (item.agent) {
-		line([[`${glyphOf(item, tick)} `, glyphStyle(world, item)], [item.agent.role, { fg: color, bold: true }], [`  ${item.done ? "done: it sent its result" : stateWord[item.agent.state]}`, DIM]]);
+		const runner = item.agent.owner ?? item.owner;
+		line([[`${glyphOf(item, tick)} `, glyphStyle(world, item)], [item.agent.role, { fg: colorOf(world, runner), bold: true }], [`  ${item.node?.done || (item.done && !item.issue) ? "done: it sent its result" : stateWord[item.agent.state]}`, DIM]]);
+		if (item.issue) line([[`  ${runner === world.me ? "yours" : `${runner}'s`}`, { fg: colorOf(world, runner) }], [item.repo ? `, in ${item.repo}` : "", DIM]]);
 		if (item.node?.model) line([[`  on ${item.node.model}`, DIM]]);
 		const target = item.agent.focus ? world.items.get(item.agent.focus) : undefined;
 		if (target) line([["  working on ", DIM], [cut(target.name, inner - 13), { fg: COLOR.text }]]);
 		if (item.agent.activity) line([[`  ${cut(item.agent.activity, inner - 2)}`, DIM]]);
 		if (item.agent.open) line([["  ▸ open in a terminal", DIM]]);
-	} else line([["  nobody: ", DIM], [item.planned ? "it is planned" : "it never started", DIM]]);
+	} else line([["  nobody: ", DIM], [item.issue ? (item.done ? "it is finished" : "it has not been started") : item.planned ? "it is planned" : "it never started", DIM]]);
 	if (item.asks > 0) {
 		row++;
 		line([[`● ${item.asks} ${item.asks === 1 ? "thing waits" : "things wait"} for someone here`, { fg: COLOR.attention, bold: true }]]);

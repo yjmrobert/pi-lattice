@@ -102,6 +102,10 @@ export default function (pi: ExtensionAPI) {
 					if (action.do === "say") said = { text: action.text, until: Date.now() + SAY_MS };
 					// Opening a session switches this terminal to it: the canopy steps aside first.
 					if (action.do === "open") return close(`/lattice open ${action.id}`);
+					if (action.do === "on") {
+						said = { text: `Putting this session on #${action.number}…`, until: Date.now() + SAY_MS };
+						run(`/lattice on ${action.number}`);
+					}
 					if (action.do === "start") {
 						said = { text: "Putting a session on it…", until: Date.now() + SAY_MS };
 						run(`/lattice start ${action.id}`);

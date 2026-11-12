@@ -30,3 +30,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0023 | Planned work, and what a session is working on | accepted |
 | 0024 | The canopy | first part built |
 | 0025 | One published package, built | built; the publish itself not yet done |
+| 0026 | A server for the team's work | built: issues, the scheme, sessions on issues, the canopy; sharing sessions is still peer to peer |

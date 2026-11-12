@@ -52,6 +52,7 @@ Two kinds of thing, kept separate.
 | `canopy` | Extension. All the work as a tree that grows upward, full screen: who owns what, which agent is on it. Asks the pane for what to draw over the event bus. | protocol |
 | `host` | Library. Store, supervisor, broker, socket API, foreground handover. | protocol |
 | `collab` | Library. Networks, identities, finding teammates, an encrypted peer channel, signed ownership logs, cross-owner mail, handoff. | protocol |
+| `server` | Library and program. One always-on place for a team's work: issues structured by a scheme the team defines, over HTTP, in one SQLite file; and the client a host uses. ([ADR 0026](decisions/0026-a-server-for-the-work.md)) | protocol |
 | `app` | The composition root. The Pi package manifest, the launcher extension, the background host wired to sharing, the command line. | all of the above |
 
 ## Seams
@@ -61,7 +62,7 @@ The full account is in [ADR 0014](decisions/0014-package-seams.md). In short:
 - A package imports only `protocol` from this repository. `app` imports everything, and nothing imports `app`.
 - Extensions talk through typed events on `pi.events`, defined in `protocol`. They never read each other's state and never write to the environment for each other.
 - A session learns it is a node through a **host assignment**: from the environment when the host started it, or from the `lattice:host:assigned` event when a person opens the node in their own Pi. Extensions accept it at any time, so load order does not matter.
-- A package that needs something from another defines an interface and is handed an implementation: `HostPort` (collab), `SharingPort` (host), `Transport` (a2a), `PeerTransport` and `Discovery` (collab).
+- A package that needs something from another defines an interface and is handed an implementation: `HostPort` (collab), `SharingPort` and `WorkPort` (host), `Transport` (a2a), `PeerTransport` and `Discovery` (collab).
 - The pane does not start hosts. It asks on the event bus; the app's launcher answers.
 - An extension goes quiet when its session ends, because the event bus outlives a session switch.
 - `protocol` holds no state ([0001](decisions/0001-packaging-and-scope.md)). Extensions start nothing in their factory.
@@ -105,7 +106,7 @@ Details in [roles.md](roles.md). Each applied fragment becomes one system prompt
 
 ## Collaboration
 
-Each person runs their own host, and the hosts connect directly, peer to peer. There is no server and no shared storage ([ADR 0012](decisions/0012-peer-to-peer-collab.md)); [leases.md](leases.md) describes the behaviour.
+Each person runs their own host, and the hosts connect directly, peer to peer, to share sessions ([ADR 0012](decisions/0012-peer-to-peer-collab.md)); [leases.md](leases.md) describes the behaviour. The team's work is different: it lives on one server every host talks to ([ADR 0026](decisions/0026-a-server-for-the-work.md)), and sharing sessions is planned to move there too ([the plan](design/server-plan.md)).
 
 A **network** is a name and a secret, kept in one file in the person's lattice home and followed by the host of every repository they have open ([ADR 0018](decisions/0018-networks.md)). Whoever holds the secret is a member, and proves it on every connection; the first key seen under a name is pinned. A person goes by a name they choose once, when they first create or join ([ADR 0020](decisions/0020-one-line-to-join.md)). Hosts find each other by a port derived from the network and the repository, by beacons on the local network, and by telling each other who they know. Hosts for the same repository share its tree and hand sessions over; hosts for different repositories connect only to look ([ADR 0019](decisions/0019-everything-everyone-is-running.md)).
 

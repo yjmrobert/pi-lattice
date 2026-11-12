@@ -1053,6 +1053,23 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		await refresh();
 	};
 
+	/** Say which issue the session open here is on. */
+	const workOn = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
+		const word = arg.trim().replace(/^#/, "");
+		const number = word === "none" ? null : Number(word);
+		if (number !== null && !Number.isInteger(number)) return ctx.ui.notify("Say which issue: /lattice on 12, or /lattice on none.", "warning");
+		const client = need(ctx);
+		const nodeId = shared.current;
+		if (!client || !nodeId) return ctx.ui.notify("This session is not part of a tree yet. Run /lattice first.", "warning");
+		try {
+			const { issue } = await client.ui("work", { request: { do: "on", number, nodeId } });
+			ctx.ui.notify(issue ? `This session is on #${issue.number}: ${issue.title} (${issue.state}).` : "This session is on no issue.", "info");
+		} catch (error) {
+			fail(ctx, error);
+		}
+		await refresh();
+	};
+
 	/** What handing a session to someone does, said before the one step that cannot be taken back. */
 	const WHAT_GOES = "It stops here, and its whole conversation, including any file contents and command output in it, goes directly to them, with its branch if it has one. After that you can read it but not run it.";
 	const NO_NETWORK = "You are not in a network yet. /lattice network creates one, or joins a teammate's.";
@@ -1669,6 +1686,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		},
 		{ name: "approvals", does: "review messages waiting for approval", run: (ctx) => approvals(ctx) },
 		{ name: "server", usage: "server [address [your name] | leave]", does: "join your team's server, where its work is tracked; with nothing, say which one you are on", run: (ctx, arg) => server(ctx, arg) },
+		{ name: "on", usage: "on <issue | none>", does: "say which of the team's issues this session is working on", run: (ctx, arg) => workOn(ctx, arg) },
 		{ name: "network", does: "create or join a network of teammates; who is in it, the join code, what is being handed over", run: (ctx) => network(ctx) },
 		{ name: "join", usage: "join <code> [your name]", does: "join a teammate's network with the code they gave you", run: (ctx, arg) => joinNetwork(ctx, arg) },
 		{ name: "create", usage: "create [network] [your name]", does: "start a network and get the code teammates join with", run: (ctx, arg) => createNetwork(ctx, arg) },

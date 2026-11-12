@@ -28,6 +28,7 @@ Then open `pi` in a project as you always do. A pane on the left lists the proje
 - With the keyboard, the chat steps aside to show the selected session in full. `enter` opens it in this terminal, with all of Pi. You can switch at any time, even mid-turn: the work you leave carries on in the background.
 - `n` creates a child session from one form. Agents can also delegate on their own. Children run in the background, each on the model you choose. A child can be told to wait on others: it shows in the tree at once and starts by itself when they have finished.
 - `c` opens the canopy: all the work as a tree, the network at the root and tasks at the tips. Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. Work can be planned before anyone is on it; `s` puts a session on a planned item.
+- `/lattice server <address>` joins your team's server, where its work is tracked as issues: epics, features, stories, tasks and bugs by default, or whatever structure the team defines. The canopy then draws the issues, with everyone's sessions on them, and agents add to the work and pick it up. Someone runs the server once with `pi-lattice server`.
 - `r` renames a session, `d` archives it, `s` stops what it is doing. `?` lists every key, and `/lattice help` every command.
 - `,` in the pane, or `/lattice config`, opens the settings: models, roles, limits and the pane itself, for this repository or for all of yours. `/lattice doctor` checks the setup.
 - Sessions are told how to talk to each other, and you can read and change all of it: `/lattice prompt` shows what a session has been told and the file each part comes from.
@@ -88,6 +89,8 @@ git push origin v0.1.0
 The workflow runs the whole suite on the tagged commit, builds the package and publishes it to npm. A tag that does not match the version stops it before anything is published. Versions follow semantic versioning; one with a suffix, such as `v0.2.0-beta.1`, is published under `next` and is not what `pi install npm:pi-lattice` gets.
 
 ## Not done yet
+
+- **The move to a server is half done.** A team's work lives on its server ([ADR 0026](docs/decisions/0026-a-server-for-the-work.md)), but reading a teammate's conversation, mail between owners and handing a session over still go peer to peer. Issues can be changed by agents and through the API, not yet from the canopy. [The plan](docs/design/server-plan.md) has the rest.
 
 - **Publishing.** The package builds, and installs and runs from a tarball ([ADR 0025](docs/decisions/0025-one-published-package.md)), but it is not on npm yet. Until it is, install from a checkout.
 - **A run with a real model.** Every flow is tested against a scripted model, which checks the mechanics, not how well a model follows the role fragments. `npm run eval` is written for that and has not been run yet.

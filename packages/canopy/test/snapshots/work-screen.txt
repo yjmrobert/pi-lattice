@@ -1,0 +1,40 @@
+ ◆ lattice.example.com  1 @yan ⠋1 3   2 @sam ⠋1 ●1 4   3 ○@teo away 2
+ lattice.example.com ▸ Checkout ▸ Pay by card ▸ Enter a card ▸ Card form  task #4
+                                                                                                              │ Card form                        task
+                                                                                                              │ #4  doing  unassigned
+                                                                                                              │
+                                                                                                              │ SITTING HERE
+                                                                                                              │ ⠋ implementation  working
+                          ⢠⠤⠋ Card form                                                                       │   sam's, in shop
+                          ⢸⠤✓ Validate number                                                                 │   editing form.tsx
+                          ⢸⠤○ Error states                                                                    │
+                         ⢀⢼⢄                                                                                  │ UNDER IT
+                         ⡇◉ Enter a card ●1                                                                   │ └ · sam-review      review, idle
+                         ⠈⢺⠊● implementation · 1/3                                                            │
+                          ⢸                                                                                   │
+                          ⢸                                                                                   │
+                         ⢀⠏                                                                                   │
+                       ⣀⠴⠋                                                                                    │
+  ⢠⠤⠋ Total is wrong⡤@yan                                                                                     │
+  ⢸             ⣠⠔⠋⠁                                                                                          │
+  ⢸            ⡜⠁                                                                                             │
+  ⠸⠤⠤⠤⠤⠤⢤⣀⣀⣀⣀⣀⣸⠁                                                                                              │
+              ○ Pay by card                          ○ Refunds                                                │
+              ⢸ doing · 1/4 · @sam                   ⢈ todo · @teo                                            │
+              ⢸                                      ⢈                                                        │
+              ⠸⣄⣀                                   ⡀⡰                                                        │
+                ⠈⠉⠙⠒⠒⠒⠢⠤⠤⠤⠤⣀⣀⣀⣀        ⣀ ⢀ ⠠⠄ ⠆ ⠒ ⠁⠈                                                          │
+                              ⠈⠉⠙⠒⢦⠄⠂⠈                                                                        │
+                                  ○ Checkout                                           ⢀⠤⢄                    │
+                                  ⢸⡇doing · 1/5 · @yan                 ⢀⠤○ Loose end   ⡇◉ scratch           ⢀⠤│
+                                  ⢸⡇                                   ⢈               ⠈⢺⡏· scratch · @yan  ⡇◉│
+                                  ⢸⣇                                   ○ Search         ⢸⡇                  ⠈⢺│
+                                   ⠉⠓⠦⣤⣀⡀                              ⢀⡀todo · 0/1     ⣸⡇                   ⢸│
+                                        ⠉⠉⠛⠒⠒⠦⠤⠤⣤⣀⣀⣀⡀                  ⢠⡄            ⣀⣠⠾⠋                   ⣀⣼│
+                                                   ⠈⠉⠉⠉⠙⠓⠒⠒⠶⠤⠤⢤⣀⣀⣀     ⠠⠄    ⢀⣀⣀⡤⠴⠒⠚⠋⠉        ⣀⣀⣀⣀⣀⣠⠤⠤⠤⠴⠒⠒⠛⠉⠉ │
+                                                                 ⠉⠉⠙⠒⠶⢤⣀⣒⣀⣤⠖⣛⣉⣁⡤⠤⠤⠤⠖⠒⠒⠒⠒⠚⠉⠉⠉⠉⠉⠁               │
+                                                                      ⢀⢌⢿⣿⢟⠉⠉                                 │
+                                                                     ⢔⢵⣷⣿⣷⣷⢕⠄                                 │
+                                                                     ⢕⢿⣿⣿⣿⣿⢗⠅                                 │
+                                                                     ⠑⢝⢟⢿⢟⢟⠕⠁                                 │
+  ←↑↓→  move    tab  next that needs someone    s  put this session on it    1-9  one person    a  panel    shift+←→  pan    esc  back

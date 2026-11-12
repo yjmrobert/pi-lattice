@@ -183,7 +183,7 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 				grid.text(at, row, `●${item.asks}`, amber);
 				at += 2 + String(item.asks).length;
 			}
-			if (item.parent && item.parent.owner !== item.owner) grid.text(at, row, `@${item.owner}`, { fg: color, level: strength(item, 1) });
+			if (item.owner !== "" && item.parent && item.parent.owner !== item.owner) grid.text(at, row, `@${item.owner}`, { fg: color, level: strength(item, 1) });
 			else if (options.letters) grid.text(at, row, letterOf(world, item.owner), { fg: color });
 			continue;
 		}
@@ -191,7 +191,9 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		// A ring round the node says an agent sits there. It turns while the agent works.
 		if (item.agent && !landed) {
 			const turn = item.agent.state === "working" ? frame * 0.5 : 0;
-			const ring: Style = asking ? amber : { fg: item.agent.state === "failed" ? COLOR.failed : color, level: strength(item, item.agent.state === "idle" ? 0.6 : 1) };
+			// The ring is the agent's, so it takes the colour of whoever runs it; the name keeps the colour of whoever the work is for.
+			const runner = item.agent.owner && lit(item) ? colorOf(world, item.agent.owner) : color;
+			const ring: Style = asking ? amber : { fg: item.agent.state === "failed" ? COLOR.failed : runner, level: strength(item, item.agent.state === "idle" ? 0.6 : 1) };
 			for (let a = 0; a < 6.28; a += 0.3) {
 				const gap = item.agent.state === "working" && frame > 0 && ((a - turn) % 6.28 + 6.28) % 6.28 < 1.5;
 				if (!gap) grid.plot(col * 2 + 1 + Math.cos(a) * 3.3, row * 4 + 1.5 + Math.sin(a) * 3.3, ring, 6);
@@ -217,7 +219,8 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		};
 		if (item.agent) {
 			grid.text(at, row + 1, agentGlyph(item.agent, frame), item.agent.state === "asking" ? amber : { fg: item.agent.state === "failed" ? COLOR.failed : color, level: strength(item, 1) });
-			grid.text(at + 2, row + 1, chip.agent, { fg: color, level: strength(item, 1) });
+			// The agent's name is in the colour of whoever runs it, which on an issue need not be who the issue is for.
+			grid.text(at + 2, row + 1, chip.agent, { fg: item.agent.owner && lit(item) ? colorOf(world, item.agent.owner) : color, level: strength(item, 1) });
 			at += 2 + chip.agent.length;
 		} else if (chip.agent) {
 			grid.text(at, row + 1, chip.agent, { fg: grey(item, COLOR.dim) });

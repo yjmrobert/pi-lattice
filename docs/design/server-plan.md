@@ -1,6 +1,6 @@
 # One server, and the work on it
 
-A plan to replace peer-to-peer sharing with one hosted service, and to track work on it as issues. Status: phases 1 to 5 are being built; the status line at the end of each phase says what exists.
+A plan to replace peer-to-peer sharing with one hosted service, and to track work on it as issues. Status: phases 1 to 5 are built ([0026](../decisions/0026-a-server-for-the-work.md)). Phases 6 to 8 are not: issues cannot yet be edited from the canopy, and reading a teammate's conversation, mail between owners and handing a session over still go peer to peer.
 
 ## Why
 
