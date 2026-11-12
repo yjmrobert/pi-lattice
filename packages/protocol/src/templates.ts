@@ -26,12 +26,14 @@ export const TEMPLATES = {
 	brief: {
 		name: "brief",
 		summary: "The first thing a child session is told: who created it, then the brief.",
-		vars: ["parent.name", "parent.id", "name", "kind", "branch", "brief"],
+		vars: ["parent.name", "parent.id", "name", "kind", "branch", "waited", "brief"],
 		text: [
 			'[pi-lattice] This session was created by another agent session, "{{parent.name}}" ({{parent.id}}), as its child "{{name}}" (kind: {{kind}}).',
 			"The brief below is from that agent, not typed by the user. The user can see this session and may join it at any time; their instructions take priority.",
 			"{{#branch}}You are working in your own git worktree on branch {{branch}}. Commit your work there.",
 			"{{/branch}}",
+			"{{#waited}}You were kept from starting until these sessions had sent their results, which they now have: {{waited}}.",
+			"{{/waited}}",
 			"",
 			"Brief:",
 			"{{brief}}",
@@ -55,11 +57,12 @@ export const TEMPLATES = {
 	"child-stopped": {
 		name: "child-stopped",
 		summary: "What a parent is told when a child stops without reporting.",
-		vars: ["name", "id", "reason", "last"],
+		vars: ["name", "id", "reason", "last", "held"],
 		text: [
 			'[pi-lattice] Your child session "{{name}}" ({{id}}) stopped without reporting: {{reason}}. This note is from pi-lattice, not from the child and not from the user.',
 			"Its work may be unfinished. Check what it left, then send it a message to start it again, do the work yourself, or tell the user.",
 			"{{#last}}The last thing it said: {{last}}{{/last}}",
+			"{{#held}}Still waiting on it before they start: {{held}}. They start when it sends its result; send one a message to start it without that.{{/held}}",
 		].join("\n"),
 	},
 } as const satisfies Record<string, Template>;

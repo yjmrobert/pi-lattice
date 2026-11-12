@@ -78,10 +78,10 @@ What a session is told is made of files, and each can be replaced. `/lattice pro
 
 | Template | When it is used | May mention |
 |---|---|---|
-| `brief` | The first thing a child session is told: who created it, then the brief. | `{{parent.name}}` `{{parent.id}}` `{{name}}` `{{kind}}` `{{branch}}` `{{brief}}` |
+| `brief` | The first thing a child session is told: who created it, then the brief. | `{{parent.name}}` `{{parent.id}}` `{{name}}` `{{kind}}` `{{branch}}` `{{waited}}` `{{brief}}` |
 | `handover` | What an agent is told when its session moved between the background and a terminal mid-turn. |  |
 | `reminder` | What a child is told when it ends its turn without reporting to its parent. | `{{parent.name}}` |
-| `child-stopped` | What a parent is told when a child stops without reporting. | `{{name}}` `{{id}}` `{{reason}}` `{{last}}` |
+| `child-stopped` | What a parent is told when a child stops without reporting. | `{{name}}` `{{id}}` `{{reason}}` `{{last}}` `{{held}}` |
 
 `{{name}}` is replaced by its value. `{{#name}}…{{/name}}` is kept only when the value is not empty.
 

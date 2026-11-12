@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { childrenOf, depthOf, formatTree, type NodeMeta, treeOf } from "../src/index.ts";
+import { ancestorsOf, childrenOf, depthOf, formatTree, isHeld, type NodeMeta, treeOf, waitingFor } from "../src/index.ts";
 
 const node = (id: string, parentId: string | null, over: Partial<NodeMeta> = {}): NodeMeta => ({
 	id, parentId, rootId: "r", kind: "task", name: id, brief: "", fragments: [], owner: "yan", version: 1, status: "idle",
@@ -23,6 +23,22 @@ describe("tree helpers", () => {
 		expect([depthOf(nodes, "r"), depthOf(nodes, "a"), depthOf(nodes, "a1")]).toEqual([0, 1, 2]);
 		expect(depthOf([node("x", "missing")], "x")).toBe(0);
 		expect(depthOf([node("x", "y"), node("y", "x")], "x")).toBeLessThan(3);
+	});
+
+	it("lists what is above a node, nearest first, and survives a cycle", () => {
+		expect(ancestorsOf(nodes, "a1").map((n) => n.id)).toEqual(["a", "r"]);
+		expect(ancestorsOf(nodes, "r")).toEqual([]);
+		expect(ancestorsOf([node("x", "y"), node("y", "x")], "x").length).toBeLessThan(3);
+	});
+
+	it("says what a node still waits for: the sessions it names that have not sent their result", () => {
+		const waiting = node("c", "r", { waitsOn: ["a", "b", "gone"] });
+		const all = [...nodes.map((n) => (n.id === "a" ? { ...n, done: true } : n)), waiting];
+		expect(waitingFor(all, waiting).map((n) => n.id)).toEqual(["b"]);
+		expect(isHeld(waiting)).toBe(true);
+		expect(isHeld(node("d", "r"))).toBe(false);
+		// The tree names them, or gives the id of one it does not know.
+		expect(formatTree(all)).toContain("c  [task]  c  idle  waits-on=a+b+gone");
 	});
 
 	it("walks a tree parents first", () => {

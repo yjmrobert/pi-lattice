@@ -19,6 +19,11 @@ export interface SpawnSpec {
 	workspace?: WorkspaceMode;
 	/** The model the child runs on, as Pi's `--model` takes it. Defaults to the tree's, then Pi's. */
 	model?: string;
+	/**
+	 * Sessions in the same tree, by id or by name, that must send their result before this one
+	 * starts. It is created at once and given its brief when the last of them has.
+	 */
+	waitsOn?: string[];
 }
 
 export interface RequestMap {
@@ -151,6 +156,8 @@ export interface UiApi {
 	archive: { params: { nodeId: string; archived: boolean }; result: { count: number } };
 	/** The sessions that have been archived. */
 	archived: { params: Record<string, never>; result: { nodes: NodeMeta[] } };
+	/** Start a session that is waiting on others now, without waiting for them. */
+	start: { params: { nodeId: string }; result: Record<string, never> };
 	/** Stop what a background session's agent is doing. The session stays, idle. */
 	interrupt: { params: { nodeId: string }; result: Record<string, never> };
 	/**

@@ -36,6 +36,11 @@ export interface NodeMeta {
 	model?: string;
 	/** It has sent its parent the result of the work it was given, and has been given nothing since. */
 	done?: boolean;
+	/**
+	 * The sessions it is waiting for before it starts. While this is set it has not been given
+	 * its brief: the host starts it when each of them has sent its result. Removed once it starts.
+	 */
+	waitsOn?: string[];
 	/** What its agent has used so far. */
 	usage?: { tokens: number; cost: number };
 	createdAt: string;

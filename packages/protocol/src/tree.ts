@@ -32,6 +32,27 @@ export function treeOf(nodes: readonly NodeMeta[], rootId: string): NodeMeta[] {
 	return out;
 }
 
+/** The sessions a node is still waiting for before it starts: those it names that have not sent their result. */
+export function waitingFor(nodes: readonly NodeMeta[], node: Pick<NodeMeta, "waitsOn">): NodeMeta[] {
+	return (node.waitsOn ?? []).flatMap((id) => nodes.filter((candidate) => candidate.id === id && !candidate.done));
+}
+
+/** Whether a node has yet to be given its brief because it waits on others. */
+export const isHeld = (node: Pick<NodeMeta, "waitsOn">): boolean => (node.waitsOn?.length ?? 0) > 0;
+
+/** A node's ancestors, nearest first. Stops at a missing parent or a cycle. */
+export function ancestorsOf(nodes: readonly NodeMeta[], id: string): NodeMeta[] {
+	const byId = new Map(nodes.map((node) => [node.id, node]));
+	const out: NodeMeta[] = [];
+	let current = byId.get(id);
+	while (current?.parentId) {
+		current = byId.get(current.parentId);
+		if (!current || out.includes(current)) break;
+		out.push(current);
+	}
+	return out;
+}
+
 export interface TreeLine {
 	node: NodeMeta;
 	depth: number;
@@ -64,6 +85,7 @@ export function formatTree(nodes: readonly NodeMeta[], options: { self?: string 
 			const parts = [`${prefix}${node.name}`, `[${node.kind}]`, node.id, node.status];
 			if (node.fragments.length > 0) parts.push(`roles=${node.fragments.join("+")}`);
 			if (node.branch) parts.push(`branch=${node.branch}`);
+			if (isHeld(node)) parts.push(`waits-on=${(node.waitsOn ?? []).map((id) => nodes.find((other) => other.id === id)?.name ?? id).join("+")}`);
 			if (node.id === options.self) parts.push("(you)");
 			return parts.join("  ");
 		})
