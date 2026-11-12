@@ -9,12 +9,18 @@ import { emitEvent, type LatticeEvents, onEvent, SETTINGS } from "@pi-lattice/pr
 import { type Animation, advance, happenings, type Motion } from "./animate.ts";
 import type { Shape } from "./layout.ts";
 import { buildWorld, type World } from "./model.ts";
-import { FPS } from "./paint.ts";
+import { BEAT } from "./paint.ts";
 import { type CanopyKey, type CanopyState, initial, interpret, render } from "./screen.ts";
 
+/**
+ * How often the canopy is drawn while something moves. A frame costs about a millisecond to make,
+ * and Pi draws at most every 16 ms, so this is a choice, not a limit: thirty a second is smooth
+ * for a dot running along a branch and writes half of what sixty would.
+ */
+const FPS = 30;
 const FRAME_MS = Math.round(1000 / FPS);
 /** How often the world is asked for again while nothing moves. */
-const LOOK_EVERY = 4;
+const LOOK_EVERY = 10;
 const SAY_MS = 4000;
 const NAMED = ["up", "down", "left", "right", "shift+up", "shift+down", "shift+left", "shift+right", "home", "tab", "enter", "escape"] as const;
 const DEFAULT_LEVELS = (SETTINGS.find((setting) => setting.key === "canopy.levels")?.default as string[] | undefined) ?? ["epic", "feature", "story", "task"];
@@ -52,14 +58,17 @@ export default function (pi: ExtensionAPI) {
 		let state: CanopyState = initial(world, on ?? current, (chosen["canopy.shape"] === "ruled" ? "ruled" : "grown") satisfies Shape);
 		// Opening plays nothing: only what changes while the canopy is open moves.
 		let moving: Animation[] = [];
-		let tick = 0;
+		let frames = 0;
+		const opened = Date.now();
+		/** Beats since the canopy opened; never zero, which draws a still. */
+		const beat = (): number => Math.max(0.001, ((Date.now() - opened) / 1000) * BEAT);
 		let said: { text: string; until: number } | undefined;
 		const size = (): [number, number] => [tui.terminal.columns, tui.terminal.rows];
 		const timer = setInterval(() => {
-			tick++;
+			frames++;
 			const busy = motion !== "off" && (moving.length > 0 || [...world.items.values()].some((item) => item.agent?.state === "working" || item.asks > 0 || item.agent?.state === "asking"));
 			if (said && Date.now() > said.until) said = undefined;
-			if (busy || tick % LOOK_EVERY === 0) tui.requestRender();
+			if (busy || frames % LOOK_EVERY === 0) tui.requestRender();
 		}, FRAME_MS);
 		const close = (result?: string): void => {
 			clearInterval(timer);
@@ -75,7 +84,7 @@ export default function (pi: ExtensionAPI) {
 				moving = advance(moving, motion === "full" ? happenings(before, world) : [], world, now);
 				// What was selected may be gone: archived, or handed to someone whose tree is not shown.
 				if (state.selected && !world.items.has(state.selected)) state = { ...state, selected: world.root.children[0]?.id, framed: false };
-				const lines = render(world, state, width, tui.terminal.rows, motion === "off" ? 0 : tick, { animations: moving, now });
+				const lines = render(world, state, width, tui.terminal.rows, motion === "off" ? 0 : beat(), { animations: moving, now });
 				if (said && lines.length > 0) {
 					const text = said.text.slice(0, Math.max(0, width - 2));
 					lines[lines.length - 1] = ` \x1b[38;2;243;246;251m${text}\x1b[0m${" ".repeat(Math.max(0, width - 1 - text.length))}`;

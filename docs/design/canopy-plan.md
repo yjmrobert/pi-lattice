@@ -115,7 +115,7 @@ Every animation is the picture of one event. Nothing moves when nothing happened
 - **Where events come from.** The host already says "changed"; the canopy compares the new state with the last and derives landing, planning, starting, handoff, presence and a moved focus from the difference. Messages are the one thing a difference cannot show, so `UiState` gains `traffic`: the envelopes of the last few seconds, as from, to, intent and time. No content.
 - **Opening the canopy plays nothing.** It draws the present. Only what changes while it is open animates, so a first look is not a firework.
 - **Many at once.** Events on the same branch queue; more than a handful of pulses a second on one branch merge into one.
-- **Budget.** Twelve frames a second, and only changed cells are written. With nothing animating the canopy writes nothing.
+- **Budget.** Thirty frames a second while something moves, with motion timed by the clock so its speed does not depend on the frame rate, and only changed cells are written. With nothing animating the canopy writes nothing.
 - **Attention off screen.** When what needs someone is outside the view, the edge of the screen nearest to it carries an amber arrow with a count, blinking in step. `tab` goes there.
 - **`canopy.motion`: `full`, `calm`, `off`.** `calm` keeps the rings and the amber blink, drops the ripple, and makes everything else a single-frame change. `off` is fully static: state is still told by glyph. `NO_COLOR` and a dumb terminal imply `off`.
 

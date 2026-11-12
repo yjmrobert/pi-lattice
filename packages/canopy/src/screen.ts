@@ -7,7 +7,7 @@ import type { Animation } from "./animate.ts";
 import { Grid, type Style } from "./grid.ts";
 import { cut, type Layout, layout, type Place, type Shape } from "./layout.ts";
 import { type Item, pathTo, ROOT_ID, walk, type World } from "./model.ts";
-import { FPS, paint, SPINNER } from "./paint.ts";
+import { BEAT, paint, spin } from "./paint.ts";
 import { COLOR, colorOf, letterOf } from "./palette.ts";
 
 export type Side = "inspector" | "roster" | "none";
@@ -171,7 +171,7 @@ function run(grid: Grid, col: number, row: number, parts: Array<[text: string, s
 }
 
 const stateWord = { working: "working", asking: "asks someone", waiting: "waits on others", idle: "idle", failed: "failed" } as const;
-const glyphOf = (item: Item, tick: number): string => (item.failed ? "✗" : item.done ? "✓" : item.agent ? (item.agent.state === "working" ? (SPINNER[tick % SPINNER.length] as string) : item.agent.state === "asking" ? "●" : item.agent.state === "waiting" ? "⧗" : "·") : "○");
+const glyphOf = (item: Item, tick: number): string => (item.failed ? "✗" : item.done ? "✓" : item.agent ? (item.agent.state === "working" ? spin(tick) : item.agent.state === "asking" ? "●" : item.agent.state === "waiting" ? "⧗" : "·") : "○");
 const glyphStyle = (world: World, item: Item): Style => (item.failed ? { fg: COLOR.failed } : item.asks > 0 || item.agent?.state === "asking" ? { fg: COLOR.attention, bold: true } : item.planned ? DIM : { fg: colorOf(world, item.owner) });
 const bar = (done: number, of: number, width: number): [string, string] => {
 	const filled = of > 0 ? Math.round((done / of) * width) : 0;
@@ -188,7 +188,7 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 		const style: Style = { fg: lit ? color : COLOR.faint, level: person.online ? 1 : 0.55, bold: state.spotlight === person.name };
 		at = run(grid, at, 0, [[`${index + 1}`, state.spotlight === person.name ? KEYCAP : DIM], [" "], [`${person.online ? "" : "○"}@${person.name}`, style]]);
 		if (!person.online) at = run(grid, at, 0, [[" away", DIM]]);
-		if (person.working > 0) at = run(grid, at, 0, [[" "], [`${SPINNER[tick % SPINNER.length]}${person.working}`, style]]);
+		if (person.working > 0) at = run(grid, at, 0, [[" "], [`${spin(tick)}${person.working}`, style]]);
 		if (person.asking > 0) at = run(grid, at, 0, [[" "], [`●${person.asking}`, { fg: COLOR.attention, bold: true }]]);
 		at = run(grid, at, 0, [[` ${person.owned}`, DIM], ["   "]]);
 	});
@@ -340,7 +340,7 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const win = windowOf(view, width, height);
 	const side = sideWidth(view, width);
 	const tree = paint(world, plan, { frame: tick, letters: view.letters, folded: view.folded, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
-	const blink = tick === 0 || tick % FPS < FPS / 2;
+	const blink = tick === 0 || tick % BEAT < BEAT / 2;
 	for (const edge of edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
 	const canvas = lines(tree, view.camera.col, view.camera.row, win.width, win.height);
 	const panel = side > 0 ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick)) : [];

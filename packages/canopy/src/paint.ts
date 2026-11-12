@@ -10,8 +10,13 @@ import type { Agent, Item, World } from "./model.ts";
 import { COLOR, colorOf, letterOf } from "./palette.ts";
 
 export const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-/** Frames a second the canopy is drawn at. */
-export const FPS = 12;
+/**
+ * Beats a second: the unit motion is written in. A frame number counts beats and may fall between
+ * two, so how fast things move does not depend on how often the screen is drawn.
+ */
+export const BEAT = 12;
+/** The spinner's glyph at a beat. */
+export const spin = (frame: number): string => SPINNER[Math.floor(frame) % SPINNER.length] as string;
 
 export interface PaintOptions {
 	/** The item the cursor is on. */
@@ -30,7 +35,7 @@ export interface PaintOptions {
 }
 
 const agentGlyph = (agent: Agent, frame: number): string =>
-	agent.state === "working" ? (SPINNER[frame % SPINNER.length] as string) : agent.state === "asking" ? "●" : agent.state === "waiting" ? "⧗" : agent.state === "failed" ? "✗" : "·";
+	agent.state === "working" ? spin(frame) : agent.state === "asking" ? "●" : agent.state === "waiting" ? "⧗" : agent.state === "failed" ? "✗" : "·";
 
 /** Whether anything is being worked on at an item or under it. */
 const alive = (item: Item): boolean => item.agent?.state === "working" || item.children.some(alive) || item.buds.some(alive);
@@ -38,7 +43,7 @@ const alive = (item: Item): boolean => item.agent?.state === "working" || item.c
 export function paint(world: World, plan: Layout, options: PaintOptions = {}): Grid {
 	const grid = new Grid(plan.width, plan.height);
 	const frame = options.frame ?? 0;
-	const blink = frame % FPS < FPS / 2;
+	const blink = frame % BEAT < BEAT / 2;
 	const lit = (item: Item): boolean => !options.spotlight || item.owner === options.spotlight;
 	const hue = (item: Item): string => (lit(item) ? colorOf(world, item.owner) : COLOR.faint);
 	const strength = (item: Item, level: number): number => (lit(item) ? (item.away ? level * 0.55 : level) : Math.min(level, 0.5));
