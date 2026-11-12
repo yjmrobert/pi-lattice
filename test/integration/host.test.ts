@@ -305,6 +305,135 @@ describe("sessions that know how to talk to each other", () => {
 	});
 });
 
+describe("sessions that wait on others", () => {
+	const userMessages = async (h: LatticeHost, id: string): Promise<string> => {
+		const { messages } = await h.rpc<{ messages: Array<{ role: string; content: unknown }> }>(id, { type: "get_messages" });
+		return messages.filter((m) => m.role !== "assistant").map((m) => (typeof m.content === "string" ? m.content : (m.content as Array<{ text?: string }>).map((p) => p.text ?? "").join(""))).join("\n");
+	};
+	const result = (text: string) => `!tool send_message ${JSON.stringify({ to: "parent", text, intent: "result" })}`;
+
+	it("creates a child without starting it, and starts it when what it waits on has sent its result", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const schema = await h.spawnChild(root.id, { name: "schema", brief: "wait for instructions" });
+		// By name, whatever its case; by id works the same.
+		const api = await h.spawnChild(root.id, { name: "api", brief: result("api done"), waitsOn: ["Schema"] });
+		expect(api).toMatchObject({ status: "dormant", waitsOn: [schema.id], sessionFile: null });
+		expect(formatTree(h.nodes())).toContain(`api  [task]  ${api.id}  dormant  roles=protocol+reporting+worker  waits-on=schema`);
+		await settled(h, schema.id);
+		expect(h.isRunning(api.id)).toBe(false);
+
+		await h.prompt(schema.id, result("schema done"));
+		await eventually(() => h.node(api.id)?.done === true, "the waiting child to run and report");
+		expect(h.node(api.id)?.waitsOn).toBeUndefined();
+		expect(await userMessages(h, api.id)).toContain('You were kept from starting until these sessions had sent their results, which they now have: "schema".');
+		await eventually(async () => (await assistantTexts(h, root.id)).includes("api done"), "its result to reach the parent");
+	});
+
+	it("tells the model what it waits on, and starts at once a child whose wait is already over", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		await h.prompt(root.id, spawnTool({ name: "schema", brief: "wait for instructions" }));
+		const schema = await child(h, root.id, "schema");
+		await settled(h, root.id);
+		await h.prompt(root.id, spawnTool({ name: "api", brief: "wait for instructions", waits_on: ["schema"] }));
+		const api = await child(h, root.id, "api");
+		await eventually(async () => (await assistantTexts(h, root.id)).includes(`It has not started: it waits on "schema" (${schema.id}).`), "the tool to say it is waiting");
+		expect(h.isRunning(api.id)).toBe(false);
+
+		await settled(h, schema.id);
+		await h.prompt(schema.id, result("schema done"));
+		await eventually(() => h.node(schema.id)?.done === true, "schema to be done");
+		const later = await h.spawnChild(root.id, { name: "docs", brief: "wait for instructions", waitsOn: [schema.id] });
+		expect(later.waitsOn).toBeUndefined();
+		expect(h.isRunning(later.id)).toBe(true);
+	});
+
+	it("refuses to wait on a session that is not there, or on one above the new session", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const kid = await h.spawnChild(root.id, { name: "kid", brief: "wait" });
+		await expect(h.spawnChild(root.id, { name: "x", brief: "wait", waitsOn: ["nobody"] })).rejects.toThrow(/no session "nobody" in this tree to wait on/);
+		await expect(h.spawnChild(kid.id, { name: "x", brief: "wait", waitsOn: [root.id] })).rejects.toThrow(/"root" is above the new session/);
+		await expect(h.spawnChild(kid.id, { name: "x", brief: "wait", waitsOn: ["kid"] })).rejects.toThrow(/"kid" is above the new session/);
+		expect(h.nodes()).toHaveLength(2);
+	});
+
+	it("is not started by a message to every child, and is started by one sent to it", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const schema = await h.spawnChild(root.id, { name: "schema", brief: "wait for instructions" });
+		const api = await h.spawnChild(root.id, { name: "api", brief: "wait for instructions", waitsOn: [schema.id] });
+		await settled(h, schema.id);
+		await h.prompt(root.id, sendTool("children", "status please"));
+		await eventually(async () => (await assistantTexts(h, schema.id)).includes("status please"), "the broadcast to reach the child that has started");
+		expect(h.isRunning(api.id)).toBe(false);
+		expect(h.traffic({ node: api.id })).toHaveLength(0);
+
+		await settled(h, root.id);
+		await h.prompt(root.id, sendTool(api.id, "go ahead without it"));
+		await eventually(() => h.node(api.id)?.waitsOn === undefined && h.isRunning(api.id), "the message to start it");
+		await eventually(async () => (await userMessages(h, api.id)).includes("go ahead without it"), "the message to arrive");
+		const told = await userMessages(h, api.id);
+		// The brief comes first, then the message that started it.
+		expect(told).toContain("Brief:\nwait for instructions");
+		expect(told.indexOf("Brief:")).toBeLessThan(told.indexOf("go ahead without it"));
+		// What it waited on has not finished, so it is not told that it has.
+		expect(told).not.toContain("kept from starting");
+	});
+
+	it("cannot be opened before it starts, and a person can start it without waiting", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const schema = await h.spawnChild(root.id, { name: "schema", brief: "wait for instructions" });
+		const api = await h.spawnChild(root.id, { name: "api", brief: "wait for instructions", waitsOn: [schema.id] });
+		await expect(h.attachForeground(api.id, "terminal")).rejects.toThrow(/"api" has not started: it waits on "schema"/);
+		await h.startHeld(api.id);
+		expect(h.node(api.id)?.waitsOn).toBeUndefined();
+		expect(h.isRunning(api.id)).toBe(true);
+		await expect(h.startHeld(api.id)).rejects.toThrow(/not waiting on anything/);
+	});
+
+	it("tells the parent what is still waiting on a child that stopped without a result", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const doomed = await h.spawnChild(root.id, { name: "doomed", brief: "wait for instructions" });
+		const api = await h.spawnChild(root.id, { name: "api", brief: "wait for instructions", waitsOn: [doomed.id] });
+		await settled(h, doomed.id);
+		await h.prompt(doomed.id, '!tool bash {"command":"kill -9 $PPID"}').catch(() => {});
+		await eventually(async () => (await userMessages(h, root.id)).includes(`Still waiting on it before they start: "api" (${api.id}).`), "the parent to be told what is held up");
+		expect(h.node(api.id)?.waitsOn).toEqual([doomed.id]);
+	});
+
+	it("makes a waiting child's worktree when it starts, from what is checked out by then", async () => {
+		const git = (...args: string[]) => execFileSync("git", args, { cwd: sandbox.work, encoding: "utf8" });
+		git("init", "-q", "-b", "main");
+		git("config", "user.email", "test@example.com");
+		git("config", "user.name", "Test");
+		writeFileSync(join(sandbox.work, "README.md"), "hello\n");
+		git("add", ".");
+		git("commit", "-q", "-m", "init");
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const schema = await h.spawnChild(root.id, { name: "schema", brief: "wait for instructions" });
+		const api = await h.spawnChild(root.id, { name: "api", brief: "wait for instructions", workspace: "worktree", waitsOn: [schema.id] });
+		expect(api).toMatchObject({ workspace: "worktree", branch: null, cwd: root.cwd });
+
+		// The work it waits on lands in the meantime.
+		writeFileSync(join(sandbox.work, "schema.sql"), "create table t (id integer);\n");
+		git("add", ".");
+		git("commit", "-q", "-m", "schema");
+		await settled(h, schema.id);
+		await h.prompt(schema.id, result("schema done"));
+		const started = await eventually(() => {
+			const node = h.node(api.id);
+			return node?.branch && !node.waitsOn ? node : undefined;
+		}, "the waiting child to get its worktree and start");
+		expect(started.branch).toMatch(/^lattice\/api-/);
+		expect(existsSync(join(started.cwd, "schema.sql"))).toBe(true);
+	});
+});
+
 describe("host workspaces", () => {
 	it("gives a worktree child its own branch and directory", async () => {
 		const git = (...args: string[]) => execFileSync("git", args, { cwd: sandbox.work, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
