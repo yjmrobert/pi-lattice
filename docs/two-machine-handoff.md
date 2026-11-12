@@ -13,17 +13,17 @@ There is no port to choose. If a firewall asks whether to let `node` accept conn
 
 ## Steps
 
-1. **A** opens `pi` in the project, sends a message so the tree starts, and runs `/lattice network`. A chooses "Create a network" and names it `team`.
+1. **A** opens `pi` in the project and runs `/lattice create`. A is asked what teammates should call them, once.
 
-   Expected: a join code, `team.<secret>@<A's addresses>`.
+   Expected: a line to send, `/lattice join team.<secret>@<A's addresses>`.
 
 2. **A** creates a child with its own worktree (`alt+l`, `n`, workspace `worktree`), lets it do some work, and has it commit.
 
-3. **A** sends the join code to B over a channel they trust.
+3. **A** sends that line to B over a channel they trust.
 
-4. **B** opens `pi` in their checkout, sends a message, runs `/lattice network`, chooses "Join with a teammate's code" and pastes it.
+4. **B** opens `pi` in their checkout and pastes the line. B is asked what to be called. If both machines log in with the same user name, B must answer with a different name than A's.
 
-   Expected on B, within a few seconds: A's sessions appear in the pane, marked `@A`. Opening one shows its conversation read-only.
+   Expected on B, within a few seconds: "Found A", and A's sessions appear in the pane, marked `@A`. Opening one shows its conversation read-only. If nobody is found within ten seconds, B is shown each address that was tried and why it did not answer; record that.
    Expected on A: a note that B joined `team`. A did nothing.
 
 5. **B** moves to A's child in the pane (`alt+l`, move) and presses `t`.
@@ -54,6 +54,8 @@ There is no port to choose. If a firewall asks whether to let `node` accept conn
 
 ## Things to try on purpose
 
+- **From a shell.** On a third machine, or after leaving, run `pi-lattice join <code> --as <name>` with no Pi open, then open `pi` in the project. Expected: the pane shows the teammates with nothing more to do.
+- **A wrong address.** B joins with a code whose address is changed to one where nothing listens. Expected: after ten seconds, the address and "nothing is listening there".
 - **Another repository.** On both machines, open `pi` in a second project both have. Expected: each sees the other's sessions there too, with no code and no setup.
 - **A repository only one of you has.** B opens `pi` in a project A does not have, and starts a session. Expected on A: the pane's first line names B; after A's own repositories there is the project's name with "not here"; with the pane focused, B's session is under it. A moves onto it: what it last did shows beside the pane, and changes as B's session works. A moves away, B's session works some more, A moves back: it has caught up.
 - **Take with a clone.** A presses `t` on that session. Expected: A is asked once which folder to clone into, shown the address B's checkout has as `origin`, and after confirming the project is cloned there and B sees A's request. B approves; the session is A's, in the clone. Note whether the clone needed credentials and how that went.

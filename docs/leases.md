@@ -8,9 +8,9 @@ Sharing is peer to peer. Each person runs their own host, and the hosts connect 
 
 A network is you and your teammates. You set it up once, and it holds for every repository.
 
-1. One person runs `/lattice network`, chooses "Create a network" and names it. They are shown a join code, `name.secret@host`.
+1. One person runs `/lattice create` (or `/lattice network`, "Create a network"). They are asked once what teammates should call them, and shown a line to send: `/lattice join name.secret@host`.
 2. They pass the code to their teammates over a channel the team already trusts. Whoever has the code is in.
-3. Each teammate runs `/lattice network`, chooses "Join with a teammate's code" and pastes it.
+3. Each teammate pastes that line into their Pi, in any project, and says what to be called. From a shell, `pi-lattice join <code>` does the same. If nobody answers within ten seconds, the pane lists the addresses it tried and why each failed.
 
 That is all. Nobody approves anybody, chooses a port or types an address. Everyone is told when someone joins.
 

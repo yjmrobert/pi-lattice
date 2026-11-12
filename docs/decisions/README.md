@@ -24,3 +24,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0017 | Settings on one screen, and sessions that are told how to talk to each other | accepted |
 | 0018 | A network you join once, and a session that moves in two steps | accepted; "only the same repository" relaxed by 0019 |
 | 0019 | Everyone's sessions in every repository, watched while looked at, and taken with a clone | accepted |
+| 0020 | One line to join, and a name you choose | accepted |
