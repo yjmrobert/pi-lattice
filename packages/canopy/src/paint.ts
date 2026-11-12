@@ -4,7 +4,7 @@
  * and amber blinks. No Pi, no terminal.
  */
 import { Grid, type Style } from "./grid.ts";
-import { chipOf, cut, type Layout, type Place } from "./layout.ts";
+import { chipOf, cut, type Layout, type Place, under } from "./layout.ts";
 import type { Agent, Item, World } from "./model.ts";
 import { COLOR, colorOf, letterOf } from "./palette.ts";
 
@@ -19,6 +19,8 @@ export interface PaintOptions {
 	frame?: number;
 	/** Only this person's work keeps its colour. */
 	spotlight?: string;
+	/** Items drawn as one node: each says how many it holds. */
+	folded?: ReadonlySet<string>;
 	/** Put each owner's letter beside their items, for reading without colour. */
 	letters?: boolean;
 }
@@ -139,7 +141,11 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		grid.text(col, row, item.failed ? "✗" : landed ? "✓" : item.agent ? "◉" : "○", { fg: item.failed ? COLOR.failed : item.agent || landed ? color : grey(item, COLOR.dim), level: strength(item, 1) });
 		grid.text(col + 2, row, name, nameStyle);
 		let at = col + 3 + [...name].length;
-		if (item.asks > 0) grid.text(at, row, `●${item.asks}`, amber);
+		if (item.asks > 0) {
+			grid.text(at, row, `●${item.asks}`, amber);
+			at += 2 + String(item.asks).length;
+		}
+		if (options.folded?.has(item.id)) grid.text(at, row, `+${under(item)}`, { fg: grey(item, COLOR.dim) });
 
 		// Under the name: who sits here, how far along it is, and whose it is.
 		const chip = chipOf(item);

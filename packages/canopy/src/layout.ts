@@ -63,8 +63,10 @@ const chipWidth = (item: Item): number => {
 	const chip = chipOf(item);
 	return [chip.agent ? chip.agent.length + 2 : 0, chip.progress.length, chip.owner.length].filter((n) => n > 0).reduce((sum, n) => sum + n + 3, -3);
 };
-const marksWidth = (item: Item): number => (item.asks > 0 ? 2 + String(item.asks).length : 0);
-const labelWidth = (item: Item): number => 2 + Math.max([...cut(item.name)].length + marksWidth(item), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + [...cut(bud.name, 16)].length));
+const marksWidth = (item: Item, folded = false): number => (item.asks > 0 ? 2 + String(item.asks).length : 0) + (folded ? 2 + String(under(item)).length : 0);
+/** How many items are under one: what a folded item says it holds. */
+export const under = (item: Item): number => item.children.reduce((sum, child) => sum + 1 + under(child), item.buds.length);
+const labelWidth = (item: Item, folded = false): number => 2 + Math.max([...cut(item.name)].length + marksWidth(item, folded), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + [...cut(bud.name, 16)].length));
 const leafWidth = (item: Item): number => 2 + [...cut(item.name)].length + marksWidth(item) + (item.parent && item.parent.owner !== item.owner ? item.owner.length + 2 : 0);
 
 /** A small stable number from an id, so the same tree always grows the same way. */
@@ -103,7 +105,7 @@ export function layout(world: World, options: LayoutOptions = {}): Layout {
 	const widthOf = (item: Item): number => {
 		const limbs = limbsOf(item);
 		const frond = frondWidth(item);
-		const own = item.level < 0 ? [...item.name].length + 12 : labelWidth(item);
+		const own = item.level < 0 ? [...item.name].length + 12 : labelWidth(item, folded.has(item.id));
 		const below = limbs.length === 0 ? frond : limbs.reduce((sum, limb) => sum + widthOf(limb) + GAP, frond > 0 ? frond : -GAP);
 		const width = Math.max(own, below);
 		widths.set(item.id, width);
@@ -164,7 +166,7 @@ export function layout(world: World, options: LayoutOptions = {}): Layout {
 			at += (widths.get(limb.id) ?? 0) + GAP;
 		}
 		const centre = Math.round(((cols[0] as number) + (cols.at(-1) as number)) / 2);
-		const own = item.level < 0 ? 0 : labelWidth(item);
+		const own = item.level < 0 ? 0 : labelWidth(item, folded.has(item.id));
 		const col = Math.max(x0, Math.min(centre, x0 + width - own));
 		places.set(item.id, { item, col, row, leaf: false });
 		const fromY = item.level < 0 ? row * 4 - 5 : row * 4 - 1;
