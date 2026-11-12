@@ -1,5 +1,7 @@
 # 0020 One line to join, and a name you choose
 
+**The join code was removed by [0029](0029-networks-are-gone.md): the one line is now the server's address. The chosen name stands.**
+
 Adds to [0018](0018-networks.md). Nothing there is withdrawn.
 
 **Why**

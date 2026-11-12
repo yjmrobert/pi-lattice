@@ -48,11 +48,11 @@ A setting takes its value from the first of these that has one:
 | `limits.maxNodes` | How many sessions one tree may hold. Applies at once. | a whole number from 1 | 40 | `LATTICE_MAX_NODES` |
 | `limits.maxRunning` | How many background sessions run at the same time. The least recently used idle one sleeps to make room. Applies at once. | a whole number from 1 | 8 | `LATTICE_MAX_RUNNING` |
 
-## Network
+## Team
 
 | Setting | What it does | Takes | Default | Environment |
 |---|---|---|---|---|
-| `network.share` | Show this tree to the people in your network, and theirs here. Off, set for one repository, keeps that repository to yourself. Applies at once. | on \| off | on |  |
+| `network.share` | Show this tree to the people on your server, and theirs here. Off, set for one repository, keeps that repository to yourself. Applies at once. | on \| off | on |  |
 | `network.cloneDir` | The folder a teammate's repository is cloned into when you take a session from one you do not have. Asked for the first time it is needed. Applies at once. | text | not set |  |
 
 ## Pane
@@ -101,11 +101,10 @@ These say where things are kept and how Pi is started. They are not on the setti
 
 | Variable | What it does |
 |---|---|
-| `LATTICE_HOME` | Where your own settings, templates, the list of your trees, and your network, its people and your key are kept. Default: `<Pi agent directory>/lattice`, usually `~/.pi/agent/lattice`. |
+| `LATTICE_HOME` | Where your own settings, templates, the list of your trees, and the server you joined, its people and your key are kept. Default: `<Pi agent directory>/lattice`, usually `~/.pi/agent/lattice`. |
 | `LATTICE_STATE_DIR` | Where the tree for the current directory is kept, in place of `<repository>/.lattice`. With it set, a first message does not start a tree by itself. |
-| `LATTICE_OWNER` | The name sessions you start are owned by, for this run. Default: the name you chose when you created or joined a network, else your user name. |
-| `LATTICE_ADVERTISE` | The host name or address teammates in your network should reach this machine at. Default: every network address it has. |
-| `LATTICE_DISCOVERY` | `off` stops this machine announcing itself to, and listening for, teammates on the local network. They are then found only at the machines already known. |
+| `LATTICE_OWNER` | The name sessions you start are owned by, for this run. Default: the name you chose when you joined a server, else your user name. |
+| `LATTICE_ADVERTISE` | The host name or address teammates should reach this machine at. Default: every network address it has. |
 | `LATTICE_NODE_NAME` | The name a session without a host announces itself by. |
 | `LATTICE_FRAGMENTS` | Roles for a plain session, separated by commas, when no host gives it any. |
 | `LATTICE_PI_BIN` | The `pi` command the host starts background sessions with. Default: `pi` on your PATH. |

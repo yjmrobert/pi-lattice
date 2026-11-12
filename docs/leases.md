@@ -2,31 +2,33 @@
 
 Every node has an **owner** and a **version**. The owner's host is the only one that runs the node's session. The version counts how many times ownership has changed.
 
-Sharing is peer to peer. Each person runs their own host, and the hosts connect directly; there is no server and no shared storage ([ADR 0012](decisions/0012-peer-to-peer-collab.md), [ADR 0018](decisions/0018-networks.md)).
+Sessions are shared machine to machine. Each person runs their own host, and the hosts connect directly; the team's server introduces them and carries offers and requests, and never holds a session ([ADR 0012](decisions/0012-peer-to-peer-collab.md), [ADR 0028](decisions/0028-the-server-introduces-the-machines-carry.md), [ADR 0029](decisions/0029-networks-are-gone.md)).
 
-## The network
+## The team
 
-A network is you and your teammates. You set it up once, and it holds for every repository.
+Your team is the people on the server you have joined. You join once, and it holds for every repository.
 
-1. One person runs `/lattice create` (or `/lattice network`, "Create a network"). They are asked once what teammates should call them, and shown a line to send: `/lattice join name.secret@host`.
-2. They pass the code to their teammates over a channel the team already trusts. Whoever has the code is in.
-3. Each teammate pastes that line into their Pi, in any project, and says what to be called. From a shell, `pi-lattice join <code>` does the same. If nobody answers within ten seconds, the pane lists the addresses it tried and why each failed.
+1. Someone has a server: a board on their own machine (`/lattice server start`, then `/lattice server share`), or `pi-lattice server` on a machine that stays on. Either prints a line to send: `/lattice server http://host:port/#code`.
+2. They pass that line to their teammates over a channel the team already trusts. Whoever has it is in.
+3. Each teammate pastes it into their Pi, in any project. The first time, they are asked what teammates should call them. When teammates are around, the pane says who was found.
 
-That is all. Nobody approves anybody, chooses a port or types an address. Everyone is told when someone joins.
+That is all. Nobody approves anybody, chooses a port or types a teammate's address. Everyone is told when someone joins.
 
-The hosts find each other by themselves: on a local network by announcing themselves, and otherwise at the machines they already know, on a port that every member's host for the same repository shares. Two machines that cannot reach each other at all, such as two home networks with no VPN between them, do not connect.
+The server tells each host where the others are listening and which key each person signs with, and the hosts connect by themselves. Two machines that cannot reach each other at all, such as two home networks with no VPN between them, do not connect, even though both reach the server: the canopy shows each other's sessions on the server's work, and they cannot be read or handed over. If the address a machine gives out is not the one teammates should use, set `LATTICE_ADVERTISE` on it.
 
 A repository is recognised by its first commit, not by what the checkout is called. Hosts for the same repository share its tree and can hand sessions over. Hosts for different repositories still connect, but only to look ([ADR 0019](decisions/0019-everything-everyone-is-running.md)).
 
 To keep one repository to yourself, switch `network.share` off for it in the settings (`,` in the pane). Its sessions are then shown to nobody, and nobody's are shown in it.
 
-The first key seen under a person's name is theirs from then on. If someone later connects under that name with a different key, they are refused and you are asked: that is what a new machine looks like, and also what an impostor looks like.
+The first key known under a person's name is theirs from then on: the server refuses another, and so does every host. If someone later connects under that name with a different key, they are refused and you are asked (`/lattice team`): that is what a new machine looks like, and also what an impostor looks like. To use a second machine as yourself, copy the `identity` folder and `server.json` from your lattice home to it.
 
-To remove someone, everyone else leaves (`/lattice network`, "Leave") and joins a new network.
+Your name on the server and the name your sessions are under must be the same; when they are not, nothing is shared and the host says so.
+
+To stop sharing everywhere, leave the server (`/lattice server leave`). There is no removing someone else: the team moves to a new server.
 
 ## What you see of a teammate
 
-The first line of the pane names the network and who is around.
+The first line of the pane names the server and who is around.
 
 - **In a repository you both have**, their sessions appear in its tree, marked `@name`.
 - **In a repository you do not have**, their sessions are listed after your own repositories, under the repository's name and "not here". The group is folded to one line until you give the pane the keyboard.
@@ -47,7 +49,7 @@ The owner acts once. That one act is their yes to the release, so it is where th
 
 - **A session in a repository you do not have** can be asked for the same way. `t` first clones the repository from where its owner has it: you are shown the address and the folder, and asked once which folder clones go into (`network.cloneDir`). If its owner's checkout has no remote, there is nothing to clone from and you are told so.
 - An offer or a request nobody answers lapses after 24 hours. Either side can take theirs back before then (`x` on an offer, `t` again on a session you asked for).
-- Both people need to be online for the session to move. A yes given while the other is away takes effect when they are back.
+- The offer, the request and their answers go through the server; the session itself goes straight between the two machines. Both people need to be online for it to move. A yes given while the other is away takes effect when they are back.
 - A session that is open in its owner's terminal is not sent from under them. It goes when they leave it, and the pane says so.
 - After the move, the previous owner sees the session marked with the new owner's name and can no longer run it, though they can still read it.
 
@@ -61,7 +63,7 @@ If the connection drops during the release, the release still stands. The packag
 - **One writer.** Only a node's current owner appends to its ownership log. Everyone else asks the owner, so two hosts never write the same log at once.
 - **Forged ownership.** Ownership is recomputed from a log of signed events. An event not signed by the person it names, or one the state machine would not allow, is ignored along with everything after it.
 - **Contradicting histories.** A host accepts a log only if it extends the one it already holds. A log that disagrees is refused and reported.
-- **Strangers.** Only someone who holds the network's secret can connect at all, and they have to prove it on every connection.
+- **Strangers.** Only someone who holds the team's secret can connect at all, and they have to prove it on every connection. The server gives the secret to those who joined it.
 - **Impostors.** A known name with a different key is refused until you accept the new key.
 - **Eavesdropping.** Everything between two hosts is encrypted, with keys that exist only for that connection.
 
@@ -86,11 +88,11 @@ An agent can message a node another person owns. It is delivered directly when t
 | The lease state machine | `packages/protocol/src/lease.ts` |
 | Signed logs and replay | `packages/collab/src/ledger.ts` |
 | Keys and signatures | `packages/collab/src/identity.ts` |
-| Networks and join codes | `packages/collab/src/network.ts` |
-| The people of the network and their keys | `packages/collab/src/peers.ts` |
-| Finding teammates on the local network | `packages/collab/src/discovery.ts` |
+| The team's secret and proving membership | `packages/collab/src/network.ts` |
+| The people of the team and their keys | `packages/collab/src/peers.ts` |
+| Who is where, keys, and carrying offers and requests | `packages/server/src/http.ts`, `packages/app/src/work.ts` |
 | What everyone has running, guests, and watching a session | `packages/collab/src/collab.ts` |
 | Repositories that are not here, in the pane; cloning to take | `packages/pane/src/view.ts`, `packages/pane/src/extension.ts` |
 | The encrypted channel | `packages/collab/src/channel.ts` |
 | Connections, fetching, mail, offers and requests | `packages/collab/src/collab.ts` |
-| Following the network file, one host per repository | `packages/app/src/daemon.ts` |
+| Following the server joined, one host per repository | `packages/app/src/daemon.ts` |

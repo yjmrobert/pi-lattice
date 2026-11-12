@@ -10,7 +10,7 @@ An additive set of Pi extensions plus a host process that provide:
 2. A session tree the human can enter at any node. Nothing is forced to bubble up.
 3. Composable roles the human assigns to a session, instead of fixed agent profiles.
 4. Lifecycle coordination: grilling, planning, implementation, verification.
-5. Trees shared between the people of a network, set up once, with explicit ownership, handoff in either direction, and approval of anything inbound from another person's agents.
+5. Trees shared between the people of a team, set up once, with explicit ownership, handoff in either direction, and approval of anything inbound from another person's agents.
 
 Non-goals: token optimisation, a library of agent personas, running agents on someone else's machine without their approval.
 
@@ -106,9 +106,9 @@ Details in [roles.md](roles.md). Each applied fragment becomes one system prompt
 
 ## Collaboration
 
-Each person runs their own host, and the hosts connect directly, peer to peer, to share sessions ([ADR 0012](decisions/0012-peer-to-peer-collab.md)); [leases.md](leases.md) describes the behaviour. The team's work is different: it lives on one server every host talks to ([ADR 0026](decisions/0026-a-server-for-the-work.md)), which may be a board a person's own host starts on their machine ([ADR 0027](decisions/0027-what-kanzo-changed.md)), and on a server the hosts find each other through it and pass offers and requests through it, while sessions still go directly between the two machines ([ADR 0028](decisions/0028-the-server-introduces-the-machines-carry.md)).
+Each person runs their own host. The team's work lives on one server every host talks to ([ADR 0026](decisions/0026-a-server-for-the-work.md)), which may be a board a person's own host starts on their machine ([ADR 0027](decisions/0027-what-kanzo-changed.md)). Sessions do not live there: the hosts find each other through the server and pass offers and requests through it, and connect directly, machine to machine, to show, read and hand over sessions ([ADR 0012](decisions/0012-peer-to-peer-collab.md), [ADR 0028](decisions/0028-the-server-introduces-the-machines-carry.md)); [leases.md](leases.md) describes the behaviour. There is no other way for hosts to find each other ([ADR 0029](decisions/0029-networks-are-gone.md)).
 
-A **network** is a name and a secret, kept in one file in the person's lattice home and followed by the host of every repository they have open ([ADR 0018](decisions/0018-networks.md)). Whoever holds the secret is a member, and proves it on every connection; the first key seen under a name is pinned. A person goes by a name they choose once, when they first create or join ([ADR 0020](decisions/0020-one-line-to-join.md)). Hosts find each other by a port derived from the network and the repository, by beacons on the local network, and by telling each other who they know. Hosts for the same repository share its tree and hand sessions over; hosts for different repositories connect only to look ([ADR 0019](decisions/0019-everything-everyone-is-running.md)).
+A **team** is the people on one server. The server gives each member's host a secret; whoever holds it is a member, and proves it on every connection. It also says which key each person signs with, pinned the first time it is known, and where each host is listening. A person goes by a name they choose once, when they first join ([ADR 0020](decisions/0020-one-line-to-join.md)). Hosts for the same repository share its tree and hand sessions over; hosts for different repositories connect only to look ([ADR 0019](decisions/0019-everything-everyone-is-running.md)).
 
 A teammate's nodes are fetched from them while they are online and shown as last seen, greyed out, when they are not. That includes what they have running in repositories this person has no tree for: each host writes what it has running to the person's lattice home, so any one of their hosts answers for all. A teammate's conversation is fetched on demand, read-only. One thing is sent as it happens: a session someone is looking at, message by message, for as long as they look.
 
@@ -125,7 +125,7 @@ Session transfer is fork-on-receipt ([ADR 0007](decisions/0007-session-transfer.
 - Extensions run with the user's full OS permissions. Only trusted code is loaded.
 - Remote-originated content is never executed and never treated as instructions. Every inbound envelope is validated against the schema and delivered as delimited, attributed data.
 - The host socket is private to the user and children authenticate with a per-child token.
-- Hosts connect only to members of the person's network, over an encrypted channel. Ownership events are signed, and a teammate's key is pinned when first seen. The join code is the one secret: whoever has it can read the network's sessions.
+- Hosts connect only to members of the person's team, over an encrypted channel. Ownership events are signed, and a teammate's key is pinned when first known. The server's address with its code is the one secret: whoever has it can join, read the team's work and its sessions. Whoever controls the server can connect as a member, though not sign as one.
 - Limits on hops, send rate and spawning are enforced by code.
 
 ## Build phases
@@ -141,8 +141,8 @@ Each phase ends with something usable and a stop for review.
 | 4 | Tree UI: view, attach, spawn, approvals, blocked dialogs | **Done, then redone inside Pi.** A pane in Pi lists the tree; any node can be opened and typed into with Pi's full interface. |
 | 5 | Lifecycle fragments, then a full feature run | **Done against a scripted model.** A feature goes through grilling, planning, implementation and verification. A run with a real model is still to do. |
 | 6 | `collab`: transport decision, handoff, cross-owner approvals, session transfer | **Done on one machine, peer to peer.** Two isolated hosts connect directly, share a tree, and a node changes owner with both confirming. A run across two real machines is still to do ([script](two-machine-handoff.md)). |
-| 7 | Networks: one join code, hosts that find each other, handoff in two steps from either side | **Done on one machine.** Two background hosts with separate homes create and join a network, see each other's sessions, and move one by request and by offer. Two real machines and a VPN are still to do. |
-| 8 | Everyone's sessions in every repository, watched while looked at, taken with a clone | **Done on one machine.** A real Pi creates a network from its prompts, reads a teammate's session in a repository it does not have, and takes it by cloning. Two real machines, a VPN and a remote that needs credentials are still to do. |
+| 7 | Hosts that find each other, handoff in two steps from either side | **Done on one machine.** First with networks joined by a code; now through the team's server ([0029](decisions/0029-networks-are-gone.md)). Two background hosts with separate homes join a server, see each other's sessions, and move one by request and by offer. Two real machines and a VPN are still to do. |
+| 8 | Everyone's sessions in every repository, watched while looked at, taken with a clone | **Done on one machine.** A real Pi joins a server with one command, reads a teammate's session in a repository it does not have, and takes it by cloning. Two real machines, a VPN and a remote that needs credentials are still to do. |
 
 ## Testing
 

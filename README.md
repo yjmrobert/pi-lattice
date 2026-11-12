@@ -27,15 +27,14 @@ Then open `pi` in a project as you always do. A pane on the left lists the proje
 - What needs you is listed above the tree: questions a background session is stuck on, messages to approve. `alt+l` gives the pane the keyboard, and you answer them where they are (`y`/`n`, `a`/`x`).
 - With the keyboard, the chat steps aside to show the selected session in full. `enter` opens it in this terminal, with all of Pi. You can switch at any time, even mid-turn: the work you leave carries on in the background.
 - `n` creates a child session from one form. Agents can also delegate on their own. Children run in the background, each on the model you choose. A child can be told to wait on others: it shows in the tree at once and starts by itself when they have finished.
-- `c` opens the canopy: all the work as a tree, the network at the root and tasks at the tips. Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. Work can be planned before anyone is on it; `s` puts a session on a planned item.
+- `c` opens the canopy: all the work as a tree, the team at the root and tasks at the tips. Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. Work can be planned before anyone is on it; `s` puts a session on a planned item.
 - `/lattice server start` starts a board on your machine, where work is tracked as issues: epics, features, stories, tasks and bugs by default, or whatever structure you define with `/lattice scheme edit`. There is nothing to deploy. The canopy then draws the issues, with the sessions on them, and agents add to the work, take the next issue that is ready (`work_next`), and put their result up for you to review. An issue can wait on others, be marked as a person's, and name the repository it is for.
 - `/lattice server share` opens your board to teammates and prints the address they join with (`/lattice server <address>`); it is there while your machine is on. For a machine that stays on, run `pi-lattice server` on it instead and have everyone join that.
 - `r` renames a session, `d` archives it, `s` stops what it is doing. `?` lists every key, and `/lattice help` every command.
 - `,` in the pane, or `/lattice config`, opens the settings: models, roles, limits and the pane itself, for this repository or for all of yours. `/lattice doctor` checks the setup.
 - Sessions are told how to talk to each other, and you can read and change all of it: `/lattice prompt` shows what a session has been told and the file each part comes from.
 - Work in several repositories shows in one pane. Opening a session from another repository moves this terminal there; `-` goes back.
-- On a server, teammates' sessions show in your pane with nothing more to set up: `o` offers one of yours to a teammate and `t` asks for one of theirs. The offer and the request go through the server; the session itself goes straight from one machine to the other, so both of you must be online and your machines must be able to reach each other. The server never sees a conversation.
-- Without a server, `/lattice create` puts you and your teammates in one network, once: it gives you a line to send, each teammate pastes it into their Pi (`/lattice join <code>`), and from then on everyone's sessions show in everyone's pane, in every repository you share. The pane's first line says who is around. What teammates are running in repositories you do not have is listed too; a session under the cursor is kept up to date as it goes. `o` offers one of yours to a teammate; `t` asks for one of theirs, cloning the repository first if you do not have it. It is peer to peer, with no server.
+- Once you and a teammate are on the same server, their sessions show in your pane with nothing more to set up, in every repository you share, and the pane's first line says who is around. What teammates are running in repositories you do not have is listed too; a session under the cursor is kept up to date as it goes. `o` offers one of yours to a teammate and `t` asks for one of theirs, cloning the repository first if you do not have it. The offer and the request go through the server; the session itself goes straight from one machine to the other, so both of you must be online and your machines must be able to reach each other. The server never sees a conversation.
 
 See the [pane readme](packages/pane/README.md) for keys, and [a feature through the full lifecycle](examples/feature-lifecycle/README.md) for a walkthrough.
 
@@ -49,7 +48,7 @@ See the [pane readme](packages/pane/README.md) for keys, and [a feature through 
 | [`roles`](packages/roles/README.md) | Pi extension. Compose a session's role from markdown fragments and change it mid-session. Also works alone ([guide](docs/roles.md)). |
 | [`graph`](packages/graph/README.md) | Pi extension. Lets an agent spawn child sessions and see the tree. |
 | [`host`](packages/host/README.md) | Library. Owns the tree and runs the sessions you are not in. |
-| [`collab`](packages/collab/README.md) | Library. Shares trees between the people of a network, peer to peer, with signed ownership handoff. |
+| [`collab`](packages/collab/README.md) | Library. Shares trees between the people of a team, machine to machine, with signed ownership handoff. |
 | [`app`](packages/app/README.md) | Everything assembled: the Pi package, the launcher, the background host, the command line. |
 | `protocol` | The contracts everything else shares: envelope, events, wire types, state machines. |
 
@@ -91,8 +90,6 @@ git push origin v0.1.0
 The workflow runs the whole suite on the tagged commit, builds the package and publishes it to npm. A tag that does not match the version stops it before anything is published. Versions follow semantic versioning; one with a suffix, such as `v0.2.0-beta.1`, is published under `next` and is not what `pi install npm:pi-lattice` gets.
 
 ## Not done yet
-
-- **Two ways to find teammates.** On a server, the server says who is where ([ADR 0028](docs/decisions/0028-the-server-introduces-the-machines-carry.md)); without one, a network joined by a code does. The second is to be removed once nobody needs it. [The plan](docs/design/server-plan.md) has the rest.
 
 - **Publishing.** The package builds, and installs and runs from a tarball ([ADR 0025](docs/decisions/0025-one-published-package.md)), but it is not on npm yet. Until it is, install from a checkout.
 - **A run with a real model.** Every flow is tested against a scripted model, which checks the mechanics, not how well a model follows the role fragments. `npm run eval` is written for that and has not been run yet.

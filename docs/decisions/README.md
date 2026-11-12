@@ -16,20 +16,21 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0009 | Messaging semantics, addressing and guardrails | accepted |
 | 0010 | Workspace policy per node | accepted |
 | 0011 | Collab transport: a shared git repository, with signed records | superseded by 0012 |
-| 0012 | Collab is peer to peer, with no server and no shared storage | accepted; pairing and the three-step handoff changed by 0018 |
+| 0012 | Collab is peer to peer, with no server and no shared storage | accepted for the connection, the ownership logs and the transfer; pairing and the three-step handoff changed by 0018, and "no server" by 0028 |
 | 0013 | The tree lives inside Pi, as a pane | accepted |
 | 0014 | Package seams | accepted |
 | 0015 | The pane: a rail, an inbox, an inspector, and every repository | accepted |
 | 0016 | Working in the pane: tidying, stopping, settings, and no setup step | accepted |
 | 0017 | Settings on one screen, and sessions that are told how to talk to each other | accepted |
-| 0018 | A network you join once, and a session that moves in two steps | accepted; "only the same repository" relaxed by 0019 |
-| 0019 | Everyone's sessions in every repository, watched while looked at, and taken with a clone | accepted |
-| 0020 | One line to join, and a name you choose | accepted |
+| 0018 | A network you join once, and a session that moves in two steps | the two-step handoff stands; networks and join codes removed by 0029 |
+| 0019 | Everyone's sessions in every repository, watched while looked at, and taken with a clone | accepted; how hosts find each other replaced by 0028 and 0029 |
+| 0020 | One line to join, and a name you choose | the name stands; the join code removed by 0029 |
 | 0021 | A session that waits on others | accepted |
 | 0022 | The canopy: what Pi lets an extension do | found out; 0024 is built on it |
 | 0023 | Planned work, and what a session is working on | accepted |
 | 0024 | The canopy | first part built |
 | 0025 | One published package, built | built; the publish itself not yet done |
-| 0026 | A server for the team's work | built: issues, the scheme, sessions on issues, the canopy, working on issues from it; sharing sessions is still peer to peer |
+| 0026 | A server for the team's work | built: issues, the scheme, sessions on issues, the canopy, working on issues from it |
 | 0027 | What Kanzo changed | built: a board on your own machine and sharing it, `work_next`, waiting, issues for people, review before done |
 | 0028 | The server introduces; the machines carry | built: on a server, hosts find each other and pass offers and requests through it; sessions go directly between the two machines, both online |
+| 0029 | Networks joined by a code are gone | built: sessions are shared with the people on your server; join codes, beacons and the shared ports are removed |

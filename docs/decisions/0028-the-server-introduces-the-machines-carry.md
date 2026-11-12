@@ -22,7 +22,7 @@ On a server, a host needs no network and no code:
 
 Reading a teammate's conversation and mail between owners are unchanged, on the connection.
 
-A host that is not on a server uses a network joined by a code, as before.
+A host that is not on a server used a network joined by a code, as before. That was removed in [0029](0029-networks-are-gone.md): such a host now shares with nobody.
 
 ## What the server can and cannot do
 
@@ -36,4 +36,4 @@ What is handed over is signed by its author where it matters: an acceptance or a
 - Both people must be online, and their machines must be able to connect, for a session to move: the same network, a VPN, or an open port. A server reachable from everywhere does not make two laptops behind different routers reachable to each other. An offer made to someone who is away waits on the owner's machine.
 - A person's second machine needs the `identity` folder of their lattice home as well as `server.json`, or the server refuses its key.
 - The name a person has on the server must be the name their host goes by; when they differ, sessions are not shared through the server, and the host says so.
-- Networks joined by a code are now only for teams without a server, and can be removed when nobody needs them.
+- Networks joined by a code were left only for teams without a server, and have since been removed ([0029](0029-networks-are-gone.md)).

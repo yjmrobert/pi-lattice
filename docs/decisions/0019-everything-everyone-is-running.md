@@ -1,5 +1,7 @@
 # 0019 Everyone's sessions in every repository, watched while looked at, and taken with a clone
 
+**How hosts find each other (the port every member watched, beacons) was replaced by the team's server in [0028](0028-the-server-introduces-the-machines-carry.md) and [0029](0029-networks-are-gone.md). The rest stands.**
+
 Changes two earlier rules. [0018](0018-networks.md) said two hosts connect only when they work on the same repository. [0012](0012-peer-to-peer-collab.md) said nothing is streamed between machines. Both are relaxed here, narrowly.
 
 **Why**
