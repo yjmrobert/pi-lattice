@@ -5,6 +5,7 @@ import { basename, join, resolve } from "node:path";
 import { formatJoinCode, localHosts } from "@pi-lattice/collab";
 import { latticeHome } from "@pi-lattice/protocol";
 import { parseArgs, USAGE } from "./args.ts";
+import { runBoard } from "./board.ts";
 import { chooseName, chosenName, joinNetwork, runDaemon, startNetwork } from "./daemon.ts";
 import { WorkServer } from "@pi-lattice/server";
 import { runPlain } from "./plain.ts";
@@ -19,6 +20,11 @@ async function main(): Promise<number> {
 	}
 	if (options.help) {
 		process.stdout.write(USAGE);
+		return 0;
+	}
+	if (options.command === "server" && options.board) {
+		// Started by a host, for its person. Not shared, it stops once no host has asked anything for a while.
+		await runBoard(latticeHome(process.env, homedir()), { shared: options.shared, idleMs: (options.idleExit ?? 600) * 1000 });
 		return 0;
 	}
 	if (options.command === "server") {

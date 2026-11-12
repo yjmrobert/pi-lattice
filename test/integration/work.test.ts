@@ -2,7 +2,10 @@
  * The team's work, end to end: a real server on a local port, a real host joined to it, and
  * real Pi sessions whose scripted agents use the work tools.
  */
+import { type ChildProcess, spawn } from "node:child_process";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { liveBoard, readBoard } from "../../packages/app/src/board.ts";
 import { joinAndSave, Work } from "../../packages/app/src/work.ts";
 import { LatticeHost } from "../../packages/host/src/index.ts";
 import { childrenOf } from "../../packages/protocol/src/index.ts";
@@ -173,7 +176,7 @@ describe("the team's work", () => {
 		work = new Work({ home: sandbox.home, hostId: "laptop:shop", repo: "shop", name: () => "tester" });
 		h.setWork(work);
 		work.sync();
-		expect(await work.server("status", [])).toBe("You have not joined a server. Join one with /lattice server <address>.");
+		expect(await work.server("status", [])).toBe("You are on no server. Start a board on this machine with /lattice server start, or join your team's with /lattice server <address>.");
 		await (await teammate("sam")).create({ title: "Checkout", type: "epic" });
 		expect(await work.server("join", [address])).toBe(`Joined ${address.replace(/\/#.*/, "")} as tester. It has 1 issue. Press c in the pane for the canopy.`);
 		expect(h.uiState().work).toMatchObject({ me: "tester", connected: true });
@@ -189,4 +192,53 @@ describe("the team's work", () => {
 		expect(h.uiState().work).toBeUndefined();
 		elsewhere.stop();
 	}, 60_000);
+
+	it("is kept on the person's own machine with nothing to deploy, shared with teammates, and started again by whoever finds it gone", async () => {
+		const boards: ChildProcess[] = [];
+		// As a host starts it: `pi-lattice server --board`, a process of its own.
+		const spawnBoard = (args: string[]): void => void boards.push(spawn(process.execPath, [resolve("packages/app/src/cli.ts"), ...args], { env: { ...process.env, LATTICE_HOME: sandbox.home }, stdio: "ignore" }));
+		const h = await LatticeHost.start(hostOptionsFor(sandbox));
+		host = h;
+		work = new Work({ home: sandbox.home, hostId: "laptop:shop", repo: "shop", name: () => "tester", spawnBoard });
+		h.setWork(work);
+		work.sync();
+		try {
+			expect(await work.server("share", []).catch((error: Error) => error.message)).toBe("Only the board on this machine can be shared from here. Start one with /lattice server start.");
+			expect(await work.server("start", [])).toBe(
+				"A board is running on this machine, and you are on it as tester. There is no work on it yet: press c in the pane for the canopy, then N to add the first issue. Only this machine can reach it. To let teammates join, /lattice server share.",
+			);
+			await h.runWork({ do: "add", change: { title: "Checkout", type: "epic" } });
+			expect(await work.server("status", [])).toBe("The board on this machine, not shared, as tester. 1 issue, 1 person (1 online), 0 sessions running.");
+			const first = readBoard(sandbox.home);
+			expect(first).toMatchObject({ shared: false });
+
+			// Shared: the same work, at an address with the code teammates need.
+			const shared = await work.server("share", []);
+			expect(shared).toContain("The board is shared.");
+			const board = await liveBoard(sandbox.home);
+			expect(board).toMatchObject({ shared: true, port: first?.port, code: first?.code });
+			expect(board?.pid).not.toBe(first?.pid);
+			const sam = new WorkClient(await joinServer(`http://127.0.0.1:${board?.port}/#${board?.code}`, "sam"), { waitSeconds: 5 });
+			others.push(sam);
+			await sam.refresh();
+			expect(sam.state().issues.map((issue) => issue.title)).toEqual(["Checkout"]);
+			expect(await work.server("join", [address]).catch((error: Error) => error.message)).toContain("This machine shares its own board.");
+			expect(await work.server("unshare", [])).toContain("The board is no longer shared");
+			expect(await liveBoard(sandbox.home)).toMatchObject({ shared: false });
+
+			// The board is gone, as after a restart of the machine: the host that notices starts it, and nothing is lost.
+			process.kill((await liveBoard(sandbox.home))?.pid as number, "SIGTERM");
+			await eventually(() => h.uiState().work?.connected === false, "the host to notice the board is gone", 20_000);
+			work.sync();
+			await eventually(() => h.uiState().work?.connected === true, "the board to be started again", 30_000);
+			expect(issues(h).map((issue) => issue.title)).toEqual(["Checkout"]);
+
+			// Leaving and coming back is the same person.
+			expect(await work.server("leave", [])).toBe("Left the board on this machine. Its work is kept: /lattice server start brings it back.");
+			expect(h.uiState().work).toBeUndefined();
+			expect(await work.server("start", [])).toContain("you are on it as tester. It has 1 issue.");
+		} finally {
+			for (const child of boards) child.kill("SIGTERM");
+		}
+	}, 90_000);
 });

@@ -1098,7 +1098,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	/** Read or change the team's work. `asker` is the session asking, when one is. */
 	async runWork(request: WorkRequest, asker?: string): Promise<WorkResult> {
 		const state = this.work?.state();
-		if (!this.work || !state) throw new Error("There is no server: you have not joined one. Whoever runs your team's server has its address; join with /lattice server <address>.");
+		if (!this.work || !state) throw new Error("There is no server: you have not joined one. Start a board on this machine with /lattice server start, or join your team's with /lattice server <address>.");
 		if (request.do === "look") return { work: state };
 		if (request.do === "next") {
 			const taker = asker ? this.must(asker) : undefined;

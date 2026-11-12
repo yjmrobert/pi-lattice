@@ -1037,15 +1037,16 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		return done;
 	};
 
-	/** The team's server: join one, leave it, or say which one this is. */
+	/** The team's server: start a board on this machine, share it, join one, leave it, or say which one this is. */
 	const server = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
 		const words = arg.split(/\s+/).filter(Boolean);
 		await ensureHost(ctx);
 		const client = need(ctx);
 		if (!client) return;
 		try {
-			const action = words.length === 0 ? "status" : words[0] === "leave" ? "leave" : "join";
-			const { text } = await client.ui("server", { action, args: action === "join" ? words : [] });
+			const [first, second] = words;
+			const action = first === undefined ? "status" : first === "leave" || first === "start" ? first : first === "share" ? (second === "off" ? "unshare" : "share") : "join";
+			const { text } = await client.ui("server", { action, args: action === "join" ? words : action === "start" ? words.slice(1) : [] });
 			ctx.ui.notify(text, "info");
 		} catch (error) {
 			fail(ctx, error);
@@ -1784,7 +1785,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			},
 		},
 		{ name: "approvals", does: "review messages waiting for approval", run: (ctx) => approvals(ctx) },
-		{ name: "server", usage: "server [address [your name] | leave]", does: "join your team's server, where its work is tracked; with nothing, say which one you are on", run: (ctx, arg) => server(ctx, arg) },
+		{ name: "server", usage: "server [start | share [off] | address [your name] | leave]", does: "where the work is tracked: start a board on this machine, share it with teammates, or join theirs by its address; with nothing, say which one you are on", run: (ctx, arg) => server(ctx, arg) },
 		{ name: "issue", usage: "issue <number> | add <parent | top> <title> | set <number> <field> <value> | comment <number> <text>", does: "look at one of the team's issues, add one, change one, or comment on one", run: (ctx, arg) => issue(ctx, arg) },
 		{ name: "scheme", usage: "scheme [edit]", does: "how the team structures its work: the types, states and fields; edit changes them for everyone", run: (ctx, arg) => scheme(ctx, arg) },
 		{ name: "on", usage: "on <issue | none>", does: "say which of the team's issues this session is working on", run: (ctx, arg) => workOn(ctx, arg) },

@@ -22,6 +22,8 @@ export interface ServerOptions {
 	/** The longest a `/changes` request waits. */
 	maxWaitMs?: number;
 	now?: () => number;
+	/** Said to anyone who asks what this is, along with the service's name. Nothing secret. */
+	info?: Record<string, unknown>;
 }
 
 /** What `/changes` answers. */
@@ -57,11 +59,13 @@ export class WorkServer {
 	private beat = 1;
 	private readonly waiters = new Set<Waiter>();
 	private sweep: NodeJS.Timeout | undefined;
+	private heard: number;
 
 	constructor(options: ServerOptions) {
 		this.options = options;
 		this.now = options.now ?? Date.now;
 		this.ttl = options.sessionTtlMs ?? 45_000;
+		this.heard = this.now();
 		this.tracker = new Tracker(options.file, { now: this.now });
 		this.tracker.onChange = () => this.wake();
 	}
@@ -77,6 +81,12 @@ export class WorkServer {
 		this.sweep = setInterval(() => this.expire(), Math.max(250, Math.min(5000, this.ttl / 3)));
 		this.sweep.unref();
 		return (server.address() as AddressInfo).port;
+	}
+
+	/** How long it has been since anyone who has joined asked anything. */
+	get quietMs(): number {
+		// Someone waiting for news is here, however long ago they asked.
+		return this.waiters.size > 0 ? 0 : this.now() - this.heard;
 	}
 
 	async stop(): Promise<void> {
@@ -169,13 +179,14 @@ export class WorkServer {
 			const parts = url.pathname.split("/").filter(Boolean);
 			const method = request.method ?? "GET";
 			const route = `${method} /${parts[0] ?? ""}${parts.length > 1 ? "/:n" : ""}${parts[2] ? `/${parts[2]}` : ""}`;
-			if (route === "GET /") return send(200, { service: "pi-lattice", rev: this.tracker.rev });
+			if (route === "GET /") return send(200, { service: "pi-lattice", rev: this.tracker.rev, ...this.options.info });
 			const body = method === "GET" ? {} : await readBody(request);
 			if (route === "POST /join") return send(200, this.tracker.join(String(body.code ?? ""), body.name as string));
 
 			const who = this.tracker.who(/^Bearer (.+)$/.exec(request.headers.authorization ?? "")?.[1]);
 			if (!who) throw new WorkError(401, "This server does not know you. Join it with its address and code.");
 			this.touch(who);
+			this.heard = this.now();
 			const number = Number(parts[1]);
 			switch (route) {
 				case "GET /changes": {

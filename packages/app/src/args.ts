@@ -26,6 +26,10 @@ export interface CliOptions {
 	data: string | undefined;
 	/** `server`: the address teammates reach it at, when that is not this machine's name and port. */
 	url: string | undefined;
+	/** `server`: be the board on this machine, which a host starts for its person. */
+	board: boolean;
+	/** `server --board`: let other machines reach it. */
+	shared: boolean;
 	/** Everything after `--`, passed to every Pi session (for example `--model ...`). */
 	piArgs: string[];
 }
@@ -41,6 +45,8 @@ pi in a project and run /lattice. Pi starts the host in the background as needed
   pi-lattice server   Run a team's server: one always-on place for its work. Prints the address
                       teammates join with. Takes --port (default 7420), --data <file> (default
                       <lattice home>/server/work.db) and --url <address teammates reach it at>.
+                      For a machine that is always on. To keep the work on your own machine
+                      instead, there is nothing to run: /lattice server start, in pi.
   pi-lattice daemon   Run the background host for a project in the foreground.
   pi-lattice          A line-based interface to a host, for scripting and debugging.
 
@@ -65,7 +71,7 @@ Arguments after -- are passed to every Pi session, for example -- --model sonnet
 export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 	const options: CliOptions = {
 		command: "plain", subject: undefined, cwd, stateDir: undefined, name: undefined, kind: undefined, fragments: [], brief: undefined,
-		join: undefined, advertise: undefined, as: undefined, idleExit: undefined, help: false, port: undefined, data: undefined, url: undefined, piArgs: [],
+		join: undefined, advertise: undefined, as: undefined, idleExit: undefined, help: false, port: undefined, data: undefined, url: undefined, board: false, shared: false, piArgs: [],
 	};
 	const value = (flag: string, index: number): string => {
 		const next = argv[index + 1];
@@ -85,6 +91,8 @@ export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 			options.port = port;
 		} else if (arg === "--data") options.data = value(arg, i++);
 		else if (arg === "--url") options.url = value(arg, i++);
+		else if (arg === "--board") options.board = true;
+		else if (arg === "--shared") options.shared = true;
 		else if (i === 0 && (arg === "join" || arg === "create")) {
 			options.command = arg;
 			const next = argv[1];
