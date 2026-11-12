@@ -116,4 +116,46 @@ describe("the canopy of a team with a server", () => {
 		// What needs someone is found the same way as before.
 		expect(press(w, state, "tab").state.selected).toBe("#3");
 	});
+
+	it("adds an issue where the scheme allows one, typed at the foot of the screen", () => {
+		const w = build();
+		const state = { ...initial(w, undefined), selected: "#2" };
+		// Under a feature goes a story: the first type the scheme allows there.
+		const typing = press(w, state, "n", "R", "e", "t", "r", "y", "x", "backspace", " ", "q");
+		expect(typing.state.typing).toEqual({ what: "add", label: "New story under #2", text: "Retry q", number: 2 });
+		expect(typing.actions).toEqual([]);
+		expect(renderPlain(w, typing.state, 150, 40).at(-1)).toMatch(/^ {2}New story under #2: Retry q▏ +⏎ {2}add +esc {2}cancel/);
+		// Keys that mean something elsewhere are text here; escape leaves without adding.
+		expect(press(w, typing.state, "escape").state.typing).toBeUndefined();
+		expect(press(w, typing.state, "escape").actions).toEqual([]);
+		const added = press(w, typing.state, "enter");
+		expect(added.actions).toEqual([{ do: "run", command: "/lattice issue add 2 Retry q", saying: "Adding it…" }]);
+		expect(added.state.typing).toBeUndefined();
+		// At the top goes an epic; under a task goes nothing.
+		expect(press(w, state, "N", "X", "enter").actions).toEqual([{ do: "run", command: "/lattice issue add top X", saying: "Adding it…" }]);
+		expect(press(w, { ...state, selected: "#4" }, "n").state.typing?.label).toBe("New bug under #4");
+		expect(press(w, { ...state, selected: "#9" }, "n").actions).toEqual([{ do: "say", text: "Nothing goes under a bug in your team's scheme." }]);
+		// Nothing typed adds nothing.
+		expect(press(w, state, "n", "enter").actions).toEqual([]);
+	});
+
+	it("moves an issue to its next state, assigns it, and comments on it, each with one key", () => {
+		const w = build();
+		const state = initial(w, undefined);
+		expect(press(w, { ...state, selected: "#6" }, "e").actions).toEqual([{ do: "run", command: "/lattice issue set 6 state doing", saying: "Moving #6 to doing…" }]);
+		expect(press(w, { ...state, selected: "#4" }, "e").actions).toEqual([{ do: "run", command: "/lattice issue set 4 state done", saying: "Moving #4 to done…" }]);
+		// After the last state comes the first: finished work is reopened, never dropped by this key.
+		expect(press(w, { ...state, selected: "#5" }, "e").actions).toEqual([{ do: "run", command: "/lattice issue set 5 state todo", saying: "Moving #5 to todo…" }]);
+		expect(press(w, { ...state, selected: "#6" }, "m").actions).toEqual([{ do: "run", command: "/lattice issue set 6 assignee yan", saying: "Assigning #6 to you…" }]);
+		expect(press(w, { ...state, selected: "#9" }, "m").actions).toEqual([{ do: "run", command: "/lattice issue set 9 assignee none", saying: "Taking #9 off you…" }]);
+		expect(press(w, { ...state, selected: "#6" }, "t", "o", "k", "enter").actions).toEqual([{ do: "run", command: "/lattice issue comment 6 ok", saying: "Commenting…" }]);
+		// A session is not an issue.
+		expect(press(w, { ...state, selected: "scratch" }, "e").actions).toEqual([{ do: "say", text: "Select an issue first." }]);
+		expect(renderPlain(w, { ...state, selected: "#6" }, 190, 40).at(-1)).toMatch(/s {2}put this session on it +n {2}new under it +e {2}next state +m {2}mine +t {2}comment/);
+	});
+
+	it("changes nothing while the server cannot be reached, and says why", () => {
+		const w = build({ ...team(), connected: false, problem: "The server at https://lattice.example.com cannot be reached." });
+		expect(press(w, { ...initial(w, undefined), selected: "#6" }, "e").actions).toEqual([{ do: "say", text: "Nothing can be changed: The server at https://lattice.example.com cannot be reached." }]);
+	});
 });

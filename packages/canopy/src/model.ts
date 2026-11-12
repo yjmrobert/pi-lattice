@@ -2,7 +2,7 @@
  * The work of a network as the canopy sees it: items on levels, who owns each, and the agent
  * sitting on it. Built from the same state the pane reads. No Pi, no terminal.
  */
-import { type Issue, isPlanned, misfit, type NodeMeta, roleOf, stateKind, type UiState, type WorkState } from "@pi-lattice/protocol";
+import { type Issue, isPlanned, misfit, type NodeMeta, roleOf, type Scheme, stateKind, type UiState, type WorkState } from "@pi-lattice/protocol";
 
 /** One host's tree, or what a teammate has in a repository that is not on this machine. */
 export interface TreeSource {
@@ -83,6 +83,10 @@ export interface World {
 	levels: string[];
 	me: string;
 	traffic: Array<{ from: string; to: string; intent: string; at: number }>;
+	/** The team's scheme, when the canopy is drawn from a server: what may be added where, and what the states are. */
+	scheme?: Scheme;
+	/** Why nothing on the server can be changed right now. */
+	stale?: string;
 }
 
 export const ROOT_ID = "canopy:root";
@@ -301,7 +305,7 @@ function buildFromWork(sources: readonly TreeSource[], work: WorkState, rootName
 	const online = new Map(work.people.map((person) => [person.name, person.online]));
 	const names = new Set<string>([me, ...work.people.map((person) => person.name)]);
 	for (const item of items.values()) if (item !== root && item.owner) names.add(item.owner);
-	return finish(root, items, [me, ...[...names].filter((name) => name !== me).sort()], online, levels, me, sources);
+	return { ...finish(root, items, [me, ...[...names].filter((name) => name !== me).sort()], online, levels, me, sources), scheme, ...(work.connected ? {} : { stale: work.problem ?? "The server has not been reached yet." }) };
 }
 
 /** Every item under one, itself first, parents before children; helpers after the item they serve. */

@@ -231,8 +231,27 @@ describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 			await eventually(async () => (await sam.read(2)).issue.state === "doing", "the feature to be started");
 			await sam.refresh();
 			await eventually(async () => (await sam.refresh(), sam.state().sessions.some((session) => session.owner === "tester" && session.issue === 2)), "sam to see the session on #2");
+
+			// Work is added and moved along from the canopy itself.
+			pi.press("n");
+			await pi.see("New story under #2:");
+			pi.press("Enter a card", KEY.enter);
+			await eventually(async () => (await sam.refresh(), sam.issue(3)?.title === "Enter a card" && sam.issue(3)?.type === "story" && sam.issue(3)?.parent === 2), "the story to be added");
+			await pi.see(/Enter a card/);
+			pi.press("m");
+			await eventually(async () => (await sam.refresh(), sam.issue(2)?.assignee === "tester"), "the feature to be assigned");
 			pi.press(KEY.escape);
-			await pi.see("This session is on #2: Pay by card (doing).");
+			// The last thing done from the canopy is said in the chat it gives back.
+			await pi.see(/#2 {2}feature {2}Pay by card {2}\[doing\] {2}@tester/);
+
+			await pi.submit("/lattice issue 2");
+			await pi.see("/lattice issue 2");
+			pi.press(KEY.enter);
+			await pi.see(/tester {2}assignee: sam -> tester/);
+			await pi.submit("/lattice scheme");
+			await pi.see("/lattice scheme");
+			pi.press(KEY.enter);
+			await pi.see("Types: epic (at the top); feature (under epic);");
 		} finally {
 			await server.stop();
 		}

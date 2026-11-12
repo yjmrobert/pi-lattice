@@ -22,7 +22,7 @@ const FRAME_MS = Math.round(1000 / FPS);
 /** How often the world is asked for again while nothing moves. */
 const LOOK_EVERY = 10;
 const SAY_MS = 4000;
-const NAMED = ["up", "down", "left", "right", "shift+up", "shift+down", "shift+left", "shift+right", "home", "tab", "enter", "escape"] as const;
+const NAMED = ["up", "down", "left", "right", "shift+up", "shift+down", "shift+left", "shift+right", "home", "tab", "enter", "escape", "backspace"] as const;
 const DEFAULT_LEVELS = (SETTINGS.find((setting) => setting.key === "canopy.levels")?.default as string[] | undefined) ?? ["epic", "feature", "story", "task"];
 
 function keyOf(data: string): CanopyKey | undefined {
@@ -102,6 +102,10 @@ export default function (pi: ExtensionAPI) {
 					if (action.do === "say") said = { text: action.text, until: Date.now() + SAY_MS };
 					// Opening a session switches this terminal to it: the canopy steps aside first.
 					if (action.do === "open") return close(`/lattice open ${action.id}`);
+					if (action.do === "run") {
+						said = { text: action.saying, until: Date.now() + SAY_MS };
+						run(action.command);
+					}
 					if (action.do === "on") {
 						said = { text: `Putting this session on #${action.number}…`, until: Date.now() + SAY_MS };
 						run(`/lattice on ${action.number}`);

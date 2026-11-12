@@ -14,6 +14,8 @@ Begins the move away from peer to peer ([0012](0012-peer-to-peer-collab.md), [00
 - **The canopy draws issues when there is a server.** Levels come from the scheme, the colour of an item is whoever it is assigned to, and the ring is the colour of whoever's session is on it. Sessions on no issue are drawn at the foot. Without a server the canopy draws the session tree, as before.
 - **The host knows nothing of HTTP.** It is given a `WorkPort`, as it is given sharing; `app` supplies one made from the client. `server` depends on `protocol` alone ([0014](0014-package-seams.md)).
 - **Agents have four tools:** `work_list`, `work_add`, `work_update`, `work_on`; and `spawn_session` takes an issue.
+- **People work on issues where they see them.** In the canopy: `n` adds an issue under the selected one, of the first type the scheme allows there, with its title typed at the foot; `e` moves it to its next state; `m` assigns it to you; `t` comments; `s` puts your session on it. `/lattice issue` shows, adds, changes and comments; `/lattice scheme edit` opens the scheme as the data it is, and says what is wrong with it before anything is saved.
+- **The canopy changes work through `/lattice` commands,** as it opens sessions: it has no connection of its own ([0024](0024-the-canopy.md)).
 
 **Rejected**
 

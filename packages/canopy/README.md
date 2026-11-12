@@ -4,7 +4,7 @@ All the work of a network as a tree that grows upward: the network at the root, 
 
 Press `c` in the pane, or run `/lattice canopy`. It takes the whole screen; `esc` gives it back.
 
-When you have joined your team's server (`/lattice server <address>`), the tree is the team's issues, on the levels of the team's own scheme. An item's colour is whoever it is assigned to, and the ring round it is the colour of whoever's session is on it. `s` puts the session open in your terminal on the selected issue. Sessions on no issue are drawn at the foot. Without a server, the tree is the sessions themselves and the items planned among them.
+When you have joined your team's server (`/lattice server <address>`), the tree is the team's issues, on the levels of the team's own scheme. An item's colour is whoever it is assigned to, and the ring round it is the colour of whoever's session is on it. `s` puts the session open in your terminal on the selected issue, `n` adds an issue under it, `e` moves it to its next state, `m` assigns it to you and `t` comments on it. Sessions on no issue are drawn at the foot. Without a server, the tree is the sessions themselves and the items planned among them.
 
 ```
  ◆ harbor  1 @yan ⠋4 ●2 19   2 @mira ⠋4 10   3 @sam ⠋4 ●1 17   4 ○@teo away ●1 4

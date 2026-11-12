@@ -1,6 +1,6 @@
 # One server, and the work on it
 
-A plan to replace peer-to-peer sharing with one hosted service, and to track work on it as issues. Status: phases 1 to 5 are built ([0026](../decisions/0026-a-server-for-the-work.md)). Phases 6 to 8 are not: issues cannot yet be edited from the canopy, and reading a teammate's conversation, mail between owners and handing a session over still go peer to peer.
+A plan to replace peer-to-peer sharing with one hosted service, and to track work on it as issues. Status: phases 1 to 6 are built ([0026](../decisions/0026-a-server-for-the-work.md)). Phases 7 and 8 are not: reading a teammate's conversation, mail between owners and handing a session over still go peer to peer. Of phase 6, moving an issue under another parent, changing its type, labels and fields are commands or agent tools, not keys in the canopy.
 
 ## Why
 

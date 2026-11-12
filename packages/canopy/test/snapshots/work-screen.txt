@@ -37,4 +37,4 @@
                                                                      ⢔⢵⣷⣿⣷⣷⢕⠄                                 │
                                                                      ⢕⢿⣿⣿⣿⣿⢗⠅                                 │
                                                                      ⠑⢝⢟⢿⢟⢟⠕⠁                                 │
-  ←↑↓→  move    tab  next that needs someone    s  put this session on it    1-9  one person    a  panel    shift+←→  pan    esc  back
+  ←↑↓→  move    tab  next that needs someone    s  put this session on it    n  new under it    e  next state    m  mine    t  comment

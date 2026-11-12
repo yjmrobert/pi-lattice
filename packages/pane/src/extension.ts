@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import { emitEvent, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState } from "@pi-lattice/protocol";
+import { describeScheme, emitEvent, type IssueChange, issueLine, type Scheme, schemeProblems, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState } from "@pi-lattice/protocol";
 import { type ChildForm, type FormKey, formKey, newChildForm, renderForm, waitChoices } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
@@ -1053,6 +1053,96 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		await refresh();
 	};
 
+	/** Look at one of the team's issues, add one, change one, or comment on one. */
+	const issue = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
+		const USAGE = "/lattice issue <number> shows one. /lattice issue add <parent | top> <title>, /lattice issue set <number> <title | type | state | parent | assignee> <value | none>, /lattice issue comment <number> <text>.";
+		const words = arg.trim().split(/\s+/).filter(Boolean);
+		const client = need(ctx);
+		if (!client) return;
+		const numberOf = (word: string | undefined): number | undefined => (word !== undefined && /^#?\d+$/.test(word) ? Number(word.replace("#", "")) : undefined);
+		try {
+			const [verb, target, ...rest] = words;
+			if (verb === "add") {
+				const parent = numberOf(target);
+				const title = (parent === undefined && target !== "top" ? [target, ...rest] : rest).join(" ");
+				if (!title) return ctx.ui.notify(USAGE, "warning");
+				const made = (await client.ui("work", { request: { do: "add", change: { title, ...(parent !== undefined ? { parent } : {}) } } })).issue;
+				if (made) ctx.ui.notify(`Added ${issueLine(made)}${made.parent !== undefined ? `, under #${made.parent}` : ""}.`, "info");
+			} else if (verb === "set") {
+				const number = numberOf(target);
+				const [field, ...value] = rest;
+				const text = value.join(" ");
+				if (number === undefined || !field || text === "" || !["title", "type", "state", "parent", "assignee"].includes(field)) return ctx.ui.notify(USAGE, "warning");
+				const none = text === "none";
+				if (none && field !== "parent" && field !== "assignee") return ctx.ui.notify(`An issue always has a ${field}.`, "warning");
+				const parent = numberOf(text);
+				if (field === "parent" && !none && parent === undefined) return ctx.ui.notify("The parent is an issue's number, or none.", "warning");
+				const change: IssueChange = field === "parent" ? { parent: none ? null : (parent as number) } : field === "assignee" ? { assignee: none ? null : text.replace(/^@/, "") } : { [field]: text };
+				const changed = (await client.ui("work", { request: { do: "update", number, change } })).issue;
+				if (changed) ctx.ui.notify(issueLine(changed), "info");
+			} else if (verb === "comment") {
+				const number = numberOf(target);
+				if (number === undefined || rest.length === 0) return ctx.ui.notify(USAGE, "warning");
+				await client.ui("work", { request: { do: "comment", number, body: rest.join(" ") } });
+				ctx.ui.notify(`Commented on #${number}.`, "info");
+			} else {
+				const number = numberOf(verb);
+				if (number === undefined) return ctx.ui.notify(USAGE, words.length === 0 ? "info" : "warning");
+				const read = await client.ui("work", { request: { do: "read", number } });
+				if (!read.issue) return;
+				const when = (at: number): string => new Date(at).toISOString().slice(0, 16).replace("T", " ");
+				ctx.ui.notify(
+					[
+						issueLine(read.issue),
+						...(read.issue.body.trim() ? ["", read.issue.body.trim()] : []),
+						...((read.comments ?? []).length > 0 ? ["", ...(read.comments ?? []).map((comment) => `${comment.author}, ${when(comment.at)}: ${comment.body}`)] : []),
+						"",
+						...(read.history ?? []).map((event) => `${when(event.at)}  ${event.who}  ${event.what}${event.from !== undefined || event.to !== undefined ? `: ${event.from ?? "nothing"} -> ${event.to ?? "nothing"}` : ""}`),
+					].join("\n"),
+					"info",
+				);
+			}
+		} catch (error) {
+			fail(ctx, error);
+		}
+		await refresh();
+	};
+
+	/** How the team structures its work: show it, or change it as a whole. */
+	const scheme = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
+		const client = need(ctx);
+		if (!client) return;
+		try {
+			const { work } = await client.ui("work", { request: { do: "look" } });
+			if (!work) return;
+			if (arg.trim() !== "edit") return ctx.ui.notify(`${describeScheme(work.scheme)}\n\nChange it with /lattice scheme edit. What already exists is never rewritten to fit: it stays where it is and is marked as misplaced.`, "info");
+			// Edited as the data it is. What is wrong with it is said, and the editor opens again on what was typed.
+			let text = JSON.stringify(work.scheme, null, 2);
+			for (;;) {
+				const edited = await ctx.ui.editor("The team's scheme: types (level, what each may sit under, whether it may be at the top), states (kind: open, active, done or dropped), fields, rules. Saving replaces it for everyone.", text);
+				if (edited === undefined || edited.trim() === text.trim()) return ctx.ui.notify("The scheme was not changed.", "info");
+				text = edited;
+				let value: unknown;
+				try {
+					value = JSON.parse(edited);
+				} catch (error) {
+					if (!(await ctx.ui.confirm("That is not JSON", `${error instanceof Error ? error.message : String(error)}\n\nEdit it again?`))) return;
+					continue;
+				}
+				const problems = schemeProblems(value);
+				if (problems.length > 0) {
+					if (!(await ctx.ui.confirm("The scheme cannot be used", `${problems.join("\n")}\n\nEdit it again?`))) return;
+					continue;
+				}
+				const saved = (await client.ui("work", { request: { do: "scheme", scheme: value as Scheme } })).scheme;
+				if (saved) ctx.ui.notify(`The scheme is changed for everyone.\n\n${describeScheme(saved)}`, "info");
+				return;
+			}
+		} catch (error) {
+			fail(ctx, error);
+		}
+	};
+
 	/** Say which issue the session open here is on. */
 	const workOn = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
 		const word = arg.trim().replace(/^#/, "");
@@ -1686,6 +1776,8 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		},
 		{ name: "approvals", does: "review messages waiting for approval", run: (ctx) => approvals(ctx) },
 		{ name: "server", usage: "server [address [your name] | leave]", does: "join your team's server, where its work is tracked; with nothing, say which one you are on", run: (ctx, arg) => server(ctx, arg) },
+		{ name: "issue", usage: "issue <number> | add <parent | top> <title> | set <number> <field> <value> | comment <number> <text>", does: "look at one of the team's issues, add one, change one, or comment on one", run: (ctx, arg) => issue(ctx, arg) },
+		{ name: "scheme", usage: "scheme [edit]", does: "how the team structures its work: the types, states and fields; edit changes them for everyone", run: (ctx, arg) => scheme(ctx, arg) },
 		{ name: "on", usage: "on <issue | none>", does: "say which of the team's issues this session is working on", run: (ctx, arg) => workOn(ctx, arg) },
 		{ name: "network", does: "create or join a network of teammates; who is in it, the join code, what is being handed over", run: (ctx) => network(ctx) },
 		{ name: "join", usage: "join <code> [your name]", does: "join a teammate's network with the code they gave you", run: (ctx, arg) => joinNetwork(ctx, arg) },

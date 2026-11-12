@@ -23,6 +23,8 @@ export interface CanopyState {
 	side: Side;
 	letters: boolean;
 	shape: Shape;
+	/** A line being typed at the foot: the title of a new issue, or a comment. */
+	typing?: { what: "add" | "comment"; label: string; text: string; number: number | undefined };
 }
 
 export type CanopyKey = "up" | "down" | "left" | "right" | "shift+up" | "shift+down" | "shift+left" | "shift+right" | "home" | "tab" | "enter" | "escape" | (string & {});
@@ -33,6 +35,8 @@ export type CanopyAction =
 	| { do: "start"; id: string; tree: string }
 	/** Put the session open in this terminal on an issue. */
 	| { do: "on"; number: number }
+	/** Change the team's work with a `/lattice` command, and say what is being done meanwhile. */
+	| { do: "run"; command: string; saying: string }
 	| { do: "say"; text: string };
 
 /** What an item is called beside its name: an issue's type, a helper's kind, or the name of its level. */
@@ -120,7 +124,42 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 	const pan = (dc: number, dr: number): { state: CanopyState; actions: CanopyAction[] } =>
 		keep({ ...state, camera: { col: plan.width <= win.width ? state.camera.col : Math.max(0, Math.min(plan.width - win.width, state.camera.col + dc)), row: plan.height <= win.height ? state.camera.row : Math.max(0, Math.min(plan.height - win.height, state.camera.row + dr)) } });
 
+	// While a line is being typed, every key is for it.
+	if (state.typing) {
+		const { typing, ...rest } = state;
+		if (key === "escape") return keep(rest);
+		if (key === "backspace") return keep({ ...state, typing: { ...typing, text: [...typing.text].slice(0, -1).join("") } });
+		if (key === "enter") {
+			const text = typing.text.trim().replace(/\s+/g, " ");
+			if (text === "") return keep(rest);
+			return typing.what === "add"
+				? keep(rest, [{ do: "run", command: `/lattice issue add ${typing.number ?? "top"} ${text}`, saying: "Adding it…" }])
+				: keep(rest, [{ do: "run", command: `/lattice issue comment ${typing.number} ${text}`, saying: "Commenting…" }]);
+		}
+		return [...key].length === 1 ? keep({ ...state, typing: { ...typing, text: typing.text + key } }) : keep(state);
+	}
 	if (key === "escape" || key === "q") return keep(state, [{ do: "close" }]);
+	const scheme = world.scheme;
+	if (scheme && (key === "n" || key === "N" || key === "e" || key === "m" || key === "t")) {
+		if (world.stale) return keep(state, [{ do: "say", text: `Nothing can be changed: ${world.stale}` }]);
+		const issue = key === "N" ? undefined : item?.issue;
+		if (key === "n" || key === "N") {
+			// What goes there is the first type the scheme allows there.
+			const type = scheme.types.find((entry) => (issue ? entry.under.includes(issue.type) : entry.top));
+			if (!type) return keep(state, [{ do: "say", text: issue ? `Nothing goes under ${/^[aeiou]/.test(issue.type) ? "an" : "a"} ${issue.type} in your team's scheme.` : "Nothing may be at the top in your team's scheme." }]);
+			return keep({ ...state, typing: { what: "add", label: issue ? `New ${type.name} under #${issue.number}` : `New ${type.name}`, text: "", number: issue?.number } });
+		}
+		if (!issue) return keep(state, [{ do: "say", text: "Select an issue first." }]);
+		if (key === "t") return keep({ ...state, typing: { what: "comment", label: `Comment on #${issue.number}`, text: "", number: issue.number } });
+		if (key === "m") {
+			const mine = issue.assignee === world.me;
+			return keep(state, [{ do: "run", command: `/lattice issue set ${issue.number} assignee ${mine ? "none" : world.me}`, saying: mine ? `Taking #${issue.number} off you…` : `Assigning #${issue.number} to you…` }]);
+		}
+		// The next state in the order the team gave them; dropping work is not a step along the way.
+		const steps = scheme.states.filter((entry) => entry.kind !== "dropped");
+		const next = steps[(steps.findIndex((entry) => entry.name === issue.state) + 1) % Math.max(1, steps.length)];
+		return next && next.name !== issue.state ? keep(state, [{ do: "run", command: `/lattice issue set ${issue.number} state ${next.name}`, saying: `Moving #${issue.number} to ${next.name}…` }]) : keep(state);
+	}
 	const arrow = ARROWS[key];
 	if (arrow) return go(here ? neighbour(world, plan, here, arrow) : world.root.children[0]?.id);
 	if (key === "shift+left") return pan(-12, 0);
@@ -234,10 +273,16 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 function footer(world: World, state: CanopyState, width: number): Grid {
 	const grid = new Grid(width, FOOTER);
 	const item = state.selected ? world.items.get(state.selected) : undefined;
+	if (state.typing) {
+		const room = Math.max(8, width - [...state.typing.label].length - 30);
+		const shown = [...state.typing.text].slice(-room).join("");
+		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], [" ⏎ ", KEYCAP], [state.typing.what === "add" ? " add   " : " comment   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]]);
+		return grid;
+	}
 	const keys: Array<[string, string]> = [["←↑↓→", "move"], ["tab", "next that needs someone"]];
 	if (item?.issue) {
 		if (item.node) keys.push(["⏎", "open"]);
-		keys.push(["s", "put this session on it"]);
+		keys.push(["s", "put this session on it"], ["n", "new under it"], ["e", "next state"], ["m", item.issue.assignee === world.me ? "not mine" : "mine"], ["t", "comment"]);
 	} else if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
 	else if (item && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
 	if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
@@ -273,6 +318,7 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 		line([[`#${issue.number}`, { fg: COLOR.text }], [`  ${issue.state}  `, DIM], issue.assignee ? [`@${issue.assignee}`, { fg: color }] : ["unassigned", DIM]]);
 		const extra = [...issue.labels.map((label) => `+${label}`), ...Object.entries(issue.fields).map(([name, value]) => `${name} ${value}`)].join("  ");
 		if (extra) line([[cut(extra, inner), DIM]]);
+		for (const part of wrap(issue.body.split("\n").filter((text) => text.trim() !== "").slice(0, 3).join(" "), inner).slice(0, 3)) line([[part, { fg: COLOR.text }]]);
 		if (item.misfit) {
 			line([["▲ misplaced", { fg: COLOR.attention, bold: true }]]);
 			for (const part of wrap(item.misfit, inner - 2).slice(0, 3)) line([[`  ${part}`, DIM]]);
