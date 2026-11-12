@@ -87,6 +87,8 @@ export type Dialog = DialogInfo;
 export interface SharingPort {
 	/** Null while sharing is switched off. */
 	state(): UiState["sharing"];
+	/** Whether this person has said what name they go by, rather than being called after their OS user. */
+	named(): boolean;
 	/** Run a sharing action named by the pane and return text to show. */
 	run(action: string, args: string[]): Promise<string>;
 	/** A teammate's session's conversation, in this repository or another. */
@@ -230,14 +232,33 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	 */
 	private readonly owing = new Map<string, { reminded: boolean }>();
 	private sharing: SharingPort | undefined;
+	/** The name this person's sessions here were under until this start, when it changed. */
+	readonly renamedFrom: string | undefined;
 	private notifyTimer: NodeJS.Timeout | undefined;
 	private stopped = false;
+
+	/**
+	 * A person who changed the name they go by still owns what they owned. The name this tree
+	 * was last run under is kept beside it; where none was kept, it was the OS user name.
+	 */
+	private carryName(): string | undefined {
+		const path = join(this.stateDir, "owner");
+		let before: string;
+		try {
+			before = readFileSync(path, "utf8").trim() || userInfo().username;
+		} catch {
+			before = userInfo().username;
+		}
+		if (before !== this.owner) for (const node of this.store.listNodes()) if (node.owner === before) this.store.updateNode(node.id, { owner: this.owner });
+		writeFileSync(path, this.owner);
+		return before !== this.owner ? before : undefined;
+	}
 
 	private constructor(options: HostOptions) {
 		super();
 		this.options = options;
 		this.stateDir = resolve(options.stateDir);
-		this.owner = options.owner ?? process.env[HOST_ENV.owner] ?? userInfo().username;
+		this.owner = (options.owner ?? process.env[HOST_ENV.owner]) || userInfo().username;
 		this.userDir = resolve(options.userDir ?? latticeHome(process.env, homedir()));
 		mkdirSync(this.stateDir, { recursive: true });
 
@@ -247,6 +268,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		this.socketPath = join(socketDir, `${createHash("sha256").update(this.stateDir).digest("hex").slice(0, 16)}.sock`);
 
 		this.store = new SqliteStore(join(this.stateDir, "host.db"));
+		this.renamedFrom = this.carryName();
 		this.server = new SocketServer(this.socketPath, {
 			authenticate: (hello) => (hello.channel === "ui" ? hello.token === this.uiToken : this.runtimes.get(hello.nodeId)?.token === hello.token),
 			onHello: (connection, hello) => this.onHello(connection, hello),
@@ -874,6 +896,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			activity,
 			foreground: [...this.runtimes].filter(([, runtime]) => runtime.foreground).map(([id]) => id),
 			sharing: this.sharing?.state() ?? null,
+			named: this.sharing?.named() ?? false,
 		};
 	}
 

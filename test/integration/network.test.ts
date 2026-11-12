@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, statSync, writeFileSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type Daemon, runDaemon } from "../../packages/app/src/index.ts";
@@ -74,7 +75,7 @@ describe("a network of teammates, through the background host", () => {
 		// Yan creates the network. The answer is the code to pass on; it names where yan is.
 		const created = await run(yan, "create", "team");
 		const code = created.split("\n").at(-1) ?? "";
-		expect(code).toMatch(/^team\.[A-Za-z0-9_-]{43}@127\.0\.0\.1/);
+		expect(code).toMatch(/^\/lattice join team\.[A-Za-z0-9_-]{43}@127\.0\.0\.1/);
 		expect(sharing(yan)).toMatchObject({ network: "team", people: [{ name: "yan", self: true }] });
 		expect(statSync(join(yanBox.home, "network.json")).mode & 0o077).toBe(0); // the secret is the person's alone
 		await expect(run(yan, "create", "another")).rejects.toThrow(/already in team/);
@@ -138,4 +139,51 @@ describe("a network of teammates, through the background host", () => {
 		await eventually(() => sharing(yan) === null, "yan's host for that repository to stop sharing");
 		expect(existsSync(join(yanBox.home, "network.json"))).toBe(true); // yan is still in the network, elsewhere
 	}, 120_000);
+
+	it("asks a person's name once, and their sessions follow it", async () => {
+		const box = createSandbox();
+		git(box.work, "init", "-q", "-b", "main");
+		const stateDir = join(box.work, ".lattice");
+		const { owner: _unused, ...hostOptions } = hostOptionsFor(box, { stateDir, socketDir: join(box.root, "sock") });
+		const start = async (): Promise<Machine> => {
+			const made = { sandbox: box, daemon: await runDaemon({ stateDir, cwd: box.work, idleExitMs: 0, tickMs: 100, home: box.home, discovery: false, advertise: "127.0.0.1", hostOptions }) };
+			machines.push(made);
+			return made;
+		};
+
+		// Until they say otherwise a person is called after their OS user, and the pane knows to ask.
+		let me = await start();
+		const before = me.daemon.host.owner;
+		expect(before).toBe(userInfo().username);
+		expect(me.daemon.host.uiState().named).toBe(false);
+		const root = await me.daemon.host.createRoot({ name: "checkout", cwd: box.work, fragments: [] });
+		await expect(run(me, "name", "not a name")).rejects.toThrow(/cannot be used as a name/);
+
+		// The name is kept for every repository; this host uses it from its next start, and shares nothing until then.
+		expect(await run(me, "name", "robin")).toContain("next start");
+		await run(me, "create", "team");
+		expect(sharing(me)).toBeNull();
+		await me.daemon.stop();
+		machines = [];
+
+		me = await start();
+		expect(me.daemon.host.owner).toBe("robin");
+		expect(me.daemon.host.uiState().named).toBe(true);
+		expect(me.daemon.host.node(root.id)?.owner).toBe("robin"); // what was theirs still is
+		expect(sharing(me)).toMatchObject({ network: "team", people: [{ name: "robin", self: true }] });
+
+		// Teammates know them by it now: it stays while they are in the network.
+		await expect(run(me, "name", "bob")).rejects.toThrow(/Leave the network/);
+		expect(await run(me, "name", "robin")).toBe("You go by robin.");
+	});
+
+	it("says which addresses it tried and why they did not answer", async () => {
+		const box = createSandbox();
+		git(box.work, "init", "-q", "-b", "main");
+		const sam = await machine("sam", box, box.work);
+		// The whole line a teammate was sent, naming a machine where nothing listens.
+		expect(await run(sam, "join", `/lattice join team.${"A".repeat(43)}@127.0.0.1:9`)).toContain("You are in team");
+		await eventually(() => (sharing(sam)?.tried ?? []).length > 0, "the dead address to be tried");
+		expect(sharing(sam)?.tried).toEqual([{ address: "127.0.0.1:9", why: expect.stringContaining("nothing is listening") }]);
+	});
 });

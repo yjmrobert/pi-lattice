@@ -212,6 +212,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private readonly now: () => number;
 	private readonly channels = new Map<string, { channel: SecureChannel; initiator: string }>();
 	private readonly dialing = new Set<string>();
+	private readonly unanswered = new Map<string, string>(); // address -> why it did not lead to a teammate
 	private readonly strangers = new Map<string, string>(); // name -> a key other than the pinned one
 	private readonly addresses = new Map<string, string>(); // name -> `host:port` they were last heard at
 	private readonly seedPeer = new Map<string, string>(); // seed -> who answered there
@@ -461,6 +462,11 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		else void this.dialAddress(address);
 	}
 
+	/** The addresses tried most recently that did not lead to a teammate, and why, latest last. */
+	tried(): Array<{ address: string; why: string }> {
+		return [...this.unanswered].map(([address, why]) => ({ address, why }));
+	}
+
 	/** Try everyone in the network, and every machine the join code named, now. */
 	reach(): void {
 		if (this.stopped) return;
@@ -502,9 +508,14 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			const channel = await openChannel(stream, { ...this.channelOptions(), initiator: true, ...(expect !== undefined ? { expect } : {}) });
 			(channel.scope === this.options.scope ? this.addresses : this.guestAddresses).set(channel.peer, address);
 			this.adopted(channel, this.identity.name, splitAddress(address).host);
+			this.unanswered.delete(address);
 			return channel.peer;
-		} catch {
-			return undefined; // not there, not them, or not in the network; a changed key is reported by knocked()
+		} catch (error) {
+			// Not there, not them, or not in the network; a changed key is reported by knocked().
+			this.unanswered.delete(address);
+			this.unanswered.set(address, whyNot(error));
+			if (this.unanswered.size > 12) this.unanswered.delete(this.unanswered.keys().next().value as string);
+			return undefined;
 		} finally {
 			this.dialing.delete(address);
 		}
@@ -1508,6 +1519,16 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 }
 
 /** The addresses other machines can reach this one at: every non-internal IPv4, else loopback. */
+/** Why a machine did not answer, in words a person can act on. */
+function whyNot(error: unknown): string {
+	const text = error instanceof Error ? error.message : String(error);
+	if (/ECONNREFUSED/.test(text)) return "nothing is listening there: their Pi is not running, or it is another machine";
+	if (/timed out|ETIMEDOUT/.test(text)) return "no answer: a firewall, or an address that is not reachable from here";
+	if (/EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL/.test(text)) return "this machine has no route to that address";
+	if (/ENOTFOUND|EAI_AGAIN/.test(text)) return "that host name is not known here";
+	return text.replace(/^Could not reach \S+: /, "");
+}
+
 export function localHosts(): string[] {
 	const out: string[] = [];
 	for (const addresses of Object.values(networkInterfaces())) {

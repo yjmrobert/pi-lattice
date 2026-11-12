@@ -12,7 +12,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CollabSession, createNetwork, formatJoinCode, Identity, LanDiscovery, loadNetwork, lobbyPort, type Network, networkKey, parseJoinCode, PeerBook, removeNetwork, saveNetwork, sharedPort, TcpTransport } from "@pi-lattice/collab";
+import { CollabSession, createNetwork, formatJoinCode, Identity, isPersonName, LanDiscovery, loadNetwork, lobbyPort, type Network, networkKey, parseJoinCode, PeerBook, removeNetwork, saveNetwork, sharedPort, TcpTransport } from "@pi-lattice/collab";
 import { encodeTree, latticeHome, type NodeMeta, toggleSetting, TREES_DIR, treeEntryName, type UiState } from "@pi-lattice/protocol";
 import { type HostOptions, LatticeHost, repoName, type SharingPort } from "@pi-lattice/host";
 
@@ -67,6 +67,48 @@ function cloneUrl(cwd: string): string | undefined {
 	}
 }
 
+/** The name a person chose to go by, kept in their lattice home so that every repository's host uses it. */
+export function chosenName(home: string): string | undefined {
+	try {
+		const name = readFileSync(join(home, "name"), "utf8").trim();
+		return isPersonName(name) ? name : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export function chooseName(home: string, name: string): void {
+	if (!isPersonName(name)) throw new Error(`"${name}" cannot be used as a name. Use letters, digits, dot, dash or underscore.`);
+	mkdirSync(home, { recursive: true });
+	writeFileSync(join(home, "name"), `${name}\n`);
+}
+
+/** The name given for this run alone, which the chosen one does not replace. */
+const givenName = (options: Pick<DaemonOptions, "owner">): string | undefined => options.owner ?? (process.env.LATTICE_OWNER || undefined);
+
+/** Become a member of a network. Joining again with a newer code adds the machines it names. */
+export function joinNetwork(home: string, code: string): Network {
+	const path = join(home, "network.json");
+	// The code is often pasted with the command it came in: the code is the last word.
+	const network = parseJoinCode(code.trim().split(/\s+/).at(-1) ?? "");
+	const current = loadNetwork(path);
+	if (current && current.secret !== network.secret) throw new Error(`You are in ${current.name}. Leave it before joining another network.`);
+	mkdirSync(home, { recursive: true });
+	saveNetwork(path, { ...network, seeds: [...new Set([...(current?.seeds ?? []), ...network.seeds])] });
+	return network;
+}
+
+/** Start a network. The code names this machine's addresses; hosts listen where every member expects them. */
+export function startNetwork(home: string, name: string): Network {
+	const path = join(home, "network.json");
+	const current = loadNetwork(path);
+	if (current) throw new Error(`You are already in ${current.name}. Leave it before creating another network.`);
+	const network = createNetwork(name);
+	mkdirSync(home, { recursive: true });
+	saveNetwork(path, network);
+	return network;
+}
+
 /**
  * Sharing with the person's network. The network is one file in the lattice home, used by
  * the host of every repository: this host follows it, so creating, joining or leaving a
@@ -77,6 +119,7 @@ class Sharing implements SharingPort {
 	private network: Network | undefined;
 	private scope = "";
 	private stamp: string | undefined;
+	private warned = false;
 	private chain: Promise<void> = Promise.resolve();
 	private readonly listeners: Array<() => void> = [];
 	private readonly host: LatticeHost;
@@ -94,7 +137,7 @@ class Sharing implements SharingPort {
 	}
 
 	async restore(): Promise<void> {
-		if (this.options.join !== undefined) this.join(this.options.join);
+		if (this.options.join !== undefined) joinNetwork(this.home, this.options.join);
 		await this.sync();
 	}
 
@@ -110,10 +153,15 @@ class Sharing implements SharingPort {
 			}
 			// A repository can be kept out of the network; that is a setting, read each time.
 			const share = toggleSetting(this.host.settings(), "network.share");
-			stamp = `${stamp}|${share}`;
+			stamp = `${stamp}|${share}|${this.wanted()}`;
 			if (stamp === this.stamp) return;
 			this.stamp = stamp;
-			const network = share ? loadNetwork(this.networkPath) : undefined;
+			if (this.outdated() && !this.warned) {
+				this.warned = true;
+				this.host.emit("log", "notice", `You now go by ${this.wanted()}. This repository's sessions are still under ${this.host.owner}: /lattice restart here brings them along.`);
+			}
+			// Two names for one person would be two people to everyone else: stay out until restarted.
+			const network = share && !this.outdated() ? loadNetwork(this.networkPath) : undefined;
 			if (network?.secret === this.network?.secret && network?.seeds.join() === this.network?.seeds.join()) return;
 			await this.collab?.stop().catch(() => {});
 			this.collab = undefined;
@@ -192,6 +240,7 @@ class Sharing implements SharingPort {
 			})),
 			requests: collab.requests().map((request) => ({ nodeId: request.nodeId, nodeName: request.nodeName, from: request.from, to: request.to, role: request.role })),
 			pendingTransfers: collab.pendingTransfers(),
+			tried: collab.tried(),
 		};
 	}
 
@@ -205,27 +254,38 @@ class Sharing implements SharingPort {
 		return this.collab.follow(nodeId);
 	}
 
-	private join(code: string): Network {
-		const network = parseJoinCode(code);
-		const current = loadNetwork(this.networkPath);
-		if (current && current.secret !== network.secret) throw new Error(`You are in ${current.name}. Leave it before joining another network.`);
-		// Joining again with a newer code adds the machines it names.
-		saveNetwork(this.networkPath, { ...network, seeds: [...new Set([...(current?.seeds ?? []), ...network.seeds])] });
-		return network;
+	named(): boolean {
+		return givenName(this.options) !== undefined || chosenName(this.home) !== undefined;
+	}
+
+	/** The name this host should be running under. When it is not, it must restart before it talks to anyone. */
+	private wanted(): string {
+		return givenName(this.options) ?? chosenName(this.home) ?? this.host.owner;
+	}
+
+	/** Whether this person now goes by another name than this host was started with. */
+	outdated(): boolean {
+		return this.wanted() !== this.host.owner;
 	}
 
 	async run(action: string, args: string[]): Promise<string> {
 		const [first = "", second = ""] = args;
-		if (action === "create") {
-			const current = loadNetwork(this.networkPath);
-			if (current) throw new Error(`You are already in ${current.name}. Leave it before creating another network.`);
-			const network = createNetwork(first);
-			saveNetwork(this.networkPath, network);
+		if (action === "name") {
+			if (first === "") return this.host.owner;
+			const given = givenName(this.options);
+			if (given !== undefined && given !== first) throw new Error(`This host was started as ${given}, which a chosen name does not replace.`);
+			if (first !== this.wanted() && loadNetwork(this.networkPath)) throw new Error("Your teammates know you by the name you have. Leave the network before changing it.");
+			chooseName(this.home, first);
 			await this.sync();
-			return `Created ${network.name}. Give your teammates this code, over a channel you trust; whoever has it is in:\n${this.collab?.joinCode() ?? formatJoinCode(network)}`;
+			return this.outdated() ? `You go by ${first} from the next start of each repository's host.` : `You go by ${first}.`;
+		}
+		if (action === "create") {
+			const network = startNetwork(this.home, first);
+			await this.sync();
+			return `Created ${network.name}; your teammates see you as ${this.host.owner}. A teammate joins by typing this in pi. Whoever has the code is in, so send it over a channel you trust:\n/lattice join ${this.collab?.joinCode() ?? formatJoinCode(network)}`;
 		}
 		if (action === "join") {
-			const network = this.join(first);
+			const network = joinNetwork(this.home, first);
 			await this.sync();
 			return `You are in ${network.name}. Your teammates' sessions appear here as their machines are found.`;
 		}
@@ -315,9 +375,10 @@ export async function runDaemon(options: DaemonOptions): Promise<Daemon> {
 	const piCommand = envList("LATTICE_PI_COMMAND");
 	const piArgs = options.piArgs ?? envList("LATTICE_PI_ARGS");
 	const extensionPaths = options.extensionPaths ?? envList("LATTICE_EXTENSION_PATHS") ?? sessionExtensionPaths();
+	const owner = givenName(options) ?? chosenName(options.home ?? latticeHome(process.env, homedir()));
 	const host = await LatticeHost.start({
 		stateDir,
-		...(options.owner !== undefined ? { owner: options.owner } : {}),
+		...(owner !== undefined ? { owner } : {}),
 		...(piCommand ? { piCommand } : {}),
 		...(piArgs ? { piArgs } : {}),
 		extensionPaths,
@@ -331,6 +392,8 @@ export async function runDaemon(options: DaemonOptions): Promise<Daemon> {
 		}
 	};
 	host.on("log", log);
+	// What was signed under the old name cannot be continued under the new one; the records are made again.
+	if (host.renamedFrom !== undefined) rmSync(join(stateDir, "collab"), { recursive: true, force: true });
 	const sharing = new Sharing(host, options);
 	host.setSharing(sharing);
 	try {
@@ -363,6 +426,8 @@ export async function runDaemon(options: DaemonOptions): Promise<Daemon> {
 		// A network created, joined or left from another repository's terminal.
 		void sharing.sync().catch(() => {});
 		const { terminals, working } = host.activity();
+		// Renamed with nobody here: stop, and the next terminal starts this host under the new name.
+		if (terminals === 0 && working === 0 && sharing.outdated()) return void stop();
 		if (terminals > 0 || working > 0 || sharing.busy()) idleSince = Date.now();
 		else if (idleExitMs > 0 && Date.now() - idleSince >= idleExitMs) {
 			log("info", "Nobody is connected and nothing is working; stopping.");

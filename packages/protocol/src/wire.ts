@@ -88,6 +88,8 @@ export interface SharingHandoff {
 /** Everything the pane shows, fetched in one request. */
 export interface UiState {
 	owner: string;
+	/** Whether the person chose that name. Until they do it is their OS user name, and they are asked before joining a network. */
+	named?: boolean;
 	nodes: NodeMeta[];
 	/** Per node: dialogs blocking it and messages awaiting approval. */
 	attention: Record<string, { dialogs: number; pending: number }>;
@@ -106,6 +108,8 @@ export interface UiState {
 		pendingTransfers: Array<{ nodeId: string; to: string }>;
 		/** What teammates have running in other repositories. */
 		elsewhere: SharingTree[];
+		/** Addresses that were tried and did not answer, and why: what to show when nobody is found. */
+		tried?: Array<{ address: string; why: string }>;
 	};
 }
 
