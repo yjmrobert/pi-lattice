@@ -64,6 +64,12 @@ A setting takes its value from the first of these that has one:
 | `pane.bell` | Ring the terminal when one more thing starts waiting on you. Applies at once. | on \| off | on | `LATTICE_BELL` |
 | `pane.width` | How many columns the pane takes. Applies the next time Pi starts. | a whole number from 24 to 60 | 34 |  |
 
+## Canopy
+
+| Setting | What it does | Takes | Default | Environment |
+|---|---|---|---|---|
+| `canopy.levels` | The levels of work, largest first. An item's level is where its kind is in this list; a kind that is not in it is drawn beside the item it belongs to. Applies at once. | names separated by spaces, or none | epic feature story task |  |
+
 ## Roles and templates
 
 What a session is told is made of files, and each can be replaced. `/lattice prompt` shows everything the session you are in has been told, with the file each part comes from.

@@ -72,7 +72,7 @@ The full account is in [ADR 0014](decisions/0014-package-seams.md). In short:
 
 A **node** is a place in the tree. A **Pi session** is the conversation currently occupying it. They have separate ids, and addresses use the node id ([0004](decisions/0004-node-identity.md)).
 
-Node record: `id`, `parentId`, `rootId`, `kind`, `brief`, `fragments`, `owner`, `version`, `status`, `sessionId`, `sessionFile`, `cwd`, `workspace`, `branch`, and `waitsOn` until it starts.
+Node record: `id`, `parentId`, `rootId`, `kind`, `brief`, `fragments`, `owner`, `version`, `status`, `sessionId`, `sessionFile`, `cwd`, `workspace`, `branch`, `waitsOn` until it starts, and `planned` while it is work nobody has been put on ([0023](decisions/0023-planned-work.md)).
 
 Status is one of `dormant`, `starting`, `idle`, `running`, `blocked`, `exited`, `failed`. `blocked` means a dialog is waiting for a human ([0005](decisions/0005-host-control-plane.md)).
 

@@ -77,6 +77,8 @@ export const SETTINGS: readonly Setting[] = [
 	{ key: "pane.autoJoin", section: "Pane", label: "Join the tree", help: "A new session joins its repository's tree with its first message.", kind: "toggle", default: true, env: "LATTICE_AUTO_JOIN", applies: AT_ONCE },
 	{ key: "pane.bell", section: "Pane", label: "Bell", help: "Ring the terminal when one more thing starts waiting on you.", kind: "toggle", default: true, env: "LATTICE_BELL", applies: AT_ONCE },
 	{ key: "pane.width", section: "Pane", label: "Width", help: "How many columns the pane takes.", kind: "number", default: 34, min: 24, max: 60, applies: "Applies the next time Pi starts." },
+
+	{ key: "canopy.levels", section: "Canopy", label: "Levels", help: "The levels of work, largest first. An item's level is where its kind is in this list; a kind that is not in it is drawn beside the item it belongs to.", kind: "list", default: ["epic", "feature", "story", "task"], applies: AT_ONCE },
 ];
 
 const BY_KEY = new Map(SETTINGS.map((setting) => [setting.key, setting]));
