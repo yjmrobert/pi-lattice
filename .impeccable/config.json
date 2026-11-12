@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "docs/design/overview/index.html"
+        ],
+        "createdAt": "2026-11-12T01:47:14.710Z",
+        "reason": "Claude: the page has no bordered or filled text container; table cells are flush left on purpose to align with the headings"
+      }
+    ]
+  }
+}

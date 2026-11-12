@@ -23,7 +23,7 @@ pre { margin: 0; font: inherit; white-space: pre-wrap; }
 #top nav a:hover { color: var(--t-bright); }
 #top nav a.on { background: var(--t-sel); color: var(--t-bright); }
 #keys { display: flex; flex-wrap: wrap; gap: 4px 20px; padding: 7px 16px; border-top: 1px solid var(--t-edge); color: var(--t-dim); background: var(--t-panel); }
-#keys kbd, .tk { font: inherit; color: var(--t-bright); background: var(--t-key); padding: 0 5px; border-radius: 2px; }
+#keys kbd, .tk { font: inherit; color: var(--t-bright); background: var(--t-key); padding: 1px 8px; border-radius: 2px; }
 
 .stage { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 372px; min-height: 0; }
 .view { min-width: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
