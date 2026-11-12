@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lattice Overview 6 Canopy</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="shared.css">
+<style>
+/* Layout: the dendrite turned upright. The network is the root at the bottom, work rises through brief, build and verify, and lands at the top.
+   The whole drawing is a 128 x 44 grid of terminal cells painted on a canvas. Text sits in cells; branches are either braille dots (any terminal) or pixels under the text (terminals with a graphics protocol). */
+#c { display: block; width: 100%; max-width: 1280px; height: auto; cursor: pointer; }
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.modes button { border: 1px solid var(--t-edge); border-radius: 4px; padding: 7px 10px; background: var(--t-panel); }
+.modes button[aria-pressed="true"] { border-color: var(--t-cyan); color: var(--t-bright); }
+.modes small { display: block; font-size: inherit; color: var(--t-dim); }
+</style>
+</head>
+<body>
+<div class="term">
+  <header id="top"></header>
+  <div class="stage">
+    <section class="view"><canvas id="c" role="img" aria-label="Workstreams rising from the network through brief, build and verify to landed"></canvas></section>
+    <aside class="side">
+      <div><h2>Renderer <span class="td"><span class="tk">g</span> switch</span></h2>
+        <div class="modes">
+          <button id="m-cells" aria-pressed="true">braille cells<small>any terminal</small></button>
+          <button id="m-pixels" aria-pressed="false">pixels<small>kitty graphics</small></button>
+        </div>
+        <pre class="td" id="stat" style="margin-top:8px"></pre></div>
+      <div><h2>Inspecting <span class="td">tab next</span></h2><div class="box sel" id="insp"></div></div>
+      <div><h2>Canopy health <span class="td">finished, 14 days</span></h2><div class="box"><pre id="hist"></pre></div></div>
+    </aside>
+  </div>
+  <footer id="keys"></footer>
+</div>
+<script src="shared.js"></script>
+<script>
+chrome(6, [['←→', 'workstream'], ['↑', 'into its sessions'], ['enter', 'open'], ['g', 'braille / pixels'], ['o', 'offer'], ['t', 'ask for it']]);
+const COLS = 128, ROWS = 44, CW = 8, CH = 17, cv = $('#c'), ctx = cv.getContext('2d'), dpr = Math.min(2, devicePixelRatio || 1);
+cv.width = COLS * CW * dpr; cv.height = ROWS * CH * dpr;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const K = { bg: css('--t-bg'), fg: css('--t-fg'), dim: css('--t-dim'), bright: css('--t-bright'), sel: css('--t-sel'), mag: css('--t-mag'), yellow: css('--t-yellow'), green: css('--t-green'), red: css('--t-red'), twig: '#465066' };
+const LANE = { 'checkout-v2': 12, 'invoice-export': 34, 'pricing-migration': 40, 'search-reindex': 44, 'docs-refresh': 64, 'sso-rollout': 70, 'rate-limits': 92, 'offline-cart': 100 };
+const ROW = { brief: 33, build: 25, verify: 15, landed: 6 }, CORE = [64, 41];
+const order = Object.keys(LANE), at = id => [LANE[id], ROW[S(id).phase]];
+const px = d => d * 4 + 2, py = d => d * 4.25 + 2.1;   // braille dot (2 x 4 per cell) to pixel
+
+// Geometry, in dots. A trunk flares sideways out of the root, then climbs its own lane with a slight sway.
+function trunk(x, row) {
+  const X = x * 2 + 1, cx = CORE[0] * 2 + 1, cy = CORE[1] * 4 - 2, fy = 146, ny = row * 4 + 3, p = [];
+  for (let i = 0; i <= 160; i++) { const t = i / 160, u = 1 - t; p.push([u * u * u * cx + 3 * u * u * t * cx + 3 * u * t * t * X + t * t * t * X, u * u * u * cy + 3 * u * u * t * (cy - 12) + 3 * u * t * t * (fy + 12) + t * t * t * fy]); }
+  const n = (fy - ny) * 2; for (let i = 1; i <= n; i++) { const y = fy - i / 2; p.push([X + Math.sin(y * .11 + x) * 1.3 * Math.sin(Math.PI * i / n), y]); }
+  return p;
+}
+function arc(a, b) {
+  const A = [a[0] * 2 + 1, a[1] * 4 + 2], B = [b[0] * 2 + 1, b[1] * 4 + 2], dx = B[0] - A[0], dy = B[1] - A[1], d = Math.hypot(dx, dy), k = (d * .12 + 8) / d;
+  let nx = -dy * k, ny = dx * k; if (ny < 0) { nx = -nx; ny = -ny; }
+  const C = [(A[0] + B[0]) / 2 + nx * 2, (A[1] + B[1]) / 2 + ny * 2], p = [], n = Math.ceil(d * 2);
+  for (let i = 0; i <= n; i++) { const t = i / n, u = 1 - t; p.push([u * u * A[0] + 2 * u * t * C[0] + t * t * B[0], u * u * A[1] + 2 * u * t * C[1] + t * t * B[1]]); }
+  return p;
+}
+const edges = [], text = [], T = (c, r, s, col, o = {}) => text.push({ c, r, s, col, ...o });
+order.forEach((id, i) => {
+  const s = S(id), [x, row] = at(id), o = P(s.owner), n = s.kids.length, X = x * 2 + 1;
+  edges.push({ kind: 'trunk', p: trunk(x, row), col: o.c, live: count(s, 'run') > 0 && o.on, seed: i * 53 });
+  const stem = []; for (let y = row * 4 - 1; y >= (row - 1 - n) * 4 + 2; y -= .5) stem.push([X, y]);
+  edges.push({ kind: 'twig', p: stem });
+  s.kids.forEach((k, j) => { const kr = row - 1 - n + j; edges.push({ kind: 'twig', p: [[X + 1, kr * 4 + 2], [X + 2, kr * 4 + 2]] });
+    T(x + 2, kr, G[k[1]][0], GC[k[1]], { spin: k[1] === 'run' }); T(x + 4, kr, k[0], k[1] === 'done' || k[1] === 'idle' ? K.dim : K.fg); });
+  (s.waits || []).forEach(w => edges.push({ kind: 'dep', p: arc(at(id), at(w.on)), met: w.met }));
+  T(x, row, '◉', o.c, { id }); T(x + 2, row, id, K.bright, { b: 1, id });
+  let c = x + 3 + id.length; if (s.risk === 'high') { T(c, row, '▲', K.red); c += 2; }
+  const q = L.needs.filter(n => n.stream === id).length; if (q) T(c, row, '●' + q, K.yellow);
+  T(x + 2, row + 1, `${s.repo} · @${s.owner}`, K.dim);
+});
+L.phases.forEach(p => { const s = p.toUpperCase() + ' ' + L.streams.filter(x => x.phase === p).length; T(COLS - 1 - s.length, ROW[p], s, K.dim); });
+T(CORE[0] - 7, 43, 'harbor', K.mag, { b: 1 }); T(CORE[0], 43, '· 4 leads', K.dim);
+T(1, 43, '⠒⠒ waits on  ▲ high risk  ● needs someone', K.dim);
+const occ = new Uint8Array(COLS * ROWS); text.forEach(t => { for (let i = 0; i < [...t.s].length; i++) occ[t.r * COLS + t.c + i] = 1; });
+
+let mode = 'cells', sel = 'checkout-v2', last = -1;
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches, SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+function draw(ms) {
+  const t = mode === 'cells' ? Math.floor(ms / 83) * .083 : ms / 1000;   // a terminal repaints about 12 times a second
+  if (t === last) return; last = t;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalAlpha = 1; ctx.fillStyle = K.bg; ctx.fillRect(0, 0, COLS * CW, ROWS * CH);
+  const cx = CORE[0] * 2 + 1, cy = CORE[1] * 4 + 1, pulse = e => (t * 45 + e.seed) % (e.p.length + 70);
+
+  if (mode === 'cells') {
+    const cells = new Map();
+    const plot = (x, y, col, hot) => { const dx = Math.round(x), dy = Math.round(y); if (dx < 0 || dy < 0 || dx >= COLS * 2 || dy >= ROWS * 4) return; const k = (dy >> 2) * COLS + (dx >> 1); if (occ[k]) return;
+      let c = cells.get(k); if (!c) cells.set(k, c = { d: new Set(), col, hot }); c.d.add((dy & 3) * 2 + (dx & 1)); if (hot >= c.hot) { c.col = col; c.hot = hot; } };
+    edges.forEach(e => {
+      if (e.kind === 'twig') e.p.forEach(q => plot(q[0], q[1], K.twig, 1));
+      else if (e.kind === 'dep') e.p.forEach((q, i) => { if (e.met || (((i - Math.floor(t * 12)) % 8) + 8) % 8 < 4) plot(q[0], q[1], e.met ? K.green : K.yellow, e.met ? 0 : 1); });
+      else { const pi = pulse(e); e.p.forEach((q, i) => { const hot = e.live && Math.abs(i - pi) < 12; plot(q[0], q[1], hot ? K.bright : e.col, hot ? 2 : e.live ? 1 : 0); }); }
+    });
+    const r = 5.4 + (still ? 0 : Math.sin(t * 2) * .9);
+    for (let y = -9; y <= 9; y++) for (let x = -9; x <= 9; x++) { const d = Math.hypot(x, y); if (d <= r) plot(cx + x, cy + y, K.mag, 2); else if (d <= r + 3 && (x + y) % 2 === 0) plot(cx + x, cy + y, K.mag, 0); }
+    cells.forEach((c, k) => { const X = (k % COLS) * CW, Y = Math.floor(k / COLS) * CH; ctx.fillStyle = c.col; ctx.globalAlpha = [.5, .9, 1][c.hot];
+      c.d.forEach(b => { ctx.beginPath(); ctx.arc(X + 2 + (b & 1) * 4, Y + 2.1 + (b >> 1) * 4.25, 1.15, 0, 6.3); ctx.fill(); }); });
+  } else {
+    ctx.lineCap = ctx.lineJoin = 'round';
+    edges.forEach(e => {
+      ctx.beginPath(); e.p.forEach((q, i) => i ? ctx.lineTo(px(q[0]), py(q[1])) : ctx.moveTo(px(q[0]), py(q[1])));
+      ctx.setLineDash(e.kind === 'dep' && !e.met ? [6, 5] : []); ctx.lineDashOffset = -t * 14;
+      ctx.strokeStyle = e.kind === 'twig' ? K.twig : e.kind === 'dep' ? (e.met ? K.green : K.yellow) : e.col;
+      ctx.globalAlpha = e.kind === 'trunk' ? (e.live ? .85 : .45) : e.met ? .4 : .9; ctx.lineWidth = e.kind === 'trunk' ? 1.6 : 1.2; ctx.stroke();
+      if (e.kind === 'trunk' && e.live) { const q = e.p[Math.min(e.p.length - 1, Math.floor(pulse(e)))]; ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.shadowColor = e.col; ctx.shadowBlur = 10; ctx.fillStyle = K.bright; ctx.beginPath(); ctx.arc(px(q[0]), py(q[1]), 2.4, 0, 6.3); ctx.fill(); ctx.shadowBlur = 0; }
+    });
+    ctx.setLineDash([]); ctx.globalAlpha = 1; const r = 20 + (still ? 0 : Math.sin(t * 2) * 3), gr = ctx.createRadialGradient(px(cx), py(cy), 2, px(cx), py(cy), r * 2);
+    gr.addColorStop(0, K.mag); gr.addColorStop(.45, K.mag); gr.addColorStop(.5, K.mag + '55'); gr.addColorStop(1, K.mag + '00'); ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(px(cx), py(cy), r * 2, 0, 6.3); ctx.fill();
+  }
+
+  ctx.globalAlpha = 1; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  text.forEach(e => {
+    const ch = [...(e.spin && !still ? SPIN[Math.floor(t * 11) % 10] : e.s)];
+    ctx.fillStyle = K.bg; ctx.fillRect(e.c * CW - 1, e.r * CH + 1, ch.length * CW + 2, CH - 2);
+    if (e.id === sel) { ctx.fillStyle = K.sel; ctx.fillRect(e.c * CW - 2, e.r * CH, ch.length * CW + 4, CH); }
+    ctx.font = `${e.b ? 700 : 400} 13.3px "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace`; ctx.fillStyle = e.col;
+    ch.forEach((g, i) => ctx.fillText(g, (e.c + i) * CW + CW / 2, e.r * CH + CH / 2 + .5));
+  });
+}
+function loop(ms) { draw(ms); if (!still) requestAnimationFrame(loop); }
+(document.fonts ? document.fonts.load('13.3px "JetBrains Mono"') : Promise.resolve()).then(() => loop(0), () => loop(0));
+
+function select(id) { sel = id; last = -1; $('#insp').innerHTML = inspect(id); if (still) draw(0); }
+function setMode(m) { mode = m; last = -1; $('#m-cells').setAttribute('aria-pressed', m === 'cells'); $('#m-pixels').setAttribute('aria-pressed', m === 'pixels');
+  $('#stat').textContent = m === 'cells' ? `${COLS} × ${ROWS} cells · 12 frames a second\nbranches are braille, 2 × 4 dots a cell` : `${COLS * CW} × ${ROWS * CH} px image under the text\n60 frames a second · text stays in cells`;
+  if (still) draw(0); }
+$('#m-cells').onclick = () => setMode('cells'); $('#m-pixels').onclick = () => setMode('pixels'); setMode('cells'); select(sel);
+cv.onclick = e => { const b = cv.getBoundingClientRect(), c = (e.clientX - b.left) / b.width * COLS, r = (e.clientY - b.top) / b.height * ROWS;
+  const hit = order.find(id => { const [x, row] = at(id), n = S(id).kids.length; return c >= x - 1 && c <= x + 23 && r >= row - 1 - n && r <= row + 2; }); if (hit) select(hit); };
+document.addEventListener('keydown', e => {
+  if (e.key === 'g') setMode(mode === 'cells' ? 'pixels' : 'cells');
+  if (e.key === 'Tab' || e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); select(order[(order.indexOf(sel) + (e.key === 'ArrowLeft' ? order.length - 1 : 1)) % order.length]); }
+});
+
+const max = Math.max(...L.done14), B = ' ▁▂▃▄▅▆▇█';
+$('#hist').innerHTML = L.done14.map((v, i) => { const e = v ? Math.max(1, Math.round(v / max * 8)) : 0; return `<span class="${i === 13 ? 'tm' : 'tc'}">${B[e]}${B[e]}</span>`; }).join('') +
+  `\n<span class="td">finished today</span> <span class="tm">9</span>  <span class="td">running</span> <span class="tg">${total('run')}</span>  <span class="td">stuck</span> <span class="ty">${total('ask')}</span>`;
+</script>
+</body>
+</html>

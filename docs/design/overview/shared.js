@@ -80,13 +80,13 @@ function inspect(id) {
   return `<pre>${h}</pre>`;
 }
 
-const VIEWS = [['dendrite', 'dendrite'], ['orbit', 'orbits'], ['timeline', 'timeline'], ['lattice', 'lattice'], ['ledger', 'ledger']];
+const VIEWS = [['dendrite', 'dendrite'], ['orbit', 'orbits'], ['timeline', 'timeline'], ['lattice', 'lattice'], ['ledger', 'ledger'], ['canopy', 'canopy']];
 function chrome(n, keys) {
   const people = L.leads.map(l => `<span style="color:${l.on ? l.c : 'var(--t-dim)'}">${l.on ? '' : '○'}@${l.id}${l.on ? '' : ' ' + l.seen}</span>`).join(' ');
   $('#top').innerHTML = `<span class="net">◆ ${L.network}</span><span>${people}</span>` +
     `<span class="td">${L.repos.length} repositories · ${L.streams.length} workstreams · <span class="tg">${g('run')} ${total('run')}</span> running · <span class="ty">● ${L.needs.length}</span> need someone</span>` +
     `<nav><a href="index.html">all</a>${VIEWS.map((v, i) => `<a href="${v[0]}.html"${i + 1 === n ? ' class="on"' : ''}><b>${i + 1}</b>${v[1]}</a>`).join('')}</nav>`;
-  $('#keys').innerHTML = keys.map(k => `<span><kbd>${k[0]}</kbd> ${k[1]}</span>`).join('') + `<span><kbd>1</kbd>–<kbd>5</kbd> change view</span><span><kbd>alt+l</kbd> back to the sessions</span>`;
+  $('#keys').innerHTML = keys.map(k => `<span><kbd>${k[0]}</kbd> ${k[1]}</span>`).join('') + `<span><kbd>1</kbd>–<kbd>6</kbd> change view</span><span><kbd>alt+l</kbd> back to the sessions</span>`;
   document.addEventListener('keydown', e => { const v = VIEWS[+e.key - 1]; if (v && !e.metaKey && !e.ctrlKey) location.href = v[0] + '.html'; });
   const F = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'; let f = 0;
   if (!matchMedia('(prefers-reduced-motion: reduce)').matches) setInterval(() => { f = (f + 1) % F.length; document.querySelectorAll('.spin').forEach(e => e.textContent = F[f]); }, 90);
