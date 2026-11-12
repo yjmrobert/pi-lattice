@@ -46,8 +46,10 @@ export interface Scheme {
 	rules: {
 		/** The state an issue that has not been started takes when a session is put on it. */
 		onStart?: string;
-		/** The state an issue takes when a session on it reports its result and nothing under it is unfinished. */
+		/** The state an issue takes when a session on it reports its result. */
 		onReport?: string;
+		/** The state sessions take their next issue from. Absent, any state of kind `open`: name one to keep the rest, like a backlog, for people to release. */
+		take?: string;
 	};
 }
 
@@ -61,6 +63,12 @@ export interface Issue {
 	assignee?: string;
 	labels: string[];
 	fields: Record<string, string | number>;
+	/** For a person: sessions do not take it. */
+	human?: true;
+	/** The issues that must be finished before this one is ready. */
+	waitsOn?: number[];
+	/** The repository it is to be done in. Absent, the one its parent is in, or any. */
+	repo?: string;
 	author: string;
 	createdAt: number;
 	updatedAt: number;
@@ -88,7 +96,7 @@ export interface IssueEvent {
 	to?: string;
 }
 
-/** What may be given when making an issue, or changed on one. `null` clears a parent, an assignee or a field. */
+/** What may be given when making an issue, or changed on one. `null` clears a parent, an assignee, a repository or a field. */
 export interface IssueChange {
 	title?: string;
 	body?: string;
@@ -98,6 +106,10 @@ export interface IssueChange {
 	assignee?: string | null;
 	labels?: string[];
 	fields?: Record<string, string | number | null>;
+	human?: boolean;
+	/** All the issues it waits on: this replaces the ones it had. */
+	waitsOn?: number[];
+	repo?: string | null;
 }
 
 /** A session someone has running, as the server tells everyone. */
@@ -143,6 +155,8 @@ export type WorkRequest =
 	| { do: "update"; number: number; change: IssueChange; basedOn?: number }
 	| { do: "comment"; number: number; body: string }
 	| { do: "scheme"; scheme: Scheme }
+	/** Take the next issue that is ready for a session, start it, and put the asking session on it. */
+	| { do: "next"; under?: number; type?: string; label?: string }
 	/** Say which issue a session is on; `null` takes it off. `nodeId` names the session when it is not the one asking. */
 	| { do: "on"; number: number | null; nodeId?: string };
 
@@ -152,6 +166,16 @@ export interface WorkResult {
 	comments?: IssueComment[];
 	history?: IssueEvent[];
 	scheme?: Scheme;
+	/** After `next` found nothing: how many issues would have been taken but wait on others. */
+	waiting?: number;
+}
+
+/** What narrows `next`. `repo` is where the asking session works. */
+export interface NextFilter {
+	repo?: string;
+	under?: number;
+	type?: string;
+	label?: string;
 }
 
 export const DEFAULT_SCHEME: Scheme = {
@@ -165,11 +189,14 @@ export const DEFAULT_SCHEME: Scheme = {
 	states: [
 		{ name: "todo", kind: "open" },
 		{ name: "doing", kind: "active" },
+		// A session's result is looked at by a person before the issue counts as done.
+		{ name: "review", kind: "active" },
 		{ name: "done", kind: "done" },
 		{ name: "dropped", kind: "dropped" },
 	],
-	fields: [],
-	rules: { onStart: "doing", onReport: "done" },
+	// Where the work on it can be looked at: a pull request, a branch.
+	fields: [{ name: "url", type: "text" }],
+	rules: { onStart: "doing", onReport: "review" },
 };
 
 const KINDS: readonly string[] = ["open", "active", "done", "dropped"];
@@ -250,7 +277,7 @@ export function normalizeScheme(value: Scheme): Scheme {
 		types: value.types.map((type) => ({ name: type.name, level: type.level, under: [...type.under], top: type.top })),
 		states: value.states.map((state) => ({ name: state.name, kind: state.kind })),
 		fields: (value.fields ?? []).map((field) => ({ name: field.name, type: field.type, ...(field.choices ? { choices: [...field.choices] } : {}), ...(field.on ? { on: [...field.on] } : {}), ...(field.required ? { required: true } : {}) })),
-		rules: { ...(typeof rules.onStart === "string" ? { onStart: rules.onStart } : {}), ...(typeof rules.onReport === "string" ? { onReport: rules.onReport } : {}) },
+		rules: { ...(typeof rules.onStart === "string" ? { onStart: rules.onStart } : {}), ...(typeof rules.onReport === "string" ? { onReport: rules.onReport } : {}), ...(typeof rules.take === "string" ? { take: rules.take } : {}) },
 	};
 }
 
@@ -267,6 +294,27 @@ export const isClosed = (scheme: Scheme, issue: Pick<Issue, "state">): boolean =
 
 /** The state a new issue gets. */
 export const firstState = (scheme: Scheme): string => (scheme.states.find((state) => state.kind === "open") ?? scheme.states[0])?.name ?? "todo";
+
+/** The issues this one waits on that are not finished yet. One that no longer exists does not hold it. */
+export function waitingOn(scheme: Scheme, issue: Pick<Issue, "waitsOn">, issues: ReadonlyMap<number, Pick<Issue, "state">>): number[] {
+	return (issue.waitsOn ?? []).filter((number) => {
+		const other = issues.get(number);
+		return other !== undefined && !isClosed(scheme, other);
+	});
+}
+
+/** The repository an issue is to be done in: its own, or the nearest one above it. */
+export function repoOf(issue: Pick<Issue, "repo" | "parent">, issues: ReadonlyMap<number, Pick<Issue, "repo" | "parent">>): string | undefined {
+	for (let at: Pick<Issue, "repo" | "parent"> | undefined = issue, steps = 0; at && steps < 10_000; at = at.parent === undefined ? undefined : issues.get(at.parent), steps++) if (at.repo) return at.repo;
+	return undefined;
+}
+
+/** Whether a session may take an issue in this state as its next. */
+export function takeable(scheme: Scheme, state: string): boolean {
+	const take = scheme.rules.take;
+	if (take !== undefined && scheme.states.some((entry) => entry.name === take)) return state === take;
+	return scheme.states.some((entry) => entry.name === state && entry.kind === "open");
+}
 
 /** The names of the types on each level, nearest the root first; a level nobody is on is skipped. */
 export function ladder(scheme: Scheme): string[][] {
@@ -328,15 +376,23 @@ export function misfit(scheme: Scheme, issue: Issue, issues: ReadonlyMap<number,
 export function describeScheme(scheme: Scheme): string {
 	const types = scheme.types.map((type) => `${type.name} (${[type.under.length > 0 ? `under ${type.under.join(" or ")}` : "", type.top ? "at the top" : ""].filter(Boolean).join(", or ")})`);
 	const lines = [`Types: ${types.join("; ")}.`, `States: ${scheme.states.map((state) => (state.name === state.kind ? state.name : `${state.name} (${state.kind})`)).join(", ")}.`];
+	const rules = [
+		scheme.rules.take && scheme.states.some((state) => state.name === scheme.rules.take) ? `sessions take their next issue from ${scheme.rules.take}` : "",
+		scheme.rules.onStart ? `a session put on an issue moves it to ${scheme.rules.onStart}` : "",
+		scheme.rules.onReport ? `its result moves it to ${scheme.rules.onReport}` : "",
+	].filter(Boolean);
+	if (rules.length > 0) lines.push(`Rules: ${rules.join("; ")}.`);
 	if (scheme.fields.length > 0) lines.push(`Fields: ${scheme.fields.map((field) => `${field.name} (${field.type === "choice" ? (field.choices ?? []).join("|") : field.type}${field.on ? `, on ${field.on.join(", ")}` : ""}${field.required ? ", required" : ""})`).join("; ")}.`);
 	return lines.join("\n");
 }
 
 /** One issue on one line. */
-export function issueLine(issue: Issue, state?: Pick<WorkState, "sessions">): string {
+export function issueLine(issue: Issue, state?: Partial<Pick<WorkState, "sessions" | "issues" | "scheme">>): string {
+	// With the rest of the work at hand, only what still holds it is named.
+	const waits = state?.issues && state.scheme ? waitingOn(state.scheme, issue, new Map(state.issues.map((entry) => [entry.number, entry]))) : (issue.waitsOn ?? []);
 	const on = (state?.sessions ?? []).filter((session) => session.issue === issue.number).map((session) => `${session.owner}'s "${session.name}" ${session.state}`);
 	const fields = Object.entries(issue.fields).map(([name, value]) => `${name}=${value}`);
-	return [`#${issue.number}`, issue.type, issue.title, `[${issue.state}]`, issue.assignee ? `@${issue.assignee}` : "", issue.labels.map((label) => `+${label}`).join(" "), fields.join(" "), on.length > 0 ? `<- ${on.join(", ")}` : ""].filter(Boolean).join("  ");
+	return [`#${issue.number}`, issue.type, issue.title, `[${issue.state}]`, issue.assignee ? `@${issue.assignee}` : "", issue.labels.map((label) => `+${label}`).join(" "), fields.join(" "), issue.repo ? `in ${issue.repo}` : "", issue.human ? "(for a person)" : "", waits.length > 0 ? `(waits on ${waits.map((number) => `#${number}`).join(", ")})` : "", on.length > 0 ? `<- ${on.join(", ")}` : ""].filter(Boolean).join("  ");
 }
 
 /**

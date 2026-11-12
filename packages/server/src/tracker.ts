@@ -7,7 +7,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { DEFAULT_SCHEME, fieldProblem, firstState, type Issue, type IssueChange, type IssueComment, type IssueEvent, isClosed, misplaced, normalizeScheme, type Scheme, schemeProblems, stateKind, wouldLoop } from "@pi-lattice/protocol";
+import { DEFAULT_SCHEME, fieldProblem, firstState, type Issue, type IssueChange, type IssueComment, type IssueEvent, isClosed, misplaced, type NextFilter, normalizeScheme, repoOf, type Scheme, schemeProblems, stateKind, takeable, waitingOn, wouldLoop } from "@pi-lattice/protocol";
 
 /** A request that cannot be done, with the HTTP status that says what kind of problem it is. */
 export class WorkError extends Error {
@@ -40,11 +40,15 @@ const MIGRATIONS: string[] = [
 	CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, issue INTEGER NOT NULL, author TEXT NOT NULL, body TEXT NOT NULL, at INTEGER NOT NULL);
 	CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, rev INTEGER NOT NULL, issue INTEGER NOT NULL, who TEXT NOT NULL, at INTEGER NOT NULL, what TEXT NOT NULL, was TEXT, now TEXT);
 	CREATE INDEX events_issue ON events (issue);`,
+	`ALTER TABLE issues ADD COLUMN human INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE issues ADD COLUMN waits TEXT NOT NULL DEFAULT '[]';
+	ALTER TABLE issues ADD COLUMN repo TEXT;`,
 ];
 
 const TITLE_MAX = 200;
 const BODY_MAX = 64 * 1024;
 const LABELS_MAX = 20;
+const WAITS_MAX = 50;
 const NAME = /^[a-z0-9][a-z0-9._-]{0,31}$/i;
 const hash = (token: string): string => createHash("sha256").update(token).digest("hex");
 
@@ -59,6 +63,9 @@ const toIssue = (row: Row): Issue => ({
 	...(row.assignee !== null ? { assignee: row.assignee as string } : {}),
 	labels: JSON.parse(row.labels as string) as string[],
 	fields: JSON.parse(row.fields as string) as Record<string, string | number>,
+	...(row.human ? { human: true as const } : {}),
+	...((row.waits as string) !== "[]" ? { waitsOn: JSON.parse(row.waits as string) as number[] } : {}),
+	...(row.repo !== null ? { repo: row.repo as string } : {}),
 	author: row.author as string,
 	createdAt: row.created_at as number,
 	updatedAt: row.updated_at as number,
@@ -234,6 +241,32 @@ export class Tracker {
 		return name;
 	}
 
+	/** The issues one waits on, checked: they exist, and none of them waits, however far along, on this one. */
+	private waits(number: number | undefined, value: unknown): number[] {
+		if (!Array.isArray(value) || !value.every((entry) => Number.isInteger(entry))) throw new WorkError(400, "What an issue waits on is a list of issue numbers.");
+		const waits = [...new Set(value as number[])].sort((a, b) => a - b);
+		if (waits.length > WAITS_MAX) throw new WorkError(400, `An issue waits on at most ${WAITS_MAX} others.`);
+		const all = new Map((this.db.prepare("SELECT number, waits FROM issues").all() as Array<{ number: number; waits: string }>).map((row) => [row.number, JSON.parse(row.waits) as number[]]));
+		for (const other of waits) {
+			if (other === number) throw new WorkError(400, "An issue cannot wait on itself.");
+			if (!all.has(other)) throw new WorkError(400, `There is no issue #${other} to wait on.`);
+			const seen = new Set<number>();
+			for (const stack = [other]; number !== undefined && stack.length > 0; ) {
+				const at = stack.pop() as number;
+				if (at === number) throw new WorkError(400, `#${other} waits on #${number}, so #${number} cannot wait on it: neither would ever be ready.`);
+				if (seen.has(at)) continue;
+				seen.add(at);
+				stack.push(...(all.get(at) ?? []));
+			}
+		}
+		return waits;
+	}
+
+	private repo(value: unknown): string {
+		if (typeof value !== "string" || value.trim() === "" || value.length > 200) throw new WorkError(400, "A repository is its name, like api.");
+		return value.trim();
+	}
+
 	private parentOf(number: number | undefined, value: unknown): Issue {
 		const parent = typeof value === "number" && Number.isInteger(value) ? this.issue(value) : undefined;
 		if (!parent) throw new WorkError(400, `There is no issue #${String(value)} to put it under.`);
@@ -261,12 +294,14 @@ export class Tracker {
 		const fields = Object.fromEntries(Object.entries(change.fields ?? {}).filter(([, value]) => value !== null)) as Record<string, string | number>;
 		const problem = fieldProblem(scheme, type, fields, this.members());
 		if (problem) throw new WorkError(400, problem);
+		const waits = change.waitsOn === undefined ? [] : this.waits(undefined, change.waitsOn);
+		const repo = change.repo === undefined || change.repo === null ? undefined : this.repo(change.repo);
 		return this.change((rev) => {
 			const at = this.now();
 			const number = Number((this.db.prepare("SELECT COALESCE(MAX(number), 0) + 1 AS next FROM issues").get() as { next: number }).next);
 			this.db
-				.prepare("INSERT INTO issues (number, title, body, type, state, parent, assignee, labels, fields, author, created_at, updated_at, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-				.run(number, title, body, type, state, parent?.number ?? null, assignee ?? null, JSON.stringify(labels), JSON.stringify(fields), who, at, at, rev);
+				.prepare("INSERT INTO issues (number, title, body, type, state, parent, assignee, labels, fields, human, waits, repo, author, created_at, updated_at, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+				.run(number, title, body, type, state, parent?.number ?? null, assignee ?? null, JSON.stringify(labels), JSON.stringify(fields), change.human === true ? 1 : 0, JSON.stringify(waits), repo ?? null, who, at, at, rev);
 			this.record(rev, number, who, "created");
 			return this.must(number);
 		});
@@ -308,6 +343,15 @@ export class Tracker {
 				if (open.length > 0) throw new WorkError(400, `#${number} has ${open.length === 1 ? "an unfinished issue" : `${open.length} unfinished issues`} under it: ${open.map((child) => `#${child.number}`).join(", ")}. Finish or drop ${open.length === 1 ? "it" : "them"} first.`);
 			}
 		}
+		if (change.human === true) after.human = true;
+		else if (change.human === false) delete after.human;
+		if (change.waitsOn !== undefined) {
+			const waits = this.waits(number, change.waitsOn);
+			if (waits.length > 0) after.waitsOn = waits;
+			else delete after.waitsOn;
+		}
+		if (change.repo === null) delete after.repo;
+		else if (change.repo !== undefined) after.repo = this.repo(change.repo);
 		if (change.fields !== undefined) {
 			if (typeof change.fields !== "object" || change.fields === null) throw new WorkError(400, "Fields are an object of names and values.");
 			for (const [name, value] of Object.entries(change.fields)) {
@@ -331,12 +375,15 @@ export class Tracker {
 		note("parent", before.parent, after.parent);
 		note("assignee", before.assignee, after.assignee);
 		note("labels", before.labels.join(", ") || undefined, after.labels.join(", ") || undefined);
+		note("human", before.human ? "yes" : undefined, after.human ? "yes" : undefined);
+		note("waits on", before.waitsOn?.map((other) => `#${other}`).join(", "), after.waitsOn?.map((other) => `#${other}`).join(", "));
+		note("repo", before.repo, after.repo);
 		for (const name of new Set([...Object.keys(before.fields), ...Object.keys(after.fields)])) note(`field:${name}`, before.fields[name], after.fields[name]);
 		if (changes.length === 0) return before;
 		return this.change((rev) => {
 			this.db
-				.prepare("UPDATE issues SET title = ?, body = ?, type = ?, state = ?, parent = ?, assignee = ?, labels = ?, fields = ?, updated_at = ?, rev = ? WHERE number = ?")
-				.run(after.title, after.body, after.type, after.state, after.parent ?? null, after.assignee ?? null, JSON.stringify(after.labels), JSON.stringify(after.fields), this.now(), rev, number);
+				.prepare("UPDATE issues SET title = ?, body = ?, type = ?, state = ?, parent = ?, assignee = ?, labels = ?, fields = ?, human = ?, waits = ?, repo = ?, updated_at = ?, rev = ? WHERE number = ?")
+				.run(after.title, after.body, after.type, after.state, after.parent ?? null, after.assignee ?? null, JSON.stringify(after.labels), JSON.stringify(after.fields), after.human ? 1 : 0, JSON.stringify(after.waitsOn ?? []), after.repo ?? null, this.now(), rev, number);
 			for (const [what, was, now] of changes) this.record(rev, number, who, what, was, now);
 			return this.must(number);
 		});
@@ -355,8 +402,39 @@ export class Tracker {
 	}
 
 	/**
+	 * Give someone's session its next issue: the lowest-numbered one that is in a state sessions
+	 * take from, is not for a person, is nobody else's, has nothing unfinished under it and waits
+	 * on nothing unfinished. It is started and assigned in the same step, so two sessions asking
+	 * at once never get the same one. `waiting` counts what was passed over only for waiting.
+	 */
+	next(who: string, filter: NextFilter = {}): { issue?: Issue; waiting: number } {
+		const scheme = this.scheme;
+		const all = (this.db.prepare("SELECT * FROM issues ORDER BY number").all() as Row[]).map(toIssue);
+		const by = new Map(all.map((issue) => [issue.number, issue]));
+		if (filter.under !== undefined && !by.has(filter.under)) throw new WorkError(404, `There is no issue #${filter.under}.`);
+		const unfinishedBelow = new Set(all.filter((issue) => issue.parent !== undefined && !isClosed(scheme, issue)).map((issue) => issue.parent as number));
+		const below = (issue: Issue): boolean => {
+			for (let at = issue.parent, steps = 0; at !== undefined && steps < 10_000; at = by.get(at)?.parent, steps++) if (at === filter.under) return true;
+			return false;
+		};
+		const mine = (issue: Issue): boolean => {
+			const repo = repoOf(issue, by);
+			return repo === undefined || filter.repo === undefined || repo.toLowerCase() === filter.repo.toLowerCase();
+		};
+		const open = all.filter(
+			(issue) =>
+				takeable(scheme, issue.state) && !issue.human && (issue.assignee === undefined || issue.assignee === who) && !unfinishedBelow.has(issue.number) &&
+				(filter.under === undefined || below(issue)) && (filter.type === undefined || issue.type === filter.type) && (filter.label === undefined || issue.labels.includes(filter.label)) && mine(issue),
+		);
+		const ready = open.find((issue) => waitingOn(scheme, issue, by).length === 0);
+		if (!ready) return { waiting: open.length };
+		const start = scheme.rules.onStart;
+		return { issue: this.update(who, ready.number, { assignee: who, ...(start && scheme.states.some((state) => state.name === start) ? { state: start } : {}) }), waiting: 0 };
+	}
+
+	/**
 	 * What a session does to the issue it is on, by the scheme's rules. Starting moves an issue
-	 * nobody has started; a result closes it unless something under it is unfinished. Anything the
+	 * nobody has started; a result moves it on, unless it is finished already. Anything the
 	 * rules do not cover, or that would be refused, leaves the issue as it is.
 	 */
 	session(who: string, number: number, event: "start" | "report"): Issue {

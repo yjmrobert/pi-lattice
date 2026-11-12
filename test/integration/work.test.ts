@@ -93,7 +93,7 @@ describe("the team's work", () => {
 		expect((await sam.read(2)).comments.map((comment) => [comment.author, comment.body])).toEqual([["tester", "Stripe's field does most of this."]]);
 	}, 60_000);
 
-	it("shows the team which session is on which issue, starts the issue when a session is put on it, and finishes it when the result lands", async () => {
+	it("shows the team which session is on which issue, starts the issue when a session is put on it, and puts it up for review when the result lands", async () => {
 		const h = await joined();
 		const sam = await teammate("sam");
 		await sam.create({ title: "Checkout", type: "epic" });
@@ -108,13 +108,13 @@ describe("the team's work", () => {
 		await eventually(() => sam.state().sessions.some((session) => session.id === root.id && session.issue === 1), "sam to see the coordinator on #1");
 		expect(sam.state().sessions.find((session) => session.id === root.id)).toMatchObject({ owner: "tester", repo: "shop", host: "laptop:shop", name: "checkout", role: "coordinator" });
 
-		// A child is put on the feature. When its result lands, the feature is done; the epic, with nothing unfinished under it, is not touched by that.
+		// A child is put on the feature. When its result lands, the feature is up for a person to review; the epic is not touched by that.
 		await ask(h, root.id, tool("spawn_session", { name: "card form", kind: "task", issue: 2, brief: `!tool send_message ${JSON.stringify({ to: "parent", text: "card form done", intent: "result" })}` }));
 		const kid = await eventually(() => childrenOf(h.nodes(), root.id).find((node) => node.name === "card form"), "the child");
 		expect(kid.issue).toBe(2);
 		expect(await said(h, root.id)).toContain(`Spawned "card form" as ${kid.id} (kind task, roles protocol + reporting + worker, on issue #2).`);
-		await eventually(() => sam.issue(2)?.state === "done", "the feature to be finished by the result");
-		expect((await sam.read(2)).history.map((event) => [event.who, event.what, event.to])).toEqual([["sam", "created", undefined], ["tester", "state", "doing"], ["tester", "state", "done"]]);
+		await eventually(() => sam.issue(2)?.state === "review", "the feature to be put up for review by the result");
+		expect((await sam.read(2)).history.map((event) => [event.who, event.what, event.to])).toEqual([["sam", "created", undefined], ["tester", "state", "doing"], ["tester", "state", "review"]]);
 		expect(sam.issue(1)?.state).toBe("doing");
 
 		// A helper with no issue of its own is on its parent's.
@@ -124,6 +124,36 @@ describe("the team's work", () => {
 		await ask(h, root.id, tool("spawn_session", { name: "nowhere", issue: 99, brief: "say ok" }));
 		expect(await said(h, root.id)).toContain("There is no issue #99.");
 	}, 60_000);
+
+	it("gives an agent the next issue that is ready, puts its session on it, and leaves what waits and what is for people", async () => {
+		const h = await joined();
+		const sam = await teammate("sam");
+		await sam.create({ title: "Checkout", type: "epic" });
+		await sam.create({ title: "Card form", type: "bug", parent: 1, body: "The form loses the card number on error." });
+		await sam.comment(2, "Seen on Safari only.");
+		await sam.create({ title: "Charge the card", type: "bug", parent: 1, waitsOn: [2] });
+		await sam.create({ title: "Choose a provider", type: "bug", parent: 1, human: true });
+		const root = await h.createRoot({ name: "checkout", cwd: sandbox.work });
+		await eventually(() => issues(h).length === 4, "the host to hear of the issues");
+		await ask(h, root.id, tool("work_next", {}));
+		const seen = await said(h, root.id);
+		expect(seen).toContain("This session is on #2  bug  Card form  [doing]  @tester.");
+		expect(seen).toContain("The form loses the card number on error.");
+		expect(seen).toContain("sam: Seen on Safari only.");
+		expect(h.node(root.id)?.issue).toBe(2);
+		await eventually(() => sam.state().sessions.find((session) => session.id === root.id)?.issue === 2, "sam to see the session on the issue");
+		// What is left waits on #2 or is for a person.
+		await ask(h, root.id, tool("work_next", {}));
+		expect(await said(h, root.id)).toContain("Nothing is ready: 1 issue waits on others that are not finished.");
+		// An agent writes work down with what it waits on, and marks what is a person's.
+		await ask(h, root.id, tool("work_add", { title: "Send the receipt", type: "bug", parent: 1, waits_on: [3], human: true, repo: "mail" }));
+		expect(await said(h, root.id)).toContain("Added #5  bug  Send the receipt  [todo]  in mail  (for a person)  (waits on #3), under #1.");
+		await ask(h, root.id, tool("work_update", { number: 5, waits_on: [], human: false }));
+		await eventually(() => sam.issue(5)?.waitsOn === undefined && sam.issue(5)?.human === undefined, "the change to reach sam");
+		// It is for another repository, so it is not this session's to take.
+		await ask(h, root.id, tool("work_next", {}));
+		expect(h.node(root.id)?.issue).toBe(2);
+	});
 
 	it("says there is no server when there is none, and does nothing", async () => {
 		const h = await LatticeHost.start(hostOptionsFor(sandbox));

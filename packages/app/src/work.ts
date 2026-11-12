@@ -123,6 +123,11 @@ export class Work implements WorkPort {
 				return { issue: client.issue(request.number) as NonNullable<WorkResult["issue"]> };
 			case "scheme":
 				return { scheme: await client.setScheme(request.scheme) };
+			case "next": {
+				// Work that is for another repository is left for the sessions there.
+				const { do: _do, ...filter } = request;
+				return client.next({ ...filter, repo: this.options.repo });
+			}
 			default:
 				throw new Error("The host keeps which session is on what.");
 		}

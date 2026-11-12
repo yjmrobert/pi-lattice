@@ -82,7 +82,8 @@ describe("a team's own scheme", () => {
 		expect(fieldProblem(flat, "bet", { risk: "low", reviewer: "sam" }, ["yan", "sam"])).toBeUndefined();
 		expect(fieldProblem(flat, "bet", { risk: "low", reviewer: "kim" }, ["yan", "sam"])).toBe('Field "reviewer" is a person in the team: yan, sam.');
 		expect(fieldProblem(flat, "goal", { colour: "red" })).toBe('"colour" is not a field. The fields are: estimate, risk, due, reviewer.');
-		expect(fieldProblem(DEFAULT_SCHEME, "task", { colour: "red" })).toBe('"colour" is not a field. The scheme has no fields.');
+		expect(fieldProblem(DEFAULT_SCHEME, "task", { colour: "red" })).toBe('"colour" is not a field. The fields are: url.');
+		expect(fieldProblem({ ...DEFAULT_SCHEME, fields: [] }, "task", { colour: "red" })).toBe('"colour" is not a field. The scheme has no fields.');
 	});
 
 	it("marks what a changed scheme left behind, without touching it", () => {

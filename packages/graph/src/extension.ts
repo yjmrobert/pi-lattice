@@ -195,7 +195,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		name: "work_list",
 		label: "List work",
 		description:
-			"Show the team's work: its issues as a tree, each with its number, type, state, who it is assigned to and which sessions are on it, and the rules for what may go under what. The work lives on the team's server and is shared by everyone.",
+			"Show the team's work: its issues as a tree, each with its number, type, state, who it is assigned to, what it waits on and which sessions are on it, and the rules for what may go under what. The work lives on the team's server and is shared by everyone.",
 		promptSnippet: "Show the team's issues and how they are structured",
 		promptGuidelines: ["Call work_list before adding to the team's work or changing it: the types, states and fields are the team's own and may not be what you expect."],
 		parameters: Type.Object({
@@ -237,6 +237,9 @@ export default function graphExtension(pi: ExtensionAPI): void {
 			assignee: Type.Optional(Type.String({ description: "The person it is for, by their name in the team" })),
 			labels: Type.Optional(Type.Array(Type.String(), { description: "Labels" })),
 			fields: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Number()]), { description: "Values for the team's own fields, by name" })),
+			waits_on: Type.Optional(Type.Array(Type.Number(), { description: "The numbers of the issues that must be finished before this one is ready" })),
+			human: Type.Optional(Type.Boolean({ description: "True when it is for a person to do, not for a session" })),
+			repo: Type.Optional(Type.String({ description: "The repository it is to be done in, when that is not the one its parent is in" })),
 		}),
 		async execute(_toolCallId, params) {
 			const change: IssueChange = {
@@ -247,6 +250,9 @@ export default function graphExtension(pi: ExtensionAPI): void {
 				...(params.assignee !== undefined ? { assignee: params.assignee } : {}),
 				...(params.labels !== undefined ? { labels: params.labels } : {}),
 				...(params.fields !== undefined ? { fields: params.fields } : {}),
+				...(params.waits_on !== undefined ? { waitsOn: params.waits_on } : {}),
+				...(params.human !== undefined ? { human: params.human } : {}),
+				...(params.repo !== undefined ? { repo: params.repo } : {}),
 			};
 			const { issue } = await host().request("work", { request: { do: "add", change } });
 			if (!issue) throw new Error("The server did not say what it made.");
@@ -258,11 +264,12 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		name: "work_update",
 		label: "Update work",
 		description:
-			"Change an issue in the team's work: its title, body, type, state, parent, assignee, labels or fields, or add a comment to it. Give only what changes. Use null for parent, assignee or a field to clear it.",
+			"Change an issue in the team's work: its title, body, type, state, parent, assignee, labels, fields, what it waits on, whether it is for a person, or its repository, or add a comment to it. Give only what changes. Use null for parent, assignee, repo or a field to clear it.",
 		promptSnippet: "Change an issue, or comment on it",
 		promptGuidelines: [
 			"Use work_update with a comment to record on an issue what was decided or found, so that the people and sessions who come to it later have it.",
-			"You do not need work_update to mark the issue you are on as started or done: that follows from being on it and from sending your result.",
+			"You do not need work_update to move the issue you are on: being on it starts it, and sending your result moves it on by the team's rules. Leave closing an issue to the person who looks at the result, unless you were told to close it.",
+			"When you open a pull request or push a branch for an issue, record where it is in the issue's url field, when the team has one.",
 		],
 		parameters: Type.Object({
 			number: Type.Number({ description: "The issue's number" }),
@@ -274,11 +281,14 @@ export default function graphExtension(pi: ExtensionAPI): void {
 			assignee: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 			labels: Type.Optional(Type.Array(Type.String(), { description: "All its labels: this replaces the ones it has" })),
 			fields: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Number(), Type.Null()]), { description: "Fields to set, by name; null clears one. Fields not named are kept" })),
+			waits_on: Type.Optional(Type.Array(Type.Number(), { description: "All the issues it waits on: this replaces the ones it had; an empty list clears them" })),
+			human: Type.Optional(Type.Boolean({ description: "True when it is for a person to do, not for a session" })),
+			repo: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "The repository it is to be done in" })),
 			comment: Type.Optional(Type.String({ description: "A comment to add" })),
 		}),
 		async execute(_toolCallId, params) {
-			const { number, comment, ...rest } = params;
-			const change = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as IssueChange;
+			const { number, comment, waits_on, ...rest } = params;
+			const change = Object.fromEntries(Object.entries({ ...rest, waitsOn: waits_on }).filter(([, value]) => value !== undefined)) as IssueChange;
 			if (Object.keys(change).length === 0 && comment === undefined) throw new Error("Say what to change, or give a comment.");
 			let issue = Object.keys(change).length > 0 ? (await host().request("work", { request: { do: "update", number, change } })).issue : undefined;
 			if (comment !== undefined) issue = (await host().request("work", { request: { do: "comment", number, body: comment } })).issue ?? issue;
@@ -291,13 +301,43 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		name: "work_on",
 		label: "Work on",
 		description:
-			"Say which issue this session is working on. The team sees this session on that issue, and the issue is marked as started. Sending your result to your parent finishes it, unless something under it is unfinished.",
+			"Say which issue this session is working on. The team sees this session on that issue, and the issue is marked as started. Sending your result to your parent moves it on by the team's rules: by default to review, for a person to look at.",
 		promptSnippet: "Say which issue this session is on",
 		promptGuidelines: ["When you move on to a different issue from the one you were given, call work_on with its number, so the team sees where you are."],
 		parameters: Type.Object({ number: Type.Union([Type.Number(), Type.Null()], { description: "The issue's number, or null when this session is on no issue" }) }),
 		async execute(_toolCallId, params) {
 			const { issue } = await host().request("work", { request: { do: "on", number: params.number } });
 			return { content: [{ type: "text", text: issue ? `This session is on ${issueLine(issue)}.` : "This session is on no issue." }], details: { issue } };
+		},
+	});
+
+	pi.registerTool({
+		name: "work_next",
+		label: "Next work",
+		description:
+			"Take the next issue that is ready for a session and put this session on it. Ready means: in a state sessions take from, not for a person, not someone else's, nothing unfinished under it, waiting on nothing unfinished, and not for another repository. The lowest number is taken first. It is started and assigned to this session's owner in one step, so no two sessions get the same issue. Shows the issue with what was said on it.",
+		promptSnippet: "Take the next issue that is ready and start on it",
+		promptGuidelines: ["When asked to take the next piece of work, or when you have finished one and are to carry on, call work_next rather than choosing from work_list: it skips what is not ready and what is for people, and it cannot hand you an issue another session has."],
+		parameters: Type.Object({
+			under: Type.Optional(Type.Number({ description: "Take only from what is under this issue" })),
+			type: Type.Optional(Type.String({ description: "Take only an issue of this type" })),
+			label: Type.Optional(Type.String({ description: "Take only an issue with this label" })),
+		}),
+		async execute(_toolCallId, params) {
+			const filter = Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined)) as { under?: number; type?: string; label?: string };
+			const { issue, waiting } = await host().request("work", { request: { do: "next", ...filter } });
+			const details: { issue: typeof issue; waiting: number } = { issue, waiting: waiting ?? 0 };
+			if (!issue) {
+				const text = (waiting ?? 0) > 0 ? `Nothing is ready: ${waiting === 1 ? "1 issue waits" : `${waiting} issues wait`} on others that are not finished.` : "Nothing is ready for a session to take.";
+				return { content: [{ type: "text", text }], details };
+			}
+			const read = await host().request("work", { request: { do: "read", number: issue.number } });
+			const text = [
+				`This session is on ${issueLine(issue)}.`,
+				...(issue.body.trim() ? ["", issue.body.trim()] : []),
+				...((read.comments ?? []).length > 0 ? ["", ...(read.comments ?? []).map((comment) => `${comment.author}: ${comment.body}`)] : []),
+			].join("\n");
+			return { content: [{ type: "text", text }], details };
 		},
 	});
 

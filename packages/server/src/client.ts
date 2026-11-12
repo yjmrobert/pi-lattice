@@ -3,7 +3,7 @@
  * change it. The copy is what was last heard; when the server cannot be reached it stays, and
  * says so.
  */
-import type { Issue, IssueChange, IssueComment, IssueEvent, Scheme, WorkSession, WorkState } from "@pi-lattice/protocol";
+import type { Issue, IssueChange, IssueComment, IssueEvent, NextFilter, Scheme, WorkSession, WorkState } from "@pi-lattice/protocol";
 import { DEFAULT_SCHEME } from "@pi-lattice/protocol";
 import type { Changes } from "./http.ts";
 
@@ -193,6 +193,13 @@ export class WorkClient {
 	/** A session was put on an issue, or reported its result: the server applies the scheme's rules. */
 	async session(number: number, event: "start" | "report"): Promise<Issue> {
 		return this.wrote((await this.request<{ issue: Issue }>("POST", `/issues/${number}/session`, { event })).issue);
+	}
+
+	/** Take the next issue that is ready, started and assigned to this person. None when nothing is ready. */
+	async next(filter: NextFilter): Promise<{ issue?: Issue; waiting: number }> {
+		const result = await this.request<{ issue?: Issue; waiting: number }>("POST", "/next", filter);
+		if (result.issue) await this.wrote(result.issue);
+		return result;
 	}
 
 	async setScheme(scheme: Scheme): Promise<Scheme> {

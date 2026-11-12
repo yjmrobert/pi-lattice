@@ -1055,7 +1055,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 
 	/** Look at one of the team's issues, add one, change one, or comment on one. */
 	const issue = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
-		const USAGE = "/lattice issue <number> shows one. /lattice issue add <parent | top> <title>, /lattice issue set <number> <title | type | state | parent | assignee> <value | none>, /lattice issue comment <number> <text>.";
+		const USAGE = "/lattice issue <number> shows one. /lattice issue add <parent | top> <title>, /lattice issue set <number> <title | type | state | parent | assignee | repo | waits | human> <value | none>, /lattice issue comment <number> <text>. waits takes the numbers of the issues it waits on; human takes yes or no.";
 		const words = arg.trim().split(/\s+/).filter(Boolean);
 		const client = need(ctx);
 		if (!client) return;
@@ -1072,12 +1072,21 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				const number = numberOf(target);
 				const [field, ...value] = rest;
 				const text = value.join(" ");
-				if (number === undefined || !field || text === "" || !["title", "type", "state", "parent", "assignee"].includes(field)) return ctx.ui.notify(USAGE, "warning");
+				if (number === undefined || !field || text === "" || !["title", "type", "state", "parent", "assignee", "repo", "waits", "human"].includes(field)) return ctx.ui.notify(USAGE, "warning");
 				const none = text === "none";
-				if (none && field !== "parent" && field !== "assignee") return ctx.ui.notify(`An issue always has a ${field}.`, "warning");
+				const waits = text.split(/[\s,]+/).filter(Boolean).map(numberOf);
+				if (field === "waits" && !none && waits.includes(undefined)) return ctx.ui.notify("What it waits on is issue numbers, like 3 4, or none.", "warning");
+				if (field === "human" && !["yes", "no"].includes(text)) return ctx.ui.notify("human is yes, for a person and not for sessions, or no.", "warning");
+				if (none && !["parent", "assignee", "repo", "waits"].includes(field)) return ctx.ui.notify(`An issue always has a ${field}.`, "warning");
 				const parent = numberOf(text);
 				if (field === "parent" && !none && parent === undefined) return ctx.ui.notify("The parent is an issue's number, or none.", "warning");
-				const change: IssueChange = field === "parent" ? { parent: none ? null : (parent as number) } : field === "assignee" ? { assignee: none ? null : text.replace(/^@/, "") } : { [field]: text };
+				const change: IssueChange =
+					field === "parent" ? { parent: none ? null : (parent as number) }
+					: field === "assignee" ? { assignee: none ? null : text.replace(/^@/, "") }
+					: field === "repo" ? { repo: none ? null : text }
+					: field === "waits" ? { waitsOn: none ? [] : (waits as number[]) }
+					: field === "human" ? { human: text === "yes" }
+					: { [field]: text };
 				const changed = (await client.ui("work", { request: { do: "update", number, change } })).issue;
 				if (changed) ctx.ui.notify(issueLine(changed), "info");
 			} else if (verb === "comment") {

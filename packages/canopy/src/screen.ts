@@ -316,7 +316,7 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 	if (item.issue) {
 		const issue = item.issue;
 		line([[`#${issue.number}`, { fg: COLOR.text }], [`  ${issue.state}  `, DIM], issue.assignee ? [`@${issue.assignee}`, { fg: color }] : ["unassigned", DIM]]);
-		const extra = [...issue.labels.map((label) => `+${label}`), ...Object.entries(issue.fields).map(([name, value]) => `${name} ${value}`)].join("  ");
+		const extra = [...(issue.human ? ["for a person"] : []), ...(issue.repo ? [`◆ ${issue.repo}`] : []), ...issue.labels.map((label) => `+${label}`), ...Object.entries(issue.fields).map(([name, value]) => `${name} ${value}`)].join("  ");
 		if (extra) line([[cut(extra, inner), DIM]]);
 		for (const part of wrap(issue.body.split("\n").filter((text) => text.trim() !== "").slice(0, 3).join(" "), inner).slice(0, 3)) line([[part, { fg: COLOR.text }]]);
 		if (item.misfit) {

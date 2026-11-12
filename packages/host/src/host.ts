@@ -1100,6 +1100,14 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const state = this.work?.state();
 		if (!this.work || !state) throw new Error("There is no server: you have not joined one. Whoever runs your team's server has its address; join with /lattice server <address>.");
 		if (request.do === "look") return { work: state };
+		if (request.do === "next") {
+			const taker = asker ? this.must(asker) : undefined;
+			if (!taker) throw new Error("Only a session takes the next issue.");
+			const taken = await this.work.run(request);
+			// The server has started it already: the session is put on it, and nothing more is said.
+			if (taken.issue && taker.issue !== taken.issue.number) this.update(taker.id, { issue: taken.issue.number });
+			return taken;
+		}
 		if (request.do !== "on") return this.work.run(request);
 		const id = request.nodeId ?? asker;
 		const node = id ? this.must(id) : undefined;

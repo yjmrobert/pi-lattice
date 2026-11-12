@@ -2,7 +2,7 @@
  * The work of a network as the canopy sees it: items on levels, who owns each, and the agent
  * sitting on it. Built from the same state the pane reads. No Pi, no terminal.
  */
-import { type Issue, isPlanned, misfit, type NodeMeta, roleOf, type Scheme, stateKind, type UiState, type WorkState } from "@pi-lattice/protocol";
+import { type Issue, isPlanned, misfit, type NodeMeta, roleOf, type Scheme, stateKind, type UiState, type WorkState, waitingOn } from "@pi-lattice/protocol";
 
 /** One host's tree, or what a teammate has in a repository that is not on this machine. */
 export interface TreeSource {
@@ -281,7 +281,7 @@ function buildFromWork(sources: readonly TreeSource[], work: WorkState, rootName
 		const item: Item = {
 			id: `#${issue.number}`, name: issue.title, kind: issue.type, level: parent === root ? Math.max(at, 0) : bud ? parent.level : at, owner: issue.assignee ?? lead?.owner ?? "", away: false,
 			repo: lead?.repo ?? "", tree: lead?.tree ?? "", parent, children: [], buds: [], agent: lead?.agent, planned: !lead && kind !== "done", done: kind === "done", failed: lead?.agent.state === "failed",
-			leaves: 0, landed: 0, asks: on.reduce((sum, sitter) => sum + sitter.asks, 0), waitsOn: [], node: lead?.node, issue, ...(why ? { misfit: why } : {}),
+			leaves: 0, landed: 0, asks: on.reduce((sum, sitter) => sum + sitter.asks, 0), waitsOn: waitingOn(scheme, issue, byNumber).map((number) => `#${number}`), node: lead?.node, issue, ...(why ? { misfit: why } : {}),
 		};
 		items.set(item.id, item);
 		(bud ? parent.buds : parent.children).push(item);

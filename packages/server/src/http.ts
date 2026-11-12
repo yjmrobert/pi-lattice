@@ -200,6 +200,11 @@ export class WorkServer {
 				case "POST /issues/:n/session":
 					if (body.event !== "start" && body.event !== "report") throw new WorkError(400, 'The event is "start" or "report".');
 					return send(200, { issue: this.tracker.session(who, number, body.event) });
+				case "POST /next": {
+					const text = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
+					const [repo, type, label] = [text(body.repo), text(body.type), text(body.label)];
+					return send(200, this.tracker.next(who, { ...(repo ? { repo } : {}), ...(type ? { type } : {}), ...(label ? { label } : {}), ...(Number.isInteger(body.under) ? { under: body.under as number } : {}) }));
+				}
 				case "PUT /scheme":
 					return send(200, { scheme: this.tracker.setScheme(who, body) });
 				case "PUT /sessions":

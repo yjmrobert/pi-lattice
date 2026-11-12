@@ -1,6 +1,6 @@
 /** The server as a client meets it: a real one on a local port, with nothing kept after the test. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_SCHEME, type Scheme } from "@pi-lattice/protocol";
+import { DEFAULT_SCHEME, type Issue, issueLine, type Scheme } from "@pi-lattice/protocol";
 import { joinServer, parseAddress, WorkClient, WorkServer } from "../src/index.ts";
 
 let server: WorkServer;
@@ -65,7 +65,7 @@ describe("issues", () => {
 		expect(await refused(yan.create({ title: "", type: "epic" }))).toBe("A title cannot be empty.");
 		expect(await refused(yan.create({ title: "x", type: "epic", parent: 99 }))).toBe("There is no issue #99 to put it under.");
 		expect(await refused(yan.create({ title: "x", type: "epic", assignee: "kim" }))).toBe('"kim" is not in the team. The people are: yan.');
-		expect(await refused(yan.create({ title: "x", type: "epic", state: "started" }))).toBe('"started" is not a state. The states are: todo, doing, done, dropped.');
+		expect(await refused(yan.create({ title: "x", type: "epic", state: "started" }))).toBe('"started" is not a state. The states are: todo, doing, review, done, dropped.');
 		expect(yan.state().issues.map((issue) => issue.number)).toEqual([1, 2, 3, 4]);
 	});
 
@@ -155,13 +155,83 @@ describe("the scheme", () => {
 		await yan.create({ title: "Checkout", type: "epic" });
 		await yan.create({ title: "Pay by card", parent: 1 });
 		expect((await yan.session(2, "start")).state).toBe("doing");
-		// A parent with unfinished work under it is not closed by a report.
+		// A result is for a person to look at: it does not close the issue.
+		expect((await yan.session(2, "report")).state).toBe("review");
+		expect((await yan.session(2, "start")).state).toBe("review");
+		await yan.update(2, { state: "done" });
+		// Neither starting on finished work nor a late result reopens it.
+		expect((await yan.session(2, "start")).state).toBe("done");
+		expect((await yan.session(2, "report")).state).toBe("done");
+		// A team that wants results to close issues says so. A parent with unfinished work under it is still not closed.
+		await yan.setScheme({ ...DEFAULT_SCHEME, rules: { onStart: "doing", onReport: "done" } });
+		await yan.create({ title: "Pay by transfer", parent: 1 });
 		expect((await yan.session(1, "start")).state).toBe("doing");
 		expect((await yan.session(1, "report")).state).toBe("doing");
-		expect((await yan.session(2, "report")).state).toBe("done");
+		expect((await yan.session(3, "report")).state).toBe("done");
 		expect((await yan.session(1, "report")).state).toBe("done");
-		// Starting on finished work does not reopen it.
-		expect((await yan.session(2, "start")).state).toBe("done");
+	});
+
+	it("gives a session the next issue that is ready, and never the same one twice", async () => {
+		const yan = await member("yan");
+		const sam = await member("sam");
+		await yan.create({ title: "Checkout", type: "epic" }); // 1
+		await yan.create({ title: "Pay by card", parent: 1 }); // 2, a feature
+		await yan.create({ title: "Card form", parent: 2 }); // 3, a story
+		await yan.create({ title: "Charge the card", parent: 2, waitsOn: [3] }); // 4
+		await yan.create({ title: "Choose a payment provider", parent: 2, human: true }); // 5
+		await yan.create({ title: "Receipt email", parent: 2, assignee: "sam" }); // 6
+		await yan.create({ title: "Ledger entry", parent: 2, repo: "ledger" }); // 7
+		// Not the epic or the feature, which have work under them; not what waits, is for a person, is sam's, or is for another repository.
+		const both = await Promise.all([yan.next({ repo: "shop" }), yan.next({ repo: "shop" })]);
+		expect(both.map((taken) => taken.issue?.number).sort()).toEqual([3, undefined]);
+		expect(both.find((taken) => !taken.issue)?.waiting).toBe(1);
+		expect(yan.issue(3)).toMatchObject({ state: "doing", assignee: "yan" });
+		expect((await sam.next({ repo: "shop" })).issue?.number).toBe(6);
+		expect((await sam.next({ repo: "ledger" })).issue?.number).toBe(7);
+		// Review is not finished: what waits on #3 keeps waiting until a person closes it.
+		await yan.session(3, "report");
+		expect(await yan.next({ repo: "shop" })).toEqual({ waiting: 1 });
+		await yan.update(3, { state: "done" });
+		expect((await yan.next({ repo: "shop" })).issue).toMatchObject({ number: 4, state: "doing", assignee: "yan" });
+		expect(await yan.next({ repo: "shop" })).toEqual({ waiting: 0 });
+		expect((await yan.read(3)).history.map((event) => [event.what, event.to])).toEqual([["created", undefined], ["state", "doing"], ["assignee", "yan"], ["state", "review"], ["state", "done"]]);
+		// Narrowed: only under an issue, only a type, only a label.
+		await yan.create({ title: "Refunds", type: "epic" }); // 8
+		await yan.create({ title: "Wrong total", type: "bug", parent: 8, labels: ["urgent"] }); // 9
+		await yan.create({ title: "Typo", type: "bug", labels: ["later"] }); // 10
+		expect(await yan.next({ under: 1 })).toEqual({ waiting: 0 });
+		expect((await yan.next({ label: "later" })).issue?.number).toBe(10);
+		expect((await yan.next({ type: "bug", under: 8 })).issue?.number).toBe(9);
+		expect(await refused(yan.next({ under: 99 }))).toBe("There is no issue #99.");
+	});
+
+	it("keeps a backlog for people to release, when the scheme names the state sessions take from", async () => {
+		const yan = await member("yan");
+		await yan.setScheme({ ...DEFAULT_SCHEME, states: [{ name: "backlog", kind: "open" }, ...DEFAULT_SCHEME.states], rules: { ...DEFAULT_SCHEME.rules, take: "todo" } });
+		await yan.create({ title: "Some day", type: "bug" });
+		expect(yan.issue(1)?.state).toBe("backlog");
+		expect(await yan.next({})).toEqual({ waiting: 0 });
+		await yan.update(1, { state: "todo" });
+		expect((await yan.next({})).issue?.number).toBe(1);
+	});
+
+	it("refuses waiting that could never end, and says what holds an issue", async () => {
+		const yan = await member("yan");
+		await yan.create({ title: "A", type: "bug" });
+		await yan.create({ title: "B", type: "bug", waitsOn: [1] });
+		await yan.create({ title: "C", type: "bug", waitsOn: [2, 2, 1] });
+		expect(yan.issue(3)?.waitsOn).toEqual([1, 2]);
+		expect(await refused(yan.update(1, { waitsOn: [1] }))).toBe("An issue cannot wait on itself.");
+		expect(await refused(yan.update(1, { waitsOn: [3] }))).toBe("#3 waits on #1, so #1 cannot wait on it: neither would ever be ready.");
+		expect(await refused(yan.update(1, { waitsOn: [9] }))).toBe("There is no issue #9 to wait on.");
+		expect(issueLine(yan.issue(3) as Issue, yan.state())).toBe("#3  bug  C  [todo]  (waits on #1, #2)");
+		await yan.update(1, { state: "dropped" });
+		// What was dropped holds nothing.
+		expect(issueLine(yan.issue(3) as Issue, yan.state())).toBe("#3  bug  C  [todo]  (waits on #2)");
+		await yan.update(3, { waitsOn: [], human: true, repo: "shop" });
+		expect(issueLine(yan.issue(3) as Issue, yan.state())).toBe("#3  bug  C  [todo]  in shop  (for a person)");
+		expect((await yan.update(3, { human: false, repo: null })).repo).toBeUndefined();
+		expect(yan.issue(3)?.human).toBeUndefined();
 	});
 });
 

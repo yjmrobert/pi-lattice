@@ -143,7 +143,7 @@ describe("the canopy of a team with a server", () => {
 		const w = build();
 		const state = initial(w, undefined);
 		expect(press(w, { ...state, selected: "#6" }, "e").actions).toEqual([{ do: "run", command: "/lattice issue set 6 state doing", saying: "Moving #6 to doing…" }]);
-		expect(press(w, { ...state, selected: "#4" }, "e").actions).toEqual([{ do: "run", command: "/lattice issue set 4 state done", saying: "Moving #4 to done…" }]);
+		expect(press(w, { ...state, selected: "#4" }, "e").actions).toEqual([{ do: "run", command: "/lattice issue set 4 state review", saying: "Moving #4 to review…" }]);
 		// After the last state comes the first: finished work is reopened, never dropped by this key.
 		expect(press(w, { ...state, selected: "#5" }, "e").actions).toEqual([{ do: "run", command: "/lattice issue set 5 state todo", saying: "Moving #5 to todo…" }]);
 		expect(press(w, { ...state, selected: "#6" }, "m").actions).toEqual([{ do: "run", command: "/lattice issue set 6 assignee yan", saying: "Assigning #6 to you…" }]);
