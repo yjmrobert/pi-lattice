@@ -9,12 +9,13 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CollabSession, createNetwork, formatJoinCode, Identity, isPersonName, LanDiscovery, loadNetwork, lobbyPort, type Network, networkKey, parseJoinCode, PeerBook, removeNetwork, saveNetwork, sharedPort, TcpTransport } from "@pi-lattice/collab";
 import { encodeTree, latticeHome, type NodeMeta, toggleSetting, TREES_DIR, treeEntryName, type UiState } from "@pi-lattice/protocol";
 import { type HostOptions, LatticeHost, repoName, type SharingPort } from "@pi-lattice/host";
+import { Work } from "./work.ts";
 
 export interface DaemonOptions {
 	stateDir: string;
@@ -398,6 +399,10 @@ export async function runDaemon(options: DaemonOptions): Promise<Daemon> {
 	if (host.renamedFrom !== undefined) rmSync(join(stateDir, "collab"), { recursive: true, force: true });
 	const sharing = new Sharing(host, options);
 	host.setSharing(sharing);
+	const home = options.home ?? latticeHome(process.env, homedir());
+	const work = new Work({ home, hostId: `${hostname()}:${treeEntryName(stateDir)}`, repo: basename(resolve(options.cwd)), name: () => host.owner });
+	host.setWork(work);
+	work.sync();
 	try {
 		await sharing.restore();
 	} catch (error) {
@@ -413,6 +418,7 @@ export async function runDaemon(options: DaemonOptions): Promise<Daemon> {
 		if (stopping) return done;
 		stopping = true;
 		clearInterval(timer);
+		work.stop();
 		await sharing.stop().catch(() => {});
 		await host.stop();
 		finish();
@@ -427,6 +433,8 @@ export async function runDaemon(options: DaemonOptions): Promise<Daemon> {
 		}
 		// A network created, joined or left from another repository's terminal.
 		void sharing.sync().catch(() => {});
+		// A server joined or left from another repository's terminal.
+		work.sync();
 		const { terminals, working } = host.activity();
 		// Renamed with nobody here: stop, and the next terminal starts this host under the new name.
 		if (terminals === 0 && working === 0 && sharing.outdated()) return void stop();

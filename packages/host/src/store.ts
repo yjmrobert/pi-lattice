@@ -75,6 +75,7 @@ const MIGRATIONS: string[] = [
 	"ALTER TABLE nodes ADD COLUMN done INTEGER NOT NULL DEFAULT 0;",
 	"ALTER TABLE nodes ADD COLUMN waits_on TEXT;",
 	"ALTER TABLE nodes ADD COLUMN planned INTEGER NOT NULL DEFAULT 0;",
+	"ALTER TABLE nodes ADD COLUMN issue INTEGER;",
 ];
 
 type Row = Record<string, string | number | null>;
@@ -106,6 +107,7 @@ const toNode = (row: Row): NodeMeta => ({
 	...(row.done === 1 ? { done: true } : {}),
 	...(typeof row.waits_on === "string" ? { waitsOn: JSON.parse(row.waits_on) as string[] } : {}),
 	...(row.planned === 1 ? { planned: true } : {}),
+	...(typeof row.issue === "number" ? { issue: row.issue } : {}),
 	...((row.tokens as number) > 0 || (row.cost as number) > 0 ? { usage: { tokens: row.tokens as number, cost: row.cost as number } } : {}),
 });
 
@@ -138,13 +140,13 @@ export class SqliteStore implements Store {
 	insertNode(node: NodeMeta): void {
 		this.db
 			.prepare(
-				`INSERT INTO nodes (id, parent_id, root_id, kind, name, brief, fragments, owner, version, status, session_id, session_file, cwd, workspace, branch, created_at, updated_at, repo, archived, model, tokens, cost, done, waits_on, planned)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO nodes (id, parent_id, root_id, kind, name, brief, fragments, owner, version, status, session_id, session_file, cwd, workspace, branch, created_at, updated_at, repo, archived, model, tokens, cost, done, waits_on, planned, issue)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				node.id, node.parentId, node.rootId, node.kind, node.name, node.brief, JSON.stringify(node.fragments), node.owner, node.version,
 				node.status, node.sessionId, node.sessionFile, node.cwd, node.workspace, node.branch, node.createdAt, node.updatedAt, node.repo ?? null,
-				node.archived ? 1 : 0, node.model ?? null, node.usage?.tokens ?? 0, node.usage?.cost ?? 0, node.done ? 1 : 0, waitsOnColumn(node), node.planned ? 1 : 0,
+				node.archived ? 1 : 0, node.model ?? null, node.usage?.tokens ?? 0, node.usage?.cost ?? 0, node.done ? 1 : 0, waitsOnColumn(node), node.planned ? 1 : 0, node.issue ?? null,
 			);
 	}
 
@@ -154,16 +156,18 @@ export class SqliteStore implements Store {
 		const next: NodeMeta = { ...current, ...patch, id, updatedAt: new Date().toISOString() };
 		if (!next.waitsOn || next.waitsOn.length === 0) delete next.waitsOn;
 		if (!next.planned) delete next.planned;
+		// No issue is stored as nothing; 0 is how a patch takes a session off its issue.
+		if (!next.issue) delete next.issue;
 		this.db
 			.prepare(
 				`UPDATE nodes SET parent_id = ?, root_id = ?, kind = ?, name = ?, brief = ?, fragments = ?, owner = ?, version = ?, status = ?,
 				 session_id = ?, session_file = ?, cwd = ?, workspace = ?, branch = ?, updated_at = ?, repo = ?,
-				 archived = ?, model = ?, tokens = ?, cost = ?, done = ?, waits_on = ?, planned = ? WHERE id = ?`,
+				 archived = ?, model = ?, tokens = ?, cost = ?, done = ?, waits_on = ?, planned = ?, issue = ? WHERE id = ?`,
 			)
 			.run(
 				next.parentId, next.rootId, next.kind, next.name, next.brief, JSON.stringify(next.fragments), next.owner, next.version, next.status,
 				next.sessionId, next.sessionFile, next.cwd, next.workspace, next.branch, next.updatedAt, next.repo ?? null,
-				next.archived ? 1 : 0, next.model ?? null, next.usage?.tokens ?? 0, next.usage?.cost ?? 0, next.done ? 1 : 0, waitsOnColumn(next), next.planned ? 1 : 0, id,
+				next.archived ? 1 : 0, next.model ?? null, next.usage?.tokens ?? 0, next.usage?.cost ?? 0, next.done ? 1 : 0, waitsOnColumn(next), next.planned ? 1 : 0, next.issue ?? null, id,
 			);
 		return next;
 	}

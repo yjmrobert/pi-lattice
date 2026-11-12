@@ -21,7 +21,8 @@ const ALLOWED: Record<string, string[]> = {
 	collab: ["protocol"],
 	host: ["protocol"],
 	// The composition root: the only package allowed to know about more than the contracts.
-	app: ["protocol", "host", "collab", "a2a", "roles", "graph", "pane", "canopy"],
+	server: ["protocol"],
+	app: ["protocol", "host", "collab", "a2a", "roles", "graph", "pane", "canopy", "server"],
 };
 
 /** Which packages may depend on Pi itself. The contracts and the sharing library must not. */

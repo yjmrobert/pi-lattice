@@ -2,7 +2,7 @@
  * The work of a network as the canopy sees it: items on levels, who owns each, and the agent
  * sitting on it. Built from the same state the pane reads. No Pi, no terminal.
  */
-import { isPlanned, type NodeMeta, type UiState } from "@pi-lattice/protocol";
+import { isPlanned, type NodeMeta, roleOf, type UiState } from "@pi-lattice/protocol";
 
 /** One host's tree, or what a teammate has in a repository that is not on this machine. */
 export interface TreeSource {
@@ -80,12 +80,7 @@ export interface World {
 }
 
 export const ROOT_ID = "canopy:root";
-const PLUMBING = new Set(["protocol", "reporting"]);
-
-/** What an agent is called on the canopy: the last role it was given that is about the work. */
-export function roleOf(node: Pick<NodeMeta, "fragments" | "name">): string {
-	return node.fragments.filter((name) => !PLUMBING.has(name)).at(-1) ?? node.name;
-}
+export { roleOf };
 
 function agentOf(node: NodeMeta, state: UiState, mine: boolean): Agent | undefined {
 	if (isPlanned(node)) return undefined;

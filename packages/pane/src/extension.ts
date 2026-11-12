@@ -1037,6 +1037,22 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		return done;
 	};
 
+	/** The team's server: join one, leave it, or say which one this is. */
+	const server = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
+		const words = arg.split(/\s+/).filter(Boolean);
+		await ensureHost(ctx);
+		const client = need(ctx);
+		if (!client) return;
+		try {
+			const action = words.length === 0 ? "status" : words[0] === "leave" ? "leave" : "join";
+			const { text } = await client.ui("server", { action, args: action === "join" ? words : [] });
+			ctx.ui.notify(text, "info");
+		} catch (error) {
+			fail(ctx, error);
+		}
+		await refresh();
+	};
+
 	/** What handing a session to someone does, said before the one step that cannot be taken back. */
 	const WHAT_GOES = "It stops here, and its whole conversation, including any file contents and command output in it, goes directly to them, with its branch if it has one. After that you can read it but not run it.";
 	const NO_NETWORK = "You are not in a network yet. /lattice network creates one, or joins a teammate's.";
@@ -1652,6 +1668,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			},
 		},
 		{ name: "approvals", does: "review messages waiting for approval", run: (ctx) => approvals(ctx) },
+		{ name: "server", usage: "server [address [your name] | leave]", does: "join your team's server, where its work is tracked; with nothing, say which one you are on", run: (ctx, arg) => server(ctx, arg) },
 		{ name: "network", does: "create or join a network of teammates; who is in it, the join code, what is being handed over", run: (ctx) => network(ctx) },
 		{ name: "join", usage: "join <code> [your name]", does: "join a teammate's network with the code they gave you", run: (ctx, arg) => joinNetwork(ctx, arg) },
 		{ name: "create", usage: "create [network] [your name]", does: "start a network and get the code teammates join with", run: (ctx, arg) => createNetwork(ctx, arg) },

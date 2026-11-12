@@ -46,6 +46,8 @@ export interface NodeMeta {
 	 * been given its brief, and nothing starts it but a person or a message sent to it. Removed once it starts.
 	 */
 	planned?: boolean;
+	/** The number of the issue it is on, on the team's server. */
+	issue?: number;
 	/** What its agent has used so far. */
 	usage?: { tokens: number; cost: number };
 	createdAt: string;

@@ -55,6 +55,11 @@ import {
 	validateEnvelope,
 	WORKSPACE_MODES,
 	waitingFor,
+	roleOf,
+	type WorkRequest,
+	type WorkResult,
+	type WorkSession,
+	type WorkState,
 } from "@pi-lattice/protocol";
 import { piLibrary } from "./pi-library.ts";
 import { type ExitInfo, PiProcess, type RpcRecord } from "./pi-process.ts";
@@ -101,6 +106,21 @@ export interface SharingPort {
 	/** The same, kept up to date by its owner for as long as this keeps being called. */
 	follow(nodeId: string): Promise<unknown[]>;
 	/** Call the listener whenever sharing state changes. */
+	onChanged(listener: () => void): void;
+}
+
+/** The team's work on a server, as the host uses it. The host knows nothing of HTTP: this is supplied. */
+export interface WorkPort {
+	/** Null while this person has joined no server. */
+	state(): WorkState | null;
+	/** Read or change issues. `on` never comes here: which session is on what is the host's to keep. */
+	run(request: WorkRequest): Promise<WorkResult>;
+	/** A session was put on an issue, or reported its result. */
+	session(number: number, event: "start" | "report"): Promise<void>;
+	/** What this host runs, for the server to tell everyone. */
+	publish(sessions: Array<Omit<WorkSession, "host" | "owner" | "repo">>): void;
+	/** Join or leave a server, or say which one this is. Returns text to show. */
+	server(action: string, args: string[]): Promise<string>;
 	onChanged(listener: () => void): void;
 }
 
@@ -251,6 +271,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	/** Why a waiting session could not be started when its turn came, so it is said once and not at every retry. */
 	private readonly releaseComplaints = new Map<string, string>();
 	private sharing: SharingPort | undefined;
+	private work: WorkPort | undefined;
+	private publishTimer: NodeJS.Timeout | undefined;
 	/** The name this person's sessions here were under until this start, when it changed. */
 	readonly renamedFrom: string | undefined;
 	private notifyTimer: NodeJS.Timeout | undefined;
@@ -464,6 +486,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (!parent) throw new Error(`No node ${parentId} in this tree.`);
 		if (parent.owner !== this.owner) throw new Error(`"${parent.name}" is owned by ${parent.owner}. Children can only be added under sessions you own.`);
 		const planned = spec.planned === true;
+		// Without an issue of its own, a child is on the one its parent is on: it is there to help with it.
+		const issue = spec.issue ?? parent.issue;
+		if (spec.issue !== undefined && !this.work?.state()?.issues.some((entry) => entry.number === spec.issue)) {
+			throw new Error(this.work?.state() ? `There is no issue #${spec.issue}.` : "There is no server, so there is no issue to put it on. Leave the issue out.");
+		}
 		if (typeof spec.name !== "string" || spec.name.trim() === "") throw new Error("A child session needs a name.");
 		if (typeof spec.brief !== "string" || spec.brief.trim() === "") throw new Error("A child session needs a brief.");
 		if (depthOf(all, parentId) + 1 > this.limits.maxDepth) {
@@ -508,6 +535,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			...(model ? { model } : {}),
 			...(waitsOn.some((other) => !other.done) ? { waitsOn: waitsOn.map((other) => other.id) } : {}),
 			...(planned ? { planned: true } : {}),
+			...(issue !== undefined ? { issue } : {}),
 		});
 		this.touch(askerId, node.id);
 		if (held) return node;
@@ -531,6 +559,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const parent = reportsTo(this.store.listNodes(), node);
 		// It owes its parent an answer from the moment it has the brief.
 		this.owing.set(node.id, { reminded: false });
+		void this.noteWork(node.issue, "start");
 		await this.ensureRunning(node.id);
 		await this.prompt(node.id, this.template("brief", {
 			"parent.name": parent?.name ?? "", "parent.id": parent?.id ?? "", name: node.name, kind: node.kind, branch: node.branch, waited: waited.map((name) => `"${name}"`).join(", "), brief: node.brief,
@@ -651,7 +680,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		return node && isHeld(node) ? this.release(id, true) : this.ensureRunning(id);
 	}
 
-	private insert(fields: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "cwd" | "workspace" | "branch"> & Pick<Partial<NodeMeta>, "model" | "waitsOn" | "planned">): NodeMeta {
+	private insert(fields: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "cwd" | "workspace" | "branch"> & Pick<Partial<NodeMeta>, "model" | "waitsOn" | "planned" | "issue">): NodeMeta {
 		const now = new Date().toISOString();
 		const node: NodeMeta = {
 			...fields, owner: this.owner, version: 1, status: "dormant", sessionId: null, sessionFile: null, createdAt: now, updatedAt: now, repo: repoName(fields.cwd),
@@ -1028,6 +1057,71 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		sharing?.onChanged(() => this.notifyUi());
 	}
 
+	/** Supply the team's work, so sessions can be put on issues and the canopy can draw them. */
+	setWork(work: WorkPort | undefined): void {
+		this.work = work;
+		work?.onChanged(() => {
+			this.notifyUi();
+			this.publishSoon();
+		});
+		for (const event of ["node", "activity", "dialog"] as const) this.on(event, () => this.publishSoon());
+		this.publishSoon();
+	}
+
+	/** The sessions of this person here that the team should see: the ones that are live, and the ones on an issue. */
+	workSessions(): Array<Omit<WorkSession, "host" | "owner" | "repo">> {
+		const pending = new Map<string, number>();
+		for (const record of this.pendingMail()) pending.set(record.recipient, (pending.get(record.recipient) ?? 0) + 1);
+		const out: Array<Omit<WorkSession, "host" | "owner" | "repo">> = [];
+		for (const node of this.store.listNodes()) {
+			if (node.archived || node.owner !== this.owner || isPlanned(node)) continue;
+			const runtime = this.runtimes.get(node.id);
+			const live = runtime !== undefined && (runtime.proc !== undefined || runtime.foreground);
+			if (!live && node.issue === undefined) continue;
+			const asks = (runtime?.dialogs.size ?? 0) + (pending.get(node.id) ?? 0);
+			const state = node.status === "failed" ? "failed" : asks > 0 || node.status === "blocked" ? "asking" : isHeld(node) ? "waiting" : node.status === "running" || node.status === "starting" ? "working" : "idle";
+			const activity = runtime?.proc ? runtime.recent[runtime.recent.length - 1] : undefined;
+			out.push({ id: node.id, name: node.name, role: roleOf(node), state, ...(node.issue !== undefined ? { issue: node.issue } : {}), ...(activity ? { activity } : {}), asks });
+		}
+		return out;
+	}
+
+	private publishSoon(): void {
+		if (this.publishTimer || this.stopped || !this.work?.state()) return;
+		this.publishTimer = setTimeout(() => {
+			this.publishTimer = undefined;
+			if (!this.stopped) this.work?.publish(this.workSessions());
+		}, 300);
+		this.publishTimer.unref();
+	}
+
+	/** Read or change the team's work. `asker` is the session asking, when one is. */
+	async runWork(request: WorkRequest, asker?: string): Promise<WorkResult> {
+		const state = this.work?.state();
+		if (!this.work || !state) throw new Error("There is no server: you have not joined one. Whoever runs your team's server has its address; join with /lattice server <address>.");
+		if (request.do === "look") return { work: state };
+		if (request.do !== "on") return this.work.run(request);
+		const id = request.nodeId ?? asker;
+		const node = id ? this.must(id) : undefined;
+		if (!node) throw new Error("Say which session.");
+		if (node.owner !== this.owner) throw new Error(`"${node.name}" is owned by ${node.owner}. Only they can say what it is on.`);
+		if (request.number === null) {
+			this.update(node.id, { issue: 0 });
+			return {};
+		}
+		const issue = state.issues.find((entry) => entry.number === request.number);
+		if (!issue) throw new Error(`There is no issue #${request.number}.`);
+		if (node.issue !== issue.number) this.update(node.id, { issue: issue.number });
+		if (!isPlanned(node)) await this.noteWork(issue.number, "start");
+		return { issue: this.work.state()?.issues.find((entry) => entry.number === issue.number) ?? issue };
+	}
+
+	/** Tell the server what a session did to its issue. The server being away never stops the session's own work. */
+	private async noteWork(number: number | undefined, event: "start" | "report"): Promise<void> {
+		if (number === undefined || !this.work?.state()) return;
+		await this.work.session(number, event).catch((error: unknown) => this.emit("log", "warn", `Issue #${number} was not updated: ${error instanceof Error ? error.message : String(error)}`));
+	}
+
 	/** Run a sharing action by name, as the pane does. */
 	async runSharing(action: string, args: string[]): Promise<string> {
 		if (!this.sharing) throw new Error("Sharing is not available in this host.");
@@ -1074,6 +1168,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			...(traffic.length > 0 ? { traffic } : {}),
 			...(Object.keys(focus).length > 0 ? { focus } : {}),
 			foreground: [...this.runtimes].filter(([, runtime]) => runtime.foreground).map(([id]) => id),
+			...(this.work?.state() ? { work: this.work.state() as WorkState } : {}),
 			sharing: this.sharing?.state() ?? null,
 			named: this.sharing?.named() ?? false,
 		};
@@ -1130,6 +1225,12 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			}
 			case "sharing":
 				return { text: await this.runSharing(call("sharing").action, call("sharing").args) };
+			case "work":
+				return this.runWork(call("work").request);
+			case "server": {
+				if (!this.work) throw new Error("This host cannot join a server.");
+				return { text: await this.work.server(call("server").action, call("server").args) };
+			}
 			case "rename": {
 				const { nodeId, name } = call("rename");
 				return { node: this.rename(nodeId, name) };
@@ -1367,6 +1468,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				return { self: self.id, nodes: treeOf(this.store.listNodes(), self.rootId) } satisfies RequestMap["list"]["result"];
 			case "spawn":
 				return { node: await this.spawnChild(self.id, (params as RequestMap["spawn"]["params"]).spec) } satisfies RequestMap["spawn"]["result"];
+			case "work":
+				return (await this.runWork((params as RequestMap["work"]["params"]).request, self.id)) satisfies RequestMap["work"]["result"];
 			default:
 				throw new Error(`Unknown request "${String(op)}".`);
 		}
@@ -1447,6 +1550,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			this.owing.delete(sender.id);
 			if (envelope.intent === "result" && !sender.done) {
 				this.update(sender.id, { done: true });
+				void this.noteWork(sender.issue, "report");
 				this.releaseReady();
 			}
 		}

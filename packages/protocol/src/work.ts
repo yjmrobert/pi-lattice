@@ -133,6 +133,27 @@ export interface WorkState {
 	sessions: WorkSession[];
 }
 
+/** What a session, the pane or the canopy asks of the team's work. */
+export type WorkRequest =
+	/** Everything, as this host holds it. */
+	| { do: "look" }
+	/** One issue with what was said on it and everything done to it. */
+	| { do: "read"; number: number }
+	| { do: "add"; change: IssueChange }
+	| { do: "update"; number: number; change: IssueChange; basedOn?: number }
+	| { do: "comment"; number: number; body: string }
+	| { do: "scheme"; scheme: Scheme }
+	/** Say which issue a session is on; `null` takes it off. `nodeId` names the session when it is not the one asking. */
+	| { do: "on"; number: number | null; nodeId?: string };
+
+export interface WorkResult {
+	work?: WorkState;
+	issue?: Issue;
+	comments?: IssueComment[];
+	history?: IssueEvent[];
+	scheme?: Scheme;
+}
+
 export const DEFAULT_SCHEME: Scheme = {
 	types: [
 		{ name: "epic", level: 0, under: [], top: true },
@@ -301,4 +322,45 @@ export function misfit(scheme: Scheme, issue: Issue, issues: ReadonlyMap<number,
 	if (where) return where;
 	if (!scheme.states.some((state) => state.name === issue.state)) return `"${issue.state}" is no longer a state.`;
 	return undefined;
+}
+
+/** The scheme in a few lines, for someone about to add to the work. */
+export function describeScheme(scheme: Scheme): string {
+	const types = scheme.types.map((type) => `${type.name} (${[type.under.length > 0 ? `under ${type.under.join(" or ")}` : "", type.top ? "at the top" : ""].filter(Boolean).join(", or ")})`);
+	const lines = [`Types: ${types.join("; ")}.`, `States: ${scheme.states.map((state) => (state.name === state.kind ? state.name : `${state.name} (${state.kind})`)).join(", ")}.`];
+	if (scheme.fields.length > 0) lines.push(`Fields: ${scheme.fields.map((field) => `${field.name} (${field.type === "choice" ? (field.choices ?? []).join("|") : field.type}${field.on ? `, on ${field.on.join(", ")}` : ""}${field.required ? ", required" : ""})`).join("; ")}.`);
+	return lines.join("\n");
+}
+
+/** One issue on one line. */
+export function issueLine(issue: Issue, state?: Pick<WorkState, "sessions">): string {
+	const on = (state?.sessions ?? []).filter((session) => session.issue === issue.number).map((session) => `${session.owner}'s "${session.name}" ${session.state}`);
+	const fields = Object.entries(issue.fields).map(([name, value]) => `${name}=${value}`);
+	return [`#${issue.number}`, issue.type, issue.title, `[${issue.state}]`, issue.assignee ? `@${issue.assignee}` : "", issue.labels.map((label) => `+${label}`).join(" "), fields.join(" "), on.length > 0 ? `<- ${on.join(", ")}` : ""].filter(Boolean).join("  ");
+}
+
+/**
+ * The work as an indented tree, one issue a line, with who is on each. `under` shows one issue
+ * and what is below it; `open` leaves out what is finished, unless something unfinished is under it.
+ */
+export function formatWork(state: Pick<WorkState, "issues" | "scheme" | "sessions">, options: { under?: number; open?: boolean } = {}): string {
+	const byNumber = new Map(state.issues.map((issue) => [issue.number, issue]));
+	const kids = new Map<number | undefined, Issue[]>();
+	for (const issue of state.issues) {
+		const parent = issue.parent !== undefined && byNumber.has(issue.parent) ? issue.parent : undefined;
+		kids.set(parent, [...(kids.get(parent) ?? []), issue]);
+	}
+	const lines: string[] = [];
+	const shown = (issue: Issue): boolean => !options.open || !isClosed(state.scheme, issue) || (kids.get(issue.number) ?? []).some(shown);
+	const walk = (issue: Issue, depth: number): void => {
+		if (!shown(issue)) return;
+		const why = misfit(state.scheme, issue, byNumber);
+		lines.push(`${"  ".repeat(depth)}${issueLine(issue, state)}${why ? `  (misplaced: ${why})` : ""}`);
+		for (const child of kids.get(issue.number) ?? []) walk(child, depth + 1);
+	};
+	const start = options.under !== undefined ? byNumber.get(options.under) : undefined;
+	if (options.under !== undefined && !start) return `There is no issue #${options.under}.`;
+	if (start) walk(start, 0);
+	else for (const issue of kids.get(undefined) ?? []) walk(issue, 0);
+	return lines.length > 0 ? lines.join("\n") : options.open ? "No unfinished work." : "There is no work yet.";
 }

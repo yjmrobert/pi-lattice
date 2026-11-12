@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /** `pi-lattice`: the lattice host, as a background daemon or with a line-based interface. */
-import { homedir, userInfo } from "node:os";
+import { homedir, hostname, userInfo } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { formatJoinCode, localHosts } from "@pi-lattice/collab";
 import { latticeHome } from "@pi-lattice/protocol";
 import { parseArgs, USAGE } from "./args.ts";
 import { chooseName, chosenName, joinNetwork, runDaemon, startNetwork } from "./daemon.ts";
+import { WorkServer } from "@pi-lattice/server";
 import { runPlain } from "./plain.ts";
 
 async function main(): Promise<number> {
@@ -18,6 +19,18 @@ async function main(): Promise<number> {
 	}
 	if (options.help) {
 		process.stdout.write(USAGE);
+		return 0;
+	}
+	if (options.command === "server") {
+		const home = latticeHome(process.env, homedir());
+		const server = new WorkServer({ file: resolve(options.data ?? join(home, "server", "work.db")), port: options.port ?? 7420 });
+		const port = await server.start();
+		const url = (options.url ?? `http://${hostname()}:${port}`).replace(/\/+$/, "");
+		process.stdout.write(`The server is running. Teammates join with:\n\n  /lattice server ${url}/#${server.tracker.code}\n\nAnyone with that address can read and change everything on it. It speaks plain HTTP: put it behind TLS before it leaves a network you trust.\n`);
+		await new Promise<void>((done) => {
+			for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => done());
+		});
+		await server.stop();
 		return 0;
 	}
 	if (options.command === "join" || options.command === "create") {

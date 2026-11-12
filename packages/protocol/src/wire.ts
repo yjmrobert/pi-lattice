@@ -6,6 +6,7 @@ import type { HostAssignment } from "./assignment.ts";
 import type { Envelope } from "./envelope.ts";
 import type { InboundState } from "./inbound.ts";
 import type { NodeMeta, PeerInfo, WorkspaceMode } from "./node.ts";
+import type { WorkRequest, WorkResult, WorkState } from "./work.ts";
 
 /** `ui` is a person's own Pi, showing the tree and driving the host; the others belong to one node's session. */
 export type Channel = "a2a" | "graph" | "collab" | "ui";
@@ -34,6 +35,8 @@ export interface SpawnSpec {
 	 * the items below that session. This is how a tree of planned work is laid out by one session.
 	 */
 	under?: string;
+	/** The issue it is on, on the team's server. Without one it is on its parent's. */
+	issue?: number;
 }
 
 export interface RequestMap {
@@ -41,6 +44,8 @@ export interface RequestMap {
 	peers: { params: Record<string, never>; result: { peers: PeerInfo[] } };
 	spawn: { params: { spec: SpawnSpec }; result: { node: NodeMeta } };
 	list: { params: Record<string, never>; result: { self: string; nodes: NodeMeta[] } };
+	/** Read or change the team's work on the server. */
+	work: { params: { request: WorkRequest }; result: WorkResult };
 	/** Control requests from a person's Pi. Only accepted on the `ui` channel. */
 	ui: { params: { method: string; params: unknown }; result: unknown };
 }
@@ -119,6 +124,8 @@ export interface UiState {
 	 * does (it placed something there, wrote to it, or heard from it), never asked of it. Left out once stale.
 	 */
 	focus?: Record<string, { nodeId: string; at: number }>;
+	/** Present when this person has joined a server: the team's work, as last heard from it. */
+	work?: WorkState;
 	/** Present when this person is in a network: the tree is shared with its other members, peer to peer. */
 	sharing: null | {
 		network: string;
@@ -167,6 +174,10 @@ export interface UiApi {
 	 * Asking: `ask <node>`, `withdraw <node>`, `approve <node> <person>`, `decline <node> <person>`.
 	 */
 	sharing: { params: { action: string; args: string[] }; result: { text: string } };
+	/** Read or change the team's work. `nodeId` names the session meant by `on`. */
+	work: { params: { request: WorkRequest }; result: WorkResult };
+	/** The team's server: `join <address> [name]`, `leave`, `status`. Returns text to show. */
+	server: { params: { action: string; args: string[] }; result: { text: string } };
 	shutdown: { params: Record<string, never>; result: Record<string, never> };
 	rename: { params: { nodeId: string; name: string }; result: { node: NodeMeta } };
 	/** Hide a session and everything under it from the tree, or bring them back. Nothing is deleted. */

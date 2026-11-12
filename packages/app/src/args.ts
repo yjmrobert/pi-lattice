@@ -2,7 +2,7 @@
 
 export interface CliOptions {
 	/** `daemon`: the background host a person's Pi talks to. `plain`: a line-based interface, for scripting. */
-	command: "plain" | "daemon" | "join" | "create";
+	command: "plain" | "daemon" | "join" | "create" | "server";
 	/** `join`: the code. `create`: the network's name. */
 	subject: string | undefined;
 	cwd: string;
@@ -20,6 +20,12 @@ export interface CliOptions {
 	/** Daemon only: seconds without a terminal or work before exiting. 0 never exits. */
 	idleExit: number | undefined;
 	help: boolean;
+	/** `server`: the port to listen on. */
+	port: number | undefined;
+	/** `server`: the file its work is kept in. */
+	data: string | undefined;
+	/** `server`: the address teammates reach it at, when that is not this machine's name and port. */
+	url: string | undefined;
 	/** Everything after `--`, passed to every Pi session (for example `--model ...`). */
 	piArgs: string[];
 }
@@ -32,6 +38,9 @@ pi in a project and run /lattice. Pi starts the host in the background as needed
   pi-lattice join <code>    Join a teammate's network, once for every project on this machine.
   pi-lattice create [name]  Start a network and print the code teammates join with.
                             Both take --as <name>: the name your teammates see you as.
+  pi-lattice server   Run a team's server: one always-on place for its work. Prints the address
+                      teammates join with. Takes --port (default 7420), --data <file> (default
+                      <lattice home>/server/work.db) and --url <address teammates reach it at>.
   pi-lattice daemon   Run the background host for a project in the foreground.
   pi-lattice          A line-based interface to a host, for scripting and debugging.
 
@@ -56,7 +65,7 @@ Arguments after -- are passed to every Pi session, for example -- --model sonnet
 export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 	const options: CliOptions = {
 		command: "plain", subject: undefined, cwd, stateDir: undefined, name: undefined, kind: undefined, fragments: [], brief: undefined,
-		join: undefined, advertise: undefined, as: undefined, idleExit: undefined, help: false, piArgs: [],
+		join: undefined, advertise: undefined, as: undefined, idleExit: undefined, help: false, port: undefined, data: undefined, url: undefined, piArgs: [],
 	};
 	const value = (flag: string, index: number): string => {
 		const next = argv[index + 1];
@@ -69,7 +78,13 @@ export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 			options.piArgs = argv.slice(i + 1);
 			break;
 		}
-		if (i === 0 && arg === "daemon") options.command = "daemon";
+		if (i === 0 && (arg === "daemon" || arg === "server")) options.command = arg;
+		else if (arg === "--port") {
+			const port = Number(value(arg, i++));
+			if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port needs a port number");
+			options.port = port;
+		} else if (arg === "--data") options.data = value(arg, i++);
+		else if (arg === "--url") options.url = value(arg, i++);
 		else if (i === 0 && (arg === "join" || arg === "create")) {
 			options.command = arg;
 			const next = argv[1];

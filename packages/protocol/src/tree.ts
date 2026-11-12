@@ -37,6 +37,13 @@ export function waitingFor(nodes: readonly NodeMeta[], node: Pick<NodeMeta, "wai
 	return (node.waitsOn ?? []).flatMap((id) => nodes.filter((candidate) => candidate.id === id && !candidate.done));
 }
 
+const PLUMBING = new Set(["protocol", "reporting"]);
+
+/** What a session is there to do: the last role it was given that is about the work, or its name. */
+export function roleOf(node: Pick<NodeMeta, "fragments" | "name">): string {
+	return node.fragments.filter((name) => !PLUMBING.has(name)).at(-1) ?? node.name;
+}
+
 /** Whether a node is planned work that nobody has been put on yet. */
 export const isPlanned = (node: Pick<NodeMeta, "planned">): boolean => node.planned === true;
 
