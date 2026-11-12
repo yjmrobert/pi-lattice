@@ -21,7 +21,7 @@ const ALLOWED: Record<string, string[]> = {
 	collab: ["protocol"],
 	host: ["protocol"],
 	// The composition root: the only package allowed to know about more than the contracts.
-	app: ["protocol", "host", "collab", "a2a", "roles", "graph", "pane"],
+	app: ["protocol", "host", "collab", "a2a", "roles", "graph", "pane", "canopy"],
 };
 
 /** Which packages may depend on Pi itself. The contracts and the sharing library must not. */
@@ -106,7 +106,7 @@ describe("package seams", () => {
 
 	it("lets session extensions talk only through the typed event bus, not process state", () => {
 		// Writing to the environment was how the pane once told the other extensions who they were.
-		for (const name of ["a2a", "roles", "graph", "pane"]) {
+		for (const name of ["a2a", "roles", "graph", "pane", "canopy"]) {
 			for (const file of sources(join(root, "packages", name, "src"))) {
 				const text = readFileSync(file, "utf8");
 				// An assignment, not a comparison: "=" that is not part of "==" or "===".

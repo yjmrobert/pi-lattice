@@ -42,6 +42,7 @@
     "extensions": [
       "./packages/app/src/launcher.ts",
       "./packages/pane/src/extension.ts",
+      "./packages/canopy/src/extension.ts",
       "./packages/a2a/src/extension.ts",
       "./packages/roles/src/extension.ts",
       "./packages/graph/src/extension.ts"

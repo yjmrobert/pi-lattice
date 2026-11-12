@@ -66,7 +66,7 @@ function handKey(at: ReturnType<typeof cursorSession>): readonly [key: string, d
 
 /** Every key the pane takes, for the help screen. */
 export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyArray<readonly [key: string, does: string]>]> = [
-	["Moving", [["↑ ↓  j k", "move through what is waiting, then the sessions"], ["1-9", "jump to a waiting item"], ["esc  alt+l", "give the keyboard back to Pi"], [",", "settings"], ["?", "show or hide this list"]]],
+	["Moving", [["↑ ↓  j k", "move through what is waiting, then the sessions"], ["1-9", "jump to a waiting item"], ["esc  alt+l", "give the keyboard back to Pi"], ["c", "the canopy: all the work as a tree"], [",", "settings"], ["?", "show or hide this list"]]],
 	["A session", [["enter", "open it in this terminal"], ["-", "go back to the session you were in before"], ["n", "create a session under it"], ["r", "rename it"], ["s", "stop what its agent is doing (press twice); start one that is waiting on others"], ["d", "archive it and everything under it"], ["o", "offer it to a teammate; before that, create or join a network"], ["t", "ask a teammate for theirs, or take the request back; in a repository you do not have, it is cloned first"]]],
 	["Something waiting", [["y  n", "answer a yes/no question"], ["a  x", "approve or reject a message; accept or decline an offer; hand over or keep a session someone asks for"], ["enter", "answer or review it with Pi's prompts"]]],
 	["A sleeping repository", [["enter", "start its host"]]],
@@ -129,6 +129,7 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 	if (view.help) return key === "escape" || key === "?" ? [{ do: "help" }] : [];
 	if (key === "?") return [{ do: "help" }];
 	if (key === ",") return [{ do: "settings" }];
+	if (key === "c") return [{ do: "command", text: `/lattice canopy${cursorNode(view) ? ` ${cursorNode(view)}` : ""}` }];
 	if (key === "up" || key === "k") return step(-1);
 	if (key === "down" || key === "j") return step(1);
 	if (key === "escape") return [{ do: "leave" }];

@@ -21,7 +21,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dev = join(root, ".dev");
 const cli = join(root, "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js");
 const extension = (path) => join(root, path);
-const foreground = ["packages/app/src/launcher.ts", "packages/pane/src/extension.ts", "packages/a2a/src/extension.ts", "packages/roles/src/extension.ts", "packages/graph/src/extension.ts"].map(extension);
+const foreground = ["packages/app/src/launcher.ts", "packages/pane/src/extension.ts", "packages/canopy/src/extension.ts", "packages/a2a/src/extension.ts", "packages/roles/src/extension.ts", "packages/graph/src/extension.ts"].map(extension);
 const background = ["packages/a2a", "packages/roles", "packages/graph"].map(extension);
 const faux = extension("test/support/faux-provider.ts");
 

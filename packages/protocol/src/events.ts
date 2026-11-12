@@ -5,6 +5,7 @@
 import type { HostAssignment } from "./assignment.ts";
 import type { Envelope } from "./envelope.ts";
 import type { InboundState } from "./inbound.ts";
+import type { UiState } from "./wire.ts";
 
 export interface LatticeEvents {
 	/**
@@ -54,6 +55,14 @@ export interface LatticeEvents {
 	 * to its own environment and defaults.
 	 */
 	"lattice:settings:query": { values?: Record<string, unknown> };
+	/**
+	 * Ask for every tree this terminal can see. The asker leaves `trees` out; whoever holds the
+	 * connections to the hosts fills it in, with the session open here. Asked again for each look,
+	 * so the answer is whatever is known now.
+	 */
+	"lattice:trees:query": { trees?: Array<{ key: string; repo: string; state: UiState }>; current?: string };
+	/** Ask for the canopy to be shown, on a session when one is named. Whoever can show it sets `claimed`. */
+	"lattice:canopy:open": { nodeId?: string; claimed: boolean };
 	/** Ask the roles extension to replace the applied fragments. */
 	"lattice:roles:set": { fragments: string[] };
 }

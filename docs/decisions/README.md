@@ -26,5 +26,6 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0019 | Everyone's sessions in every repository, watched while looked at, and taken with a clone | accepted |
 | 0020 | One line to join, and a name you choose | accepted |
 | 0021 | A session that waits on others | accepted |
-| 0022 | The canopy: what Pi lets an extension do | found out; nothing built on it yet |
+| 0022 | The canopy: what Pi lets an extension do | found out; 0024 is built on it |
 | 0023 | Planned work, and what a session is working on | accepted |
+| 0024 | The canopy | first part built |

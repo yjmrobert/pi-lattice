@@ -49,6 +49,7 @@ Two kinds of thing, kept separate.
 | `roles` | Extension plus markdown fragments. `/role`, `apply_role`, prompt-section injection. | protocol |
 | `graph` | Extension. `spawn_session`, `list_sessions`, `/children`. Needs a host to spawn. | protocol |
 | `pane` | Extension. The tree as a left pane inside Pi; `/lattice`; opens a session here by taking it over from the host. | protocol |
+| `canopy` | Extension. All the work as a tree that grows upward, full screen: who owns what, which agent is on it. Asks the pane for what to draw over the event bus. | protocol |
 | `host` | Library. Store, supervisor, broker, socket API, foreground handover. | protocol |
 | `collab` | Library. Networks, identities, finding teammates, an encrypted peer channel, signed ownership logs, cross-owner mail, handoff. | protocol |
 | `app` | The composition root. The Pi package manifest, the launcher extension, the background host wired to sharing, the command line. | all of the above |

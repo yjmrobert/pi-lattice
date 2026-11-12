@@ -1,6 +1,6 @@
 # 0022 The canopy: what Pi lets an extension do
 
-The first step of [the canopy plan](../design/canopy-plan.md). Status: found out, nothing built on it yet.
+The first step of [the canopy plan](../design/canopy-plan.md). Status: found out; [0024](0024-the-canopy.md) is built on it.
 
 The canopy is a full-screen view that redraws about twelve times a second and wants every key. Before building it, `spikes/canopy/` asked real Pi, in a pseudo-terminal, whether an extension can do that. `npm run spike:canopy` runs it again and rewrites `spikes/canopy/report.json`.
 

@@ -2,7 +2,7 @@
 
 A full-screen view of the work of a network, drawn as a tree that grows upward: the network at the root, then epics, features and stories, with tasks as leaves. The mockup is [`overview/canopy.html`](overview/canopy.html). This plan says how to build it, what it must show without ambiguity, which animations it has and why, and what happens at the edges.
 
-Status: a plan. Nothing here is built. The claims about Pi marked **to verify** are the first phase.
+Status: phases 0 to 2 are built ([0022](../decisions/0022-canopy-in-pi.md), [0023](../decisions/0023-planned-work.md), [0024](../decisions/0024-the-canopy.md)), with the people bar, spotlight, roster, tethers, panning and folding from later phases. Not built: animations of events, answering in place, zoom, the map, find, follow, the fallbacks for poorer terminals, the network phase and pixels.
 
 ## What the screen must answer at a glance
 

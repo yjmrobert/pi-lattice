@@ -28,6 +28,7 @@
     "extensions": [
       "./src/launcher.ts",
       "./node_modules/@pi-lattice/pane/src/extension.ts",
+      "./node_modules/@pi-lattice/canopy/src/extension.ts",
       "./node_modules/@pi-lattice/a2a/src/extension.ts",
       "./node_modules/@pi-lattice/roles/src/extension.ts",
       "./node_modules/@pi-lattice/graph/src/extension.ts"
@@ -35,6 +36,7 @@
   },
   "dependencies": {
     "@pi-lattice/a2a": "0.1.0",
+    "@pi-lattice/canopy": "0.1.0",
     "@pi-lattice/collab": "0.1.0",
     "@pi-lattice/graph": "0.1.0",
     "@pi-lattice/host": "0.1.0",
@@ -44,6 +46,7 @@
   },
   "bundledDependencies": [
     "@pi-lattice/a2a",
+    "@pi-lattice/canopy",
     "@pi-lattice/collab",
     "@pi-lattice/graph",
     "@pi-lattice/host",

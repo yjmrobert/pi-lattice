@@ -34,7 +34,7 @@ const fauxArgs = ["-e", extensionPaths.faux, "--provider", "lattice-faux", "--mo
 const open = (options: { cols?: number; rows?: number } = {}): PiTui => {
 	tui = PiTui.start(sandbox, {
 		...options,
-		extensions: [extensionPaths.launcher, extensionPaths.pane, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
+		extensions: [extensionPaths.launcher, extensionPaths.pane, extensionPaths.canopy, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
 		env: {
 			LATTICE_STATE_DIR: stateDir,
 			LATTICE_PI_COMMAND: JSON.stringify([process.execPath, piCli]),
@@ -162,6 +162,41 @@ describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 		await pi.see(/└ . payments/);
 		// The roles it was not given are the ones the settings say every child gets.
 		await pi.see(/roles\s+protocol · reporting · worker/);
+	}, 60_000);
+
+	it("opens the canopy from the pane with c: the whole screen, the work as a tree, and back with escape", async () => {
+		const pi = await withTree({ cols: 150, rows: 40 });
+		pi.press(KEY.altL);
+		await pi.see(/owner\s+you/);
+		pi.press("n");
+		await pi.see("New session under work");
+		pi.press("payments", KEY.tab, KEY.tab, KEY.tab, KEY.tab, KEY.tab);
+		await pi.see("what it should do; it sees only this");
+		pi.press("say the word heliotrope");
+		await pi.see("say the word heliotrope▏");
+		pi.press("\x13"); // ctrl+s
+		// The form draws the session it will make, so wait for what only the made one shows.
+		await pi.see(/roles\s+protocol · reporting · worker/);
+
+		pi.press("c");
+		// The canopy owns every row: the people on the first, the path on the second, the keys on the last.
+		const canopy = await pi.see("next that needs someone");
+		expect(canopy[0]).toMatch(/^ ◆ work\s+1 @tester/);
+		expect(canopy[1]).toMatch(/^ work ▸ /);
+		expect(canopy.join("\n")).toMatch(/◉ work/);
+		expect(canopy.join("\n")).toMatch(/payments/);
+		expect(canopy.join("\n")).toContain("SITTING HERE");
+		expect(canopy.join("\n")).not.toContain("alt+l");
+		// Its keys are its own: this moves the selection, and nothing is typed into Pi.
+		pi.press(KEY.up);
+		await pi.see(/^ work ▸ work ▸ payments/m);
+
+		pi.press(KEY.escape);
+		const back = await pi.see("alt+l sessions");
+		expect(back.join("\n")).not.toContain("SITTING HERE");
+		expect(back.join("\n")).toContain('Created "payments"');
+		await pi.submit("still here?");
+		await pi.see("echo[user] roles=[lattice-role-protocol] still here?");
 	}, 60_000);
 
 	it("in a narrow terminal, puts the sessions in two rows above the editor and opens the pane on alt+l", async () => {

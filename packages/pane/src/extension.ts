@@ -672,6 +672,13 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		return { sessionFile: result.sessionFile, wasWorking: result.wasWorking };
 	};
 
+	// The canopy asks what there is to draw; the connections to the hosts are ours.
+	onEvent(pi.events, "lattice:trees:query", (request) => {
+		if (shared.pi !== pi) return;
+		request.trees = [...shared.links.values()].flatMap((link) => (link.state ? [{ key: link.stateDir, repo: repoLabel(link.state, link.stateDir), state: link.state }] : []));
+		if (shared.current) request.current = shared.current;
+	});
+
 	// The other extensions ask what the settings are; the files are ours to read.
 	onEvent(pi.events, "lattice:settings:query", (request) => {
 		if (shared.pi === pi) request.values = { ...settings().settings.values };
@@ -1598,6 +1605,19 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		{ name: "new", usage: "new [session]", does: "create a child session", run: (ctx, arg) => create(ctx, arg) },
 		{ name: "rename", usage: "rename <session> [name]", does: "rename a session", run: (ctx, arg) => rename(ctx, arg) },
 		{ name: "interrupt", usage: "interrupt <session>", does: "stop what a session's agent is doing", run: (ctx, arg) => interrupt(ctx, arg) },
+		{
+			name: "canopy", usage: "canopy [session]", does: "show all the work as a tree: who owns what, and which agent is on it",
+			run: async (ctx, arg) => {
+				await refresh();
+				const request = { claimed: false, ...(arg.trim() ? { nodeId: arg.trim() } : {}) };
+				// The canopy takes the whole screen and the keyboard with it.
+				shared.focused = false;
+				shared.help = false;
+				shared.screen = undefined;
+				emitEvent(pi.events, "lattice:canopy:open", request);
+				if (!request.claimed) ctx.ui.notify("The canopy is not installed here. It comes with the pi-lattice bundle.", "warning");
+			},
+		},
 		{
 			name: "start", usage: "start <session>", does: "start a session that is waiting on others, without waiting for them",
 			run: async (ctx, arg) => {
