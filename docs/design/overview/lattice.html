@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lattice Overview 4 Lattice</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="shared.css">
+<style>
+/* Layout: a literal lattice. Leads down, repositories across; where they cross sits the work, one glyph per session. It is all text, so Pi could draw it as it is. */
+.grid { display: grid; grid-template-columns: 15ch repeat(5, minmax(19ch, 1fr)); min-width: 880px; }
+.cell { position: relative; border-left: 1px dashed var(--t-edge); border-top: 1px dashed var(--t-edge); padding: 9px 10px; min-height: 76px; display: flex; flex-direction: column; gap: 8px; }
+.cell::before { content: "┼"; position: absolute; left: -.55ch; top: -.8em; color: var(--t-dim); background: var(--t-bg); line-height: 1.45; }
+.cell.head { min-height: 0; border-top: 0; } .cell.head::before, .cell.lead::before { content: none; }
+.cell.lead { border-left: 0; } .cell.foot { min-height: 0; color: var(--t-dim); }
+.cell.empty { color: var(--t-edge); justify-content: center; align-items: center; }
+.chip { display: block; width: 100%; padding: 3px 6px; margin: -3px -6px; border-radius: 3px; }
+.chip:hover, .chip.on { background: var(--t-sel); } .chip.hot { box-shadow: inset 0 0 0 1px var(--t-yellow); }
+.threads button { display: block; width: 100%; padding: 2px 6px; margin: 0 -6px; border-radius: 3px; }
+.threads button:hover { background: var(--t-sel); }
+</style>
+</head>
+<body>
+<div class="term">
+  <header id="top"></header>
+  <div class="stage">
+    <section class="view">
+      <div class="scroll"><div class="grid" id="grid"></div></div>
+      <div class="threads"><h2>Threads across the lattice <span class="td">point at one to see both ends</span></h2><div id="threads"></div></div>
+    </section>
+    <aside class="side">
+      <div><h2>Inspecting</h2><div class="box sel" id="insp"></div></div>
+      <div><h2>Needs someone <span class="td" id="nn"></span></h2><div class="rows" id="needs"></div></div>
+    </aside>
+  </div>
+  <footer id="keys"></footer>
+</div>
+<script src="shared.js"></script>
+<script>
+chrome(4, [['←↑↓→', 'move'], ['enter', 'open'], ['f', 'only what is stuck'], ['o', 'offer'], ['t', 'ask for it']]);
+const sum = ss => { const r = ss.reduce((n, s) => n + count(s, 'run'), 0), a = ss.reduce((n, s) => n + count(s, 'ask'), 0), w = ss.reduce((n, s) => n + count(s, 'wait'), 0);
+  return [r && `<span class="tg">${g('run')}${r}</span>`, a && `<span class="ty">●${a}</span>`, w && `<span class="tb">⧗${w}</span>`].filter(Boolean).join(' ') || '<span class="td">quiet</span>'; };
+let h = '<div class="cell head lead"></div>' + L.repos.map((r, i) => `<div class="cell head"><span><span class="tw">${i ? '◇' : '◆'} ${r}</span></span></div>`).join('');
+L.leads.forEach(l => {
+  const mine = L.streams.filter(s => s.owner === l.id);
+  h += `<div class="cell lead"><div><span class="tw" style="color:${l.on ? l.c : 'var(--t-dim)'}">${l.on ? '' : '○ '}@${l.id}</span><br><span class="td">${l.on ? l.area : 'offline ' + l.seen}</span><br>${sum(mine)}</div></div>`;
+  L.repos.forEach(r => {
+    const here = mine.filter(s => s.repo === r), run = here.reduce((n, s) => n + count(s, 'run'), 0);
+    h += here.length ? `<div class="cell" style="background:${l.c}${['0a', '14', '1f'][Math.min(run, 2)]}">` + here.map(s =>
+      `<button class="chip" data-id="${s.id}"><span class="tw">${s.id}</span>${s.risk === 'high' ? ' <span class="tr">▲</span>' : ''}${s.offer ? ' <span class="tm">⇄</span>' : ''}<br>${s.kids.map(k => g(k[1])).join('')} <span class="td">${s.phase}</span></button>`).join('') + '</div>'
+      : '<div class="cell empty">·</div>';
+  });
+});
+h += '<div class="cell lead foot"></div>' + L.repos.map(r => `<div class="cell foot"><span>${sum(L.streams.filter(s => s.repo === r))}</span></div>`).join('');
+$('#grid').innerHTML = h;
+
+const chip = id => $(`.chip[data-id="${id}"]`);
+$('#threads').innerHTML = L.streams.flatMap(s => (s.waits || []).map(w =>
+  `<button data-a="${s.id}" data-b="${w.on}"><span class="${w.met ? 'tg' : 'ty'}">${w.met ? '✓' : '⧗'}</span> ${s.repo}/<span class="tw">${s.id}</span> ▸ ${w.by} <span class="td">@${s.owner} ${w.met ? 'waited on' : 'waits on'}</span> ${S(w.on).repo}/<span class="tw">${w.on}</span> ▸ ${w.what} <span class="td">@${S(w.on).owner}</span></button>`)).join('') +
+  `<button data-a="search-reindex" data-b="checkout-v2"><span class="tm">⇄</span> shop/<span class="tw">search-reindex</span> <span class="td">@mira offers it to</span> @yan<span class="td">, who already works in shop</span></button>`;
+document.querySelectorAll('#threads button').forEach(b => {
+  const set = v => [b.dataset.a, b.dataset.b].forEach(id => chip(id).classList.toggle('hot', v));
+  b.onmouseenter = b.onfocus = () => set(true); b.onmouseleave = b.onblur = () => set(false); b.onclick = () => select(b.dataset.a);
+});
+function select(id) { document.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c.dataset.id === id)); $('#insp').innerHTML = inspect(id); }
+document.querySelectorAll('.chip').forEach(c => c.onclick = () => select(c.dataset.id)); select('sso-rollout');
+$('#nn').textContent = L.needs.length;
+$('#needs').innerHTML = L.needs.map(n => `<div class="item"><span class="${n.t === '⇄' ? 'tm' : 'ty'}">${n.t}</span><div><span style="color:${P(n.who).c}">@${n.who}</span> <span class="td">${n.from} · ${n.age}</span><br>${esc(n.text)}</div></div>`).join('');
+</script>
+</body>
+</html>

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lattice Overview 3 Timeline</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="shared.css">
+<style>
+/* Layout: time runs left to right with today as a fixed line. One lane per lead, one bar per workstream; what is behind the line happened, what is ahead is a forecast. */
+.tl { position: relative; min-width: 760px; --lab: 178px; }
+.bg { position: absolute; left: var(--lab); right: 0; top: 0; bottom: 0; pointer-events: none; }
+.bg i { position: absolute; top: 22px; bottom: 0; }
+.bg .we { background: rgba(255, 255, 255, .025); }
+.bg .now { width: 1px; background: var(--t-mag); top: 0; }
+.bg .now::after { content: "today"; position: absolute; top: 0; left: 5px; color: var(--t-mag); font-style: normal; }
+.bg .tick { font-style: normal; color: var(--t-dim); top: 0; bottom: auto; white-space: nowrap; }
+.bg .link { width: 0; border-left: 1px dashed var(--t-yellow); }
+.bg .link.met { border-color: var(--t-green); opacity: .5; }
+.bg .link b { position: absolute; left: -4px; font-weight: 400; color: var(--t-yellow); line-height: 1; }
+.bg .link.met b { color: var(--t-green); }
+.lane { padding: 6px 0 2px; border-top: 1px solid var(--t-edge); margin-top: 4px; }
+.axis { height: 22px; }
+.row { display: grid; grid-template-columns: var(--lab) minmax(0, 1fr); align-items: center; height: 30px; width: 100%; border-radius: 3px; }
+.row:hover, .row.on { background: var(--t-sel); }
+.row .name { padding-left: 2ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.track { position: relative; height: 100%; }
+.bar { position: absolute; top: 7px; height: 16px; border-radius: 2px; overflow: hidden; border: 1px solid var(--c); }
+.bar .past { position: absolute; inset: 0 auto 0 0; background: var(--c); opacity: .5; }
+.bar .fut { position: absolute; inset: 0 0 0 auto; background: repeating-linear-gradient(135deg, transparent 0 4px, var(--c) 4px 5px); opacity: .45; }
+.end { position: absolute; top: 5px; padding-left: 8px; white-space: nowrap; }
+.next { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 24px; }
+</style>
+</head>
+<body>
+<div class="term">
+  <header id="top"></header>
+  <div class="stage">
+    <section class="view">
+      <div class="scroll"><div class="tl" id="tl"><div class="axis"></div></div></div>
+      <div><h2>Landing next <span class="td">and what stands in the way</span></h2><div class="next" id="next"></div></div>
+    </section>
+    <aside class="side"><div><h2>Inspecting</h2><div class="box sel" id="insp"></div></div>
+      <div><h2>Reading it</h2><pre class="td"><span class="tw">▆▆▆</span> done so far   <span class="tw">▨▨▨</span> forecast
+<span class="ty">┆</span> a session starts when another ends
+<span class="tg">┆</span> that wait is over
+<span class="tr">▲</span> high risk: the forecast is soft</pre></div></aside>
+  </div>
+  <footer id="keys"></footer>
+</div>
+<script src="shared.js"></script>
+<script>
+chrome(3, [['↑↓', 'workstream'], ['←→', 'scroll time'], ['w', 'week / month'], ['enter', 'open'], ['m', 'message the lead']]);
+const D0 = -12, N = 26, pct = d => (d - D0) / N * 100, tl = $('#tl');
+L.leads.forEach(l => {
+  const mine = L.streams.filter(s => s.owner === l.id), run = mine.reduce((n, s) => n + count(s, 'run'), 0), ask = L.needs.filter(n => n.who === l.id).length;
+  let h = `<div class="lane"><span style="color:${l.c}" class="tw">@${l.id}</span> <span class="td">${l.area}${l.on ? '' : ' · offline ' + l.seen}</span>  ${run ? `<span class="tg">${g('run')}${run}</span> ` : ''}${ask ? `<span class="ty">●${ask}</span>` : ''}</div>`;
+  mine.forEach(s => {
+    const a = pct(s.start), b = pct(s.end + 1), now = pct(.5), past = Math.max(0, Math.min(100, (now - a) / (b - a) * 100));
+    h += `<button class="row" data-id="${s.id}" style="--c:${l.c}"><span class="name">${s.id}${s.risk === 'high' ? ' <span class="tr">▲</span>' : ''}</span><span class="track">` +
+      `<span class="bar" style="left:${a}%;width:${b - a}%"><span class="past" style="width:${past}%"></span><span class="fut" style="width:${100 - past}%"></span></span>` +
+      `<span class="end" style="left:${b}%"><span class="td">${s.phase === 'landed' ? '✓ landed' : s.phase}</span></span></span></button>`;
+  });
+  tl.insertAdjacentHTML('beforeend', h);
+});
+const bg = document.createElement('div'); bg.className = 'bg'; tl.append(bg);
+for (let d = D0; d < D0 + N; d++) {
+  const wd = new Date(2026, 10, 11 + d).getDay();
+  if (wd === 0 || wd === 6) bg.insertAdjacentHTML('beforeend', `<i class="we" style="left:${pct(d)}%;width:${100 / N}%"></i>`);
+  if (wd === 1) bg.insertAdjacentHTML('beforeend', `<i class="tick" style="left:${pct(d)}%">${day(d).slice(4)}</i>`);
+}
+bg.insertAdjacentHTML('beforeend', `<i class="now" style="left:${pct(.5)}%"></i>`);
+function links() {
+  bg.querySelectorAll('.link').forEach(e => e.remove());
+  const mid = id => { const r = $(`[data-id="${id}"]`, tl); return r.offsetTop + r.offsetHeight / 2; };
+  L.streams.forEach(s => (s.waits || []).forEach(w => {
+    const y1 = mid(w.on), y2 = mid(s.id), top = Math.min(y1, y2), down = y2 > y1;
+    bg.insertAdjacentHTML('beforeend', `<i class="link${w.met ? ' met' : ''}" style="left:${pct(w.at + 1)}%;top:${top}px;bottom:auto;height:${Math.abs(y2 - y1)}px"><b style="${down ? 'bottom:-4px' : 'top:-4px'}">${down ? '▾' : '▴'}</b></i>`);
+  }));
+}
+links(); addEventListener('resize', links);
+function select(id) { tl.querySelectorAll('.row').forEach(r => r.classList.toggle('on', r.dataset.id === id)); $('#insp').innerHTML = inspect(id); }
+tl.querySelectorAll('.row').forEach(r => r.onclick = () => select(r.dataset.id)); select('checkout-v2');
+
+$('#next').innerHTML = L.streams.filter(s => s.phase !== 'landed').sort((a, b) => a.end - b.end).slice(0, 6).map(s => {
+  const n = L.needs.find(n => n.stream === s.id), w = (s.waits || []).find(w => !w.met);
+  const block = n ? `<span class="ty">${n.t}</span> an answer from @${n.who}` : w ? `<span class="tb">⧗</span> ${w.on} ▸ ${w.what}` : '<span class="tg">clear</span>';
+  return `<div class="item" style="grid-template-columns:10ch minmax(0,1fr)"><span class="${s.risk === 'high' ? 'tr' : 'td'}">${day(s.end)}</span><div><span class="tw">${s.id}</span> <span style="color:${P(s.owner).c}">@${s.owner}</span><small>${block}</small></div></div>`;
+}).join('');
+</script>
+</body>
+</html>

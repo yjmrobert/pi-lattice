@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lattice Overview 2 Orbits</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="shared.css">
+<style>
+/* Layout: one system per lead. A workstream orbits its owner, closer in as it nears landing; its sessions are moons. Lines between systems are what leads owe each other. */
+.orb { fill: none; stroke: #3a4458; stroke-dasharray: 2 5; }
+.dep { stroke: var(--t-yellow); stroke-width: 1.2; stroke-dasharray: 5 4; animation: flow 2.4s linear infinite; fill: none; }
+.dep.met { stroke: var(--t-green); opacity: .45; animation: none; }
+.offer { stroke: var(--t-mag); stroke-width: 1.4; stroke-dasharray: 2 5; animation: flow 1.4s linear infinite; fill: none; }
+.sel-ring { fill: none; stroke: var(--t-cyan); stroke-width: 1.2; }
+</style>
+</head>
+<body>
+<div class="term">
+  <header id="top"></header>
+  <div class="stage">
+    <section class="view"><svg id="g" viewBox="0 0 1000 680" role="img" aria-label="Each lead with the workstreams they own in orbit"></svg></section>
+    <aside class="side">
+      <div><h2>Between leads <span class="td">4</span></h2><div class="rows" id="btw"></div></div>
+      <div><h2>Inspecting</h2><div class="box sel" id="insp"></div></div>
+    </aside>
+  </div>
+  <footer id="keys"></footer>
+</div>
+<script src="shared.js"></script>
+<script>
+chrome(2, [['←→', 'lead'], ['↑↓', 'workstream'], ['enter', 'open'], ['o', 'offer'], ['t', 'ask for it'], ['m', 'message the lead']]);
+const svg = $('#g'), C = { yan: [262, 190], sam: [738, 185], mira: [716, 492], teo: [250, 495] }, R = { verify: 58, build: 98, brief: 138 };
+const A0 = { 'checkout-v2': -.5, 'pricing-migration': 2.7, 'invoice-export': .9, 'sso-rollout': .2, 'rate-limits': 1.9, 'search-reindex': 3.9, 'offline-cart': -1.1 };
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const links = E('g');
+
+L.leads.forEach(l => {
+  const [x, y] = C[l.id];
+  for (const p in R) svg.append(E('circle', { class: 'orb', cx: x, cy: y, r: R[p] }));
+  svg.append(E('circle', { cx: x, cy: y, r: 21, fill: l.c, opacity: l.on ? .16 : .05 }), E('circle', { cx: x, cy: y, r: 21, fill: 'none', stroke: l.on ? l.c : 'var(--t-dim)', 'stroke-dasharray': l.on ? '' : '3 3' }));
+  svg.append(E('text', { x, y: y + 4, 'text-anchor': 'middle', style: `fill:${l.on ? l.c : 'var(--t-dim)'};font-weight:700` }, '@' + l.id));
+  svg.append(E('text', { x, y: y + 36, 'text-anchor': 'middle', class: 'small dim' }, l.on ? l.area : 'offline ' + l.seen));
+  const landed = L.streams.filter(s => s.owner === l.id && s.phase === 'landed');
+  if (landed.length) svg.append(E('text', { x, y: y - 29, 'text-anchor': 'middle', class: 'small dim' }, '✓ ' + landed.map(s => s.id).join(' ')));
+});
+const [yx, yy] = C.yan; for (const p in R) svg.append(E('text', { x: yx, y: yy - R[p] - 4, 'text-anchor': 'middle', class: 'small dim' }, p));
+svg.append(links);
+
+const planets = L.streams.filter(s => s.phase !== 'landed').map(s => {
+  const o = P(s.owner), live = count(s, 'run') > 0, r = 5 + s.kids.length, grp = E('g', { 'data-id': s.id, tabindex: 0 });
+  const ring = E('circle', { class: 'sel-ring', r: r + 13, visibility: 'hidden' }), body = E('circle', { r, fill: o.c, 'fill-opacity': .22, stroke: o.c });
+  const moons = s.kids.map(k => E('circle', { r: 2.6, fill: GC[k[1]] }));
+  const label = E('text', { class: 'bright' }, s.id), meta = E('text', { class: 'small dim' }, s.repo + (s.risk === 'high' ? ' ▲' : ''));
+  if (s.risk === 'high') meta.setAttribute('style', 'fill:var(--t-red)');
+  grp.append(ring, body, ...moons, label, meta); svg.append(grp);
+  grp.onclick = () => select(s.id); grp.onkeydown = e => e.key === 'Enter' && select(s.id);
+  return { s, a: A0[s.id], w: live && o.on && !still ? .035 : 0, r, ring, body, moons, label, meta, x: 0, y: 0 };
+});
+const by = id => planets.find(p => p.s.id === id);
+const lines = [];
+L.streams.forEach(s => (s.waits || []).forEach(w => { const e = E('line', { class: 'dep' + (w.met ? ' met' : '') }); links.append(e); lines.push({ e, a: by(s.id), b: by(w.on) }); }));
+const off = E('path', { class: 'offer' }), offT = E('text', { class: 'small', style: 'fill:var(--t-mag)' }, '⇄ offered to you'); links.append(off, offT);
+
+function frame(t) {
+  const sec = t / 1000;
+  planets.forEach(p => {
+    const [cx, cy] = C[p.s.owner], a = p.a + p.w * sec, rr = R[p.s.phase];
+    p.x = cx + Math.cos(a) * rr; p.y = cy + Math.sin(a) * rr;
+    [p.ring, p.body].forEach(e => { e.setAttribute('cx', p.x); e.setAttribute('cy', p.y); });
+    p.moons.forEach((m, i) => { const ma = i / p.moons.length * 6.283 + (p.w ? sec * .5 : .4); m.setAttribute('cx', p.x + Math.cos(ma) * (p.r + 7)); m.setAttribute('cy', p.y + Math.sin(ma) * (p.r + 7)); });
+    const left = Math.cos(a) < 0, lx = p.x + (left ? -1 : 1) * (p.r + 14);
+    [p.label, p.meta].forEach((e, i) => { e.setAttribute('x', lx); e.setAttribute('y', p.y + (i ? 14 : 1)); e.setAttribute('text-anchor', left ? 'end' : 'start'); });
+  });
+  lines.forEach(l => { l.e.setAttribute('x1', l.a.x); l.e.setAttribute('y1', l.a.y); l.e.setAttribute('x2', l.b.x); l.e.setAttribute('y2', l.b.y); });
+  const o = by('search-reindex'), mx = (o.x + yx) / 2 - 50, my = (o.y + yy) / 2;
+  off.setAttribute('d', `M${o.x},${o.y} Q${mx},${my} ${yx},${yy + 22}`); offT.setAttribute('x', mx - 62); offT.setAttribute('y', my - 4);
+  if (!still) requestAnimationFrame(frame);
+}
+frame(0);
+
+function select(id) { planets.forEach(p => p.ring.setAttribute('visibility', p.s.id === id ? 'visible' : 'hidden')); $('#insp').innerHTML = inspect(id); }
+select('pricing-migration');
+$('#btw').innerHTML = L.between.map(b => `<div class="item"><span class="${b.c}">${b.g}</span><div><span style="color:${P(b.a).c}">@${b.a}</span>${b.a === b.b ? '' : ` <span class="td">→</span> <span style="color:${P(b.b).c}">@${b.b}</span>`}<br>${b.text}<small>${b.sub}</small></div></div>`).join('');
+</script>
+</body>
+</html>

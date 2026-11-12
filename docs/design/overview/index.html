@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="margin:0">
+<title>Lattice Overview Study</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+/* Layout: one reading column. Five screens, each introduced by the question it answers and a small drawing of its shape. Same tokens as the pane proposal. */
+:root {
+  --bg: #eceef2; --surface: #f8f9fb; --fg: #171a21; --muted: #596172; --line: #d2d7e0; --accent: #0b7f7a;
+  --t-bg: #0b0e14; --t-edge: #232936; --t-fg: #c6ccd9; --t-dim: #808a9e; --t-cyan: #5fd4d0; --t-mag: #e06bd0; --t-yellow: #e8b755; --t-green: #7fd18b; --t-violet: #c79bf2;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #090b0f; --surface: #12151b; --fg: #e4e8ef; --muted: #98a1b2; --line: #262c38; --accent: #5fd4d0; color-scheme: dark } }
+:root[data-theme="dark"] { --bg: #090b0f; --surface: #12151b; --fg: #e4e8ef; --muted: #98a1b2; --line: #262c38; --accent: #5fd4d0; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 400 16px/1.55 var(--sans); padding-block: 40px 72px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+main { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+h1 { font: 700 clamp(26px, 5vw, 38px)/1.1 var(--mono); letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+h2 { font: 700 20px/1.2 var(--mono); margin: 0; }
+p { margin: 0; max-width: 65ch; } .muted { color: var(--muted); }
+.eyebrow { font: 400 13px var(--mono); color: var(--accent); margin-bottom: 10px; }
+.list { display: flex; flex-direction: column; }
+.mock { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 12px 28px; padding: 24px 0; border-top: 1px solid var(--line); color: inherit; text-decoration: none; align-items: center; }
+.mock:hover h2, .mock:focus-visible h2 { color: var(--accent); } .mock:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.mock > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.q { font: 400 13px var(--mono); color: var(--accent); }
+.mock svg { width: 200px; height: 112px; background: var(--t-bg); border: 1px solid var(--t-edge); border-radius: 6px; display: block; }
+.go { font: 400 13px var(--mono); color: var(--muted); }
+@media (max-width: 560px) { .mock { grid-template-columns: minmax(0, 1fr); } }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th { text-align: left; font: 600 12px var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+th, td { padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tablewrap { overflow-x: auto; }
+code { font: 400 0.9em var(--mono); }
+</style>
+<main>
+<header>
+  <p class="eyebrow">pi-lattice · packages/pane · study</p>
+  <h1>The view from above</h1>
+  <p class="muted" style="margin-top:12px">Today the pane shows sessions: what each one is doing and what it needs from you. These five screens step back to the work itself, as a staff lead sees it next to other staff leads: who holds what, what waits on whom, and what lands when. All five draw the same invented network (four leads, five repositories, eight workstreams), so they can be compared directly. Click anything in a screen to inspect it; keys <code>1</code> to <code>5</code> switch between them.</p>
+</header>
+
+<div class="list">
+<a class="mock" href="dendrite.html">
+  <svg viewBox="0 0 200 112" aria-hidden="true"><g fill="none" stroke-width="1.2"><path d="M22,56 C60,56 60,18 100,18" stroke="#e8b755"/><path d="M22,56 C50,56 50,40 78,40" stroke="#5fd4d0"/><path d="M22,56 C70,56 70,62 130,62" stroke="#c79bf2"/><path d="M22,56 C50,56 50,84 78,84" stroke="#7aa7ff"/><path d="M22,56 C80,56 90,98 160,98" stroke="#5fd4d0"/><path d="M78,40 C60,40 82,18 100,18" stroke="#e8b755" stroke-dasharray="3 3"/></g><circle cx="22" cy="56" r="7" fill="#e06bd0"/><g fill="#c6ccd9"><circle cx="100" cy="18" r="3"/><circle cx="78" cy="40" r="3"/><circle cx="130" cy="62" r="3"/><circle cx="78" cy="84" r="3"/><circle cx="160" cy="98" r="3"/></g></svg>
+  <div><span class="q">1 · Where is the work flowing?</span><h2>Dendrite</h2><p>The network is a cell body. Each workstream is a branch that reaches as far as its phase, from brief to landed, and its sessions are the twigs. Pulses run along the branches that are moving. A health panel counts what finishes each day.</p><span class="go">dendrite.html →</span></div>
+</a>
+<a class="mock" href="orbit.html">
+  <svg viewBox="0 0 200 112" aria-hidden="true"><g fill="none" stroke="#232936" stroke-dasharray="1 3"><circle cx="58" cy="56" r="20"/><circle cx="58" cy="56" r="34"/><circle cx="145" cy="56" r="20"/><circle cx="145" cy="56" r="34"/></g><circle cx="58" cy="56" r="8" fill="#5fd4d0" fill-opacity=".3" stroke="#5fd4d0"/><circle cx="145" cy="56" r="8" fill="#e8b755" fill-opacity=".3" stroke="#e8b755"/><circle cx="88" cy="40" r="4" fill="#5fd4d0"/><circle cx="114" cy="42" r="4" fill="#e8b755"/><circle cx="160" cy="70" r="3" fill="#e8b755"/><path d="M88,40 L114,42" stroke="#e8b755" stroke-dasharray="3 3"/></svg>
+  <div><span class="q">2 · Who is holding what?</span><h2>Orbits</h2><p>One system per lead. A workstream orbits its owner, closer in as it nears landing, with its sessions as moons. The lines that cross between systems are the point: a wait, an offer, a question nobody is around to answer.</p><span class="go">orbit.html →</span></div>
+</a>
+<a class="mock" href="timeline.html">
+  <svg viewBox="0 0 200 112" aria-hidden="true"><g><rect x="20" y="18" width="110" height="9" fill="#5fd4d0" fill-opacity=".5"/><rect x="50" y="36" width="95" height="9" fill="#e8b755" fill-opacity=".5"/><rect x="14" y="54" width="100" height="9" fill="#e8b755" fill-opacity=".5"/><rect x="40" y="72" width="140" height="9" fill="#c79bf2" fill-opacity=".5"/><rect x="45" y="90" width="120" height="9" fill="#7aa7ff" fill-opacity=".5"/></g><path d="M112,8 V104" stroke="#e06bd0"/><path d="M124,27 V36" stroke="#e8b755" stroke-dasharray="2 2"/></svg>
+  <div><span class="q">3 · When does it land?</span><h2>Timeline</h2><p>Time runs left to right with today as a fixed line. One lane per lead, one bar per workstream. What is behind the line happened; what is ahead is a forecast. A dashed drop shows a session that starts when another ends.</p><span class="go">timeline.html →</span></div>
+</a>
+<a class="mock" href="lattice.html">
+  <svg viewBox="0 0 200 112" aria-hidden="true"><g stroke="#232936" stroke-dasharray="3 3"><path d="M50,8 V104 M100,8 V104 M150,8 V104 M8,38 H192 M8,74 H192"/></g><g fill="#5fd4d0" fill-opacity=".25"><rect x="51" y="9" width="48" height="28"/></g><rect x="101" y="39" width="48" height="34" fill="#e8b755" fill-opacity=".3"/><rect x="151" y="75" width="41" height="29" fill="#c79bf2" fill-opacity=".25"/><g fill="#c6ccd9" font-family="monospace" font-size="9"><text x="56" y="27">⠹●✓</text><text x="106" y="60">⠹⠹○</text><text x="156" y="93">⠹○</text></g></svg>
+  <div><span class="q">4 · Where is it happening?</span><h2>Lattice</h2><p>Leads down, repositories across, and the work where they cross, one glyph per session. It is the most literal of the five and it is plain text, so Pi could draw it exactly as shown.</p><span class="go">lattice.html →</span></div>
+</a>
+<a class="mock" href="ledger.html">
+  <svg viewBox="0 0 200 112" aria-hidden="true"><g fill="#c6ccd9" fill-opacity=".55"><rect x="14" y="16" width="48" height="4" fill="#e8b755" fill-opacity="1"/><rect x="14" y="28" width="40" height="3"/><rect x="14" y="36" width="46" height="3"/><rect x="14" y="52" width="36" height="3"/><rect x="14" y="60" width="44" height="3"/><rect x="76" y="16" width="48" height="4" fill="#7aa7ff" fill-opacity="1"/><rect x="76" y="28" width="44" height="3"/><rect x="76" y="36" width="34" height="3"/><rect x="138" y="16" width="48" height="4" fill="#808a9e" fill-opacity="1"/><rect x="138" y="28" width="42" height="3"/><rect x="138" y="36" width="46" height="3"/><rect x="138" y="52" width="38" height="3"/></g><path d="M14,82 H186" stroke="#232936"/><g fill="#808a9e"><rect x="14" y="90" width="120" height="3"/><rect x="14" y="98" width="150" height="3"/></g></svg>
+  <div><span class="q">5 · What do we owe each other?</span><h2>Ledger</h2><p>No map. Three columns of obligations between leads: what you owe, what you are owed, and where you could help. Each item is answered in place, as in the pane today. Underneath runs a wire of what just moved.</p><span class="go">ledger.html →</span></div>
+</a>
+</div>
+
+<section style="display:flex;flex-direction:column;gap:14px">
+  <h2>How they compare</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Screen</th><th>Best at</th><th>Weak at</th><th>Cost to build in Pi</th></tr>
+    <tr><td>Dendrite</td><td>Seeing momentum and phase at a glance</td><td>Who owns what; many workstreams crowd it</td><td>High: curves need a canvas the terminal does not have</td></tr>
+    <tr><td>Orbits</td><td>Ownership and what crosses between leads</td><td>Dates; repositories</td><td>High, for the same reason</td></tr>
+    <tr><td>Timeline</td><td>Dates, slips, and order of work</td><td>Needs a start and an end per workstream, which the tree does not record yet</td><td>Medium: bars and rules are box characters</td></tr>
+    <tr><td>Lattice</td><td>Load per lead and per repository</td><td>Order and time</td><td>Low: a grid of text</td></tr>
+    <tr><td>Ledger</td><td>Deciding what to do next</td><td>The shape of the whole</td><td>Low: it extends the inbox the pane already has</td></tr>
+  </table></div>
+  <p class="muted">All five rest on one idea the pane does not have yet: a workstream, meaning a root session and everything under it, treated as one unit with an owner, a phase and a risk.</p>
+</section>
+</main>
+</body>
+</html>

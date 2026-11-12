@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lattice Overview 1 Dendrite</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="shared.css">
+<style>
+/* Layout: the network is a cell body on the left; each workstream is a branch that reaches as far right as its phase, and its sessions are the twigs. */
+.trunk { fill: none; stroke-width: 1.4; opacity: .5; }
+.trunk.live { stroke-dasharray: 2 6; opacity: .95; animation: flow 1.6s linear infinite; }
+.twig { fill: none; stroke: var(--t-edge); stroke-width: 1; }
+.dep { fill: none; stroke: var(--t-yellow); stroke-width: 1.2; stroke-dasharray: 5 4; animation: flow 2.4s linear infinite reverse; }
+.dep.met { stroke: var(--t-green); opacity: .45; animation: none; }
+.guide { stroke: var(--t-edge); stroke-dasharray: 1 7; }
+.halo { fill: var(--t-mag); opacity: .18; animation: breathe 3s ease-in-out infinite; }
+.ring { fill: none; stroke: var(--t-cyan); stroke-width: 1.2; opacity: 0; }
+.on .ring { opacity: 1; } .on .hit { fill: var(--t-sel); opacity: .55; }
+.hit { fill: transparent; }
+.bars { display: grid; grid-template-columns: repeat(14, 1fr); gap: 3px; align-items: end; height: 64px; border-bottom: 1px solid var(--t-edge); }
+.bars i { background: var(--t-cyan); opacity: .55; min-height: 1px; }
+.bars i:last-child { opacity: 1; background: var(--t-mag); }
+.read { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; margin-top: 8px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div class="term">
+  <header id="top"></header>
+  <div class="stage">
+    <section class="view"><svg id="g" viewBox="0 0 1080 640" role="img" aria-label="Workstreams branching from the network by phase"></svg></section>
+    <aside class="side">
+      <div><h2>Inspecting <span class="td">tab next</span></h2><div class="box sel" id="insp"></div></div>
+      <div><h2>Dendrite health <span class="td">sessions finished, 14 days</span></h2>
+        <div class="box"><div class="bars" id="bars"></div><div class="read" id="read"></div></div></div>
+    </aside>
+  </div>
+  <footer id="keys"></footer>
+</div>
+<script src="shared.js"></script>
+<script>
+chrome(1, [['↑↓', 'workstream'], ['→', 'into its sessions'], ['enter', 'open'], ['o', 'offer'], ['t', 'ask for it']]);
+const svg = $('#g'), PX = { brief: 215, build: 400, verify: 610, landed: 820 }, CX = 62, CY = 330;
+const order = ['invoice-export', 'checkout-v2', 'search-reindex', 'pricing-migration', 'docs-refresh', 'sso-rollout', 'rate-limits', 'offline-cart'];
+const pos = {}; order.forEach((id, i) => pos[id] = [PX[S(id).phase], 62 + i * 74]);
+
+L.phases.forEach(p => {
+  svg.append(E('line', { class: 'guide', x1: PX[p], y1: 34, x2: PX[p], y2: 630 }));
+  svg.append(E('text', { x: PX[p] + 8, y: 22, class: 'dim' }, p.toUpperCase() + '  ' + L.streams.filter(s => s.phase === p).length));
+});
+const deps = E('g'), trunks = E('g'), nodes = E('g'); svg.append(trunks, deps, nodes);
+
+order.forEach(id => {
+  const s = S(id), [x, y] = pos[id], c = P(s.owner).c, live = count(s, 'run') > 0, dx = x - CX;
+  const d = `M${CX},${CY} C${CX + dx * .55},${CY} ${x - dx * .45},${y} ${x},${y}`;
+  trunks.append(E('path', { class: 'trunk' + (live ? ' live' : ''), d, stroke: c }));
+  if (live) { const dot = E('circle', { r: 2.6, fill: c }); dot.append(E('animateMotion', { dur: 2.5 + (y % 5) * .4 + 's', repeatCount: 'indefinite', path: d })); trunks.append(dot); }
+  (s.waits || []).forEach(w => { const [x2, y2] = pos[w.on]; deps.append(E('path', { class: 'dep' + (w.met ? ' met' : ''), d: `M${x},${y} C${x - 80},${y} ${x2 - 80},${y2} ${x2},${y2}` })); });
+
+  const n = E('g', { 'data-id': id, tabindex: 0 });
+  n.append(E('rect', { class: 'hit', x: x - 10, y: y - 22, width: 142, height: 44, rx: 3 }));
+  s.kids.forEach((k, j) => {
+    const ky = y + (j - (s.kids.length - 1) / 2) * 14;
+    n.append(E('path', { class: 'twig', d: `M${x},${y} H${x + 128} C${x + 146},${y} ${x + 140},${ky} ${x + 158},${ky}` }));
+    n.append(E('text', { x: x + 162, y: ky + 3.5, class: 'small' + (k[1] === 'run' ? ' spin' : ''), style: `fill:${GC[k[1]]}` }, G[k[1]][0]));
+    n.append(E('text', { x: x + 174, y: ky + 3.5, class: 'small' + (k[1] === 'done' || k[1] === 'idle' ? ' dim' : '') }, k[0]));
+  });
+  n.append(E('circle', { class: 'ring', cx: x, cy: y, r: 9 }));
+  n.append(E('circle', { cx: x, cy: y, r: 4.5, fill: c }));
+  const t = E('text', { x: x + 10, y: y - 7, class: 'bright' }, id);
+  if (s.risk === 'high') t.append(E('tspan', { style: 'fill:var(--t-red)' }, ' ▲'));
+  const q = L.needs.filter(n => n.stream === id).length; if (q) t.append(E('tspan', { style: 'fill:var(--t-yellow)' }, ' ●' + q));
+  n.append(t, E('text', { x: x + 10, y: y + 15, class: 'small dim' }, `${s.repo} · @${s.owner}`));
+  n.onclick = () => select(id); n.onkeydown = e => e.key === 'Enter' && select(id);
+  nodes.append(n);
+});
+svg.append(E('circle', { class: 'halo', cx: CX, cy: CY, r: 30 }), E('circle', { cx: CX, cy: CY, r: 13, fill: 'var(--t-mag)' }));
+svg.append(E('text', { x: CX, y: CY + 50, 'text-anchor': 'middle', style: 'fill:var(--t-mag);font-weight:700' }, L.network), E('text', { x: CX, y: CY + 65, 'text-anchor': 'middle', class: 'small dim' }, '4 leads'));
+svg.append(E('text', { x: 8, y: 630, class: 'small dim' }, '┄┄ waits on   ▲ high risk   ● needs someone'));
+
+function select(id) { svg.querySelectorAll('[data-id]').forEach(n => n.classList.toggle('on', n.dataset.id === id)); $('#insp').innerHTML = inspect(id); }
+let cur = 1; select(order[cur]);
+document.addEventListener('keydown', e => { if (e.key === 'Tab' || e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); cur = (cur + (e.key === 'ArrowUp' ? order.length - 1 : 1)) % order.length; select(order[cur]); } });
+
+const max = Math.max(...L.done14);
+$('#bars').innerHTML = L.done14.map(v => `<i style="height:${v / max * 100}%" title="${v}"></i>`).join('');
+$('#read').innerHTML = [['finished today', '<span class="tm">9</span>'], ['a day, last two weeks', '4.0'], ['running now', `<span class="tg">${total('run')}</span>`],
+  ['waiting on a person', `<span class="ty">${total('ask')}</span>`], ['waiting on a session', `<span class="tb">${total('wait')}</span>`], ['median wait for an answer', '11m']]
+  .map(r => `<span class="td">${r[0]}</span><span>${r[1]}</span>`).join('');
+</script>
+</body>
+</html>

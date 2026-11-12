@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lattice Overview 5 Ledger</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="shared.css">
+<style>
+/* Layout: no map at all. Three columns of obligations between leads (what you owe, what you are owed, where you could help), with the wire of what just moved underneath. */
+.load { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 12px; }
+.load button { display: grid; width: 100%; } .load .box { height: 100%; }
+.load .box:hover, .load .box.on { border-color: var(--t-cyan); }
+.meter { letter-spacing: 1px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px 20px; align-items: start; }
+.card { border: 1px solid var(--t-edge); border-left: 0; border-right: 0; border-bottom: 0; padding: 9px 0 3px; display: flex; flex-direction: column; gap: 3px; }
+.card.cur { background: var(--t-sel); margin: 0 -8px; padding: 9px 8px 6px; border-color: var(--t-cyan); }
+.card .do { margin-top: 3px; color: var(--t-dim); }
+.card.cur .td, .card.cur .do { color: #b4bccb; }
+.wire { height: 132px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+.wire div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wire div:last-child { color: var(--t-bright); }
+</style>
+</head>
+<body>
+<div class="term">
+  <header id="top"></header>
+  <div class="stage">
+    <section class="view">
+      <div class="load" id="load"></div>
+      <div class="cols">
+        <div><h2>You owe <span class="ty">3</span></h2>
+          <div class="card cur"><div><span class="ty">?</span> <span class="tw">checkout-v2 ▸ stripe-webhooks</span> <span class="td right">6m</span></div><div>Run `stripe listen` against the staging account?</div><div class="td">Your own session. payments and e2e-tests are behind it.</div><div class="do"><span class="tk">y</span> yes  <span class="tk">n</span> no  <span class="tk">enter</span> open it</div></div>
+          <div class="card"><div><span class="tm">⇄</span> <span class="tw">search-reindex</span> <span class="tv">@mira</span> <span class="td right">31m</span></div><div>Take search-reindex? It changes the catalog you own.</div><div class="td">In brief, nothing started. Mira is holding 2 other workstreams.</div><div class="do"><span class="tk">a</span> take it  <span class="tk">x</span> decline  <span class="tk">m</span> reply</div></div>
+          <div class="card"><div><span class="ty">✉</span> <span class="tw">cart-api → payments</span> <span class="td right">14m</span></div><div>“Totals endpoint is live, switch over when ready.”</div><div class="td">Between two of your sessions. Waiting for your approval.</div><div class="do"><span class="tk">a</span> approve  <span class="tk">x</span> reject</div></div>
+        </div>
+        <div><h2>You are owed <span class="tb">1</span></h2>
+          <div class="card"><div><span class="tb">⧗</span> <span class="tw">pricing-migration ▸ price-tables</span> <span class="ty">@sam</span></div><div>Your checkout-v2 ▸ tax-lines starts when it finishes.</div><div class="td">Running. Expected Thu 12 Nov. <span class="tr">▲</span> The workstream is high risk.</div><div class="do"><span class="tk">enter</span> watch it  <span class="tk">m</span> ask @sam</div></div>
+          <h2 style="margin-top:18px">Settled today <span class="td">2</span></h2>
+          <div class="card td"><div><span class="tg">✓</span> docs-refresh landed</div><div>api-pages and changelog merged into docs-site.</div></div>
+          <div class="card td"><div><span class="tg">✓</span> cart-api finished</div><div>offline-cart ▸ sync-engine no longer waits on you.</div></div>
+        </div>
+        <div><h2>You could help <span class="td">2</span></h2>
+          <div class="card"><div><span class="ty">?</span> <span class="tw">offline-cart ▸ conflict-rules</span> <span class="td">○@teo</span> <span class="td right">2h</span></div><div>Last write wins, or keep both carts?</div><div class="td">Teo is offline. It asks about cart rules you own.</div><div class="do"><span class="tk">t</span> ask for the session  <span class="tk">m</span> leave an answer</div></div>
+          <div class="card"><div><span class="td">○</span> <span class="tw">offline-cart ▸ sync-engine</span> <span class="td">○@teo</span></div><div>Idle since your cart-api finished on Sun 8 Nov.</div><div class="td">Nothing is stopping it. Nobody has started it again.</div><div class="do"><span class="tk">t</span> ask for the session  <span class="tk">m</span> tell @teo</div></div>
+        </div>
+      </div>
+    </section>
+    <aside class="side">
+      <div><h2>The wire <span class="td">between leads, as it happens</span></h2><div class="box wire" id="wire"></div></div>
+      <div><h2>Inspecting</h2><div class="box sel" id="insp"></div></div>
+    </aside>
+  </div>
+  <footer id="keys"></footer>
+</div>
+<script src="shared.js"></script>
+<script>
+chrome(5, [['↑↓', 'item'], ['←→', 'column'], ['y n a x', 'answer in place'], ['enter', 'open'], ['m', 'message']]);
+$('#load').innerHTML = L.leads.map(l => {
+  const mine = L.streams.filter(s => s.owner === l.id && s.phase !== 'landed'), kids = mine.flatMap(s => s.kids).filter(k => k[1] !== 'done');
+  const ord = ['run', 'ask', 'wait', 'idle'], meter = kids.sort((a, b) => ord.indexOf(a[1]) - ord.indexOf(b[1])).map(k => g(k[1])).join('');
+  return `<button data-id="${mine[0].id}"><div class="box"><span class="tw" style="color:${l.on ? l.c : 'var(--t-dim)'}">${l.on ? '' : '○ '}@${l.id}</span> <span class="td">${l.on ? l.area : 'offline ' + l.seen}</span><br><span class="meter">${meter}</span><br><span class="td">${mine.map(s => s.id).join(' · ')}</span></div></button>`;
+}).join('');
+function select(id) { $('#insp').innerHTML = inspect(id); }
+document.querySelectorAll('#load button').forEach(b => b.onclick = () => select(b.dataset.id)); select('checkout-v2');
+
+const W = [['09:12', 'tg', '✓', 'cart-api finished @yan'], ['09:40', 'tm', '⇄', 'search-reindex offered to @yan'], ['09:58', 'ty', '?', 'pdf-renderer asks @sam'],
+  ['10:03', 'tg', '⠹', 'price-tables 41 of 60 moved'], ['10:05', 'ty', '?', 'stripe-webhooks asks @yan'], ['10:09', 'tg', '⠹', 'session-store passed failover'],
+  ['10:11', 'tb', '⧗', 'load-test waits on session-store'], ['10:14', 'tg', '⠹', 'price-tables 47 of 60 moved']];
+let wi = 5; const wire = $('#wire'), line = w => `<div><span class="td">${w[0]}</span> <span class="${w[1]}">${w[2]}</span> ${w[3]}</div>`;
+wire.innerHTML = W.slice(0, wi).map(line).join('');
+if (!matchMedia('(prefers-reduced-motion: reduce)').matches) setInterval(() => { wire.insertAdjacentHTML('beforeend', line(W[wi++ % W.length])); if (wire.children.length > 7) wire.firstChild.remove(); }, 2600);
+</script>
+</body>
+</html>
