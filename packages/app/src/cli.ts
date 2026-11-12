@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 /** `pi-lattice`: the lattice host, as a background daemon or with a line-based interface. */
+import { homedir, userInfo } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { formatJoinCode, localHosts } from "@pi-lattice/collab";
+import { latticeHome } from "@pi-lattice/protocol";
 import { parseArgs, USAGE } from "./args.ts";
-import { runDaemon } from "./daemon.ts";
+import { chooseName, chosenName, joinNetwork, runDaemon, startNetwork } from "./daemon.ts";
 import { runPlain } from "./plain.ts";
 
 async function main(): Promise<number> {
@@ -15,6 +18,21 @@ async function main(): Promise<number> {
 	}
 	if (options.help) {
 		process.stdout.write(USAGE);
+		return 0;
+	}
+	if (options.command === "join" || options.command === "create") {
+		// Nothing to start: every repository's host follows the network file, now or when it next runs.
+		const home = latticeHome(process.env, homedir());
+		const had = chosenName(home);
+		if (options.as !== undefined && options.as !== had) chooseName(home, options.as);
+		const me = chosenName(home) ?? userInfo().username;
+		if (options.command === "join") {
+			const network = joinNetwork(home, options.subject as string);
+			process.stdout.write(`You are in ${network.name} as ${me}. Open pi in a project: your teammates' sessions are in the pane.\n`);
+		} else {
+			const network = startNetwork(home, options.subject ?? "team");
+			process.stdout.write(`Created ${network.name}; you are ${me}. Teammates join with:\n\n  pi-lattice join ${formatJoinCode(network, localHosts())}\n\nWhoever has the code is in, so send it over a channel you trust.\n`);
+		}
 		return 0;
 	}
 	const cwd = resolve(options.cwd);

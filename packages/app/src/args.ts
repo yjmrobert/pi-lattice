@@ -2,7 +2,9 @@
 
 export interface CliOptions {
 	/** `daemon`: the background host a person's Pi talks to. `plain`: a line-based interface, for scripting. */
-	command: "plain" | "daemon";
+	command: "plain" | "daemon" | "join" | "create";
+	/** `join`: the code. `create`: the network's name. */
+	subject: string | undefined;
 	cwd: string;
 	stateDir: string | undefined;
 	name: string | undefined;
@@ -27,13 +29,16 @@ export const USAGE = `Usage: pi-lattice [daemon] [options] [-- <pi arguments>]
 Most people never run this directly: install the pi-lattice package into Pi, open
 pi in a project and run /lattice. Pi starts the host in the background as needed.
 
+  pi-lattice join <code>    Join a teammate's network, once for every project on this machine.
+  pi-lattice create [name]  Start a network and print the code teammates join with.
+                            Both take --as <name>: the name your teammates see you as.
   pi-lattice daemon   Run the background host for a project in the foreground.
   pi-lattice          A line-based interface to a host, for scripting and debugging.
 
 Options:
   --cwd <dir>        Project directory (default: current directory)
   --state <dir>      Where the host keeps its tree and sessions (default: <cwd>/.lattice)
-  --as <name>        The name you act as (default: your OS user name)
+  --as <name>        The name you act as (default: the one you chose, or your OS user name)
   --join <code>      Join a network with the code a teammate gave you
   --advertise <host> Address teammates should use to reach you (default: every network address)
   --idle-exit <sec>  daemon: exit after this long with nobody connected (default 600, 0 = never)
@@ -50,7 +55,7 @@ Arguments after -- are passed to every Pi session, for example -- --model sonnet
 
 export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 	const options: CliOptions = {
-		command: "plain", cwd, stateDir: undefined, name: undefined, kind: undefined, fragments: [], brief: undefined,
+		command: "plain", subject: undefined, cwd, stateDir: undefined, name: undefined, kind: undefined, fragments: [], brief: undefined,
 		join: undefined, advertise: undefined, as: undefined, idleExit: undefined, help: false, piArgs: [],
 	};
 	const value = (flag: string, index: number): string => {
@@ -65,6 +70,14 @@ export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 			break;
 		}
 		if (i === 0 && arg === "daemon") options.command = "daemon";
+		else if (i === 0 && (arg === "join" || arg === "create")) {
+			options.command = arg;
+			const next = argv[1];
+			if (next !== undefined && !next.startsWith("-")) {
+				options.subject = next;
+				i++;
+			} else if (arg === "join") throw new Error("join needs the code a teammate gave you");
+		}
 		else if (arg === "-h" || arg === "--help") options.help = true;
 		else if (arg === "--plain") options.command = "plain";
 		else if (arg === "--cwd") options.cwd = value(arg, i++);

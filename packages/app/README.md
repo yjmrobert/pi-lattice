@@ -21,7 +21,7 @@ node packages/app/src/cli.ts --role coordinator     # a line-based interface, fo
 | Option | Does |
 |---|---|
 | `--cwd <dir>`, `--state <dir>` | Project directory; where the tree is kept (default `<cwd>/.lattice`) |
-| `--as <name>` | The name you act as |
+| `--as <name>` | The name you act as. Default: the one you chose when joining a network, else your OS user name |
 | `--join <code>` | Join a network with a teammate's code before starting |
 | `--advertise <host>` | The address teammates should reach this machine at (default: every network address it has) |
 | `--idle-exit <seconds>` | `daemon`: exit after this long with nobody connected (default 600, 0 never) |
