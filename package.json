@@ -26,8 +26,7 @@
     "dev": "node scripts/dev.mjs",
     "docs": "node scripts/settings-doc.ts",
     "eval": "node scripts/eval.ts",
-    "build": "node scripts/pack.mjs",
-    "release": "npm run check && npm run build && npm publish ./dist/pi-lattice --access public"
+    "build": "node scripts/pack.mjs"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.5.2",

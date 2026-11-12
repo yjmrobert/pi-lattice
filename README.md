@@ -71,11 +71,21 @@ npm run dev            # open Pi on this checkout, in a scratch repository under
 npm run eval           # one delegation with a real model, checked for how the sessions talked (spends tokens)
 npm run docs           # rewrite docs/settings.md from the settings table
 npm run build          # build the package that is published into dist/pi-lattice
-npm run release        # check, build and publish it (needs `npm login`)
 npm run spike:phase0   # re-run the Phase 0 verification against real Pi processes
 ```
 
 Requires Node 22.19 or newer and git. Tests and spikes run real Pi processes against a scripted model: no network, no tokens, and they do not read your Pi configuration. The tests of the pane in Pi's terminal interface need `script` (util-linux) for a pseudo-terminal and are skipped where it is missing.
+
+### Releasing
+
+Releases are published by GitHub Actions, not from a machine. Set the version in `packages/app/package.json`, commit, then push a tag with the same number:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow runs the whole suite on the tagged commit, builds the package and publishes it to npm. A tag that does not match the version stops it before anything is published. Versions follow semantic versioning; one with a suffix, such as `v0.2.0-beta.1`, is published under `next` and is not what `pi install npm:pi-lattice` gets.
 
 ## Not done yet
 

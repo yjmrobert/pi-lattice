@@ -12,7 +12,7 @@ Settles what [0001](0001-packaging-and-scope.md) left unverified.
   - A manifest with no `dependencies`.
 - **The host finds Pi's library when it needs it.** It uses two functions of Pi's to read the file of a session that is not running. It cannot carry a copy (Pi's library with its providers is 7 MB bundled, and a second copy is what Pi's documentation warns against), so it loads the installed one: `LATTICE_PI_PACKAGE` names its directory outright; else the launcher passes the file its Pi ran from and the host finds the package around it; else the host looks for `pi` on the PATH. If there is none, reading such a session fails with a message that says what to set; everything else works.
 - **The launcher and the host know both layouts.** From source the host is `cli.ts` beside the launcher; built, it is `../host/cli.js`. A session the host starts is given the package directory itself, checkout or installed, so Pi sees the package it already loaded and does not load it twice.
-- **The version is `packages/app`'s, and follows semantic versioning.** While it is `0.x`, a minor version may break things and a patch may not. `npm run release` checks, builds and publishes.
+- **The version is `packages/app`'s, and follows semantic versioning.** While it is `0.x`, a minor version may break things and a patch may not. Pushing a tag `v<version>` publishes it: `.github/workflows/release.yml` refuses a tag that is not the version, runs the whole suite, builds and publishes with provenance. It publishes as a trusted publisher, with no stored token, except while an `NPM_TOKEN` secret exists, which the first release needs.
 - **MIT.** The licence file and the link to the repository are copied into the published package.
 
 **Evidence**
@@ -24,6 +24,7 @@ Settles what [0001](0001-packaging-and-scope.md) left unverified.
 
 **Not verified**
 
+- The release workflow has not run: it runs only on a tag, and no tag has been pushed.
 - `pi install npm:pi-lattice` itself, which needs the package on the registry. The test does what Pi's documentation says Pi does (an npm install without peers), not Pi's own command.
 - A Pi that is a single compiled executable rather than a Node package: there is no library file for the host to load, so reading a stopped session's messages would fail there.
 - Windows: the lookup of `pi` on the PATH does not try `pi.cmd`.

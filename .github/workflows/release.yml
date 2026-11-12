@@ -1,0 +1,62 @@
+name: Release
+
+# Pushing a tag `v1.2.3` publishes that version of `pi-lattice` to npm, after the whole suite has
+# passed on the tagged commit. The tag must be the version in packages/app/package.json, which is
+# the version the built package carries (ADR 0025).
+on:
+  push:
+    tags: ["v*"]
+
+# One release at a time, and never cancelled half way through a publish.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Lets npm verify that this workflow in this repository is the publisher, with no stored
+      # token (trusted publishing), and sign where the package was built (provenance).
+      id-token: write
+    env:
+      HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - run: npm install --global npm@latest
+      - run: npm ci
+      - name: The tag is the version
+        run: |
+          version="$(node -p 'require("./packages/app/package.json").version')"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in packages/app/package.json."
+            exit 1
+          fi
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # A version with a suffix, such as 0.2.0-beta.1, is published as `next` and does not become what people install by default.
+      - name: Choose the tag on npm
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) echo "DIST_TAG=next" >> "$GITHUB_ENV" ;;
+            *) echo "DIST_TAG=latest" >> "$GITHUB_ENV" ;;
+          esac
+      # With an NPM_TOKEN secret, publish with it: the first release needs this, because npm only
+      # lets a package name a trusted publisher once the package exists.
+      - name: Publish with a token
+        if: env.HAS_TOKEN == 'true'
+        run: npm publish ./dist/pi-lattice --access public --provenance --tag "$DIST_TAG"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish as a trusted publisher
+        if: env.HAS_TOKEN != 'true'
+        run: npm publish ./dist/pi-lattice --access public --tag "$DIST_TAG"
