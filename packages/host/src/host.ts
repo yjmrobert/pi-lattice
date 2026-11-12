@@ -152,6 +152,10 @@ interface Runtime {
 }
 
 const RECENT_LINES = 12;
+/** How long a message stays in what the interface is told has just been sent. */
+const TRAFFIC_MS = 10_000;
+/** How long a session is taken to still be on the item it last touched. */
+const FOCUS_MS = 5 * 60_000;
 /** How many planned items a tree may hold for each session it may run. Planned work costs nothing to keep, but a plan is still bounded. */
 const PLANNED_PER_SESSION = 10;
 
@@ -240,6 +244,10 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private readonly owing = new Map<string, { reminded: boolean }>();
 	/** Sessions that waited on others and are being started right now. */
 	private readonly releasing = new Map<string, Promise<void>>();
+	/** Messages sent a moment ago, for an interface that shows them moving. */
+	private recentTraffic: Array<{ from: string; to: string; intent: string; at: number }> = [];
+	/** Per session, the item below it that it last placed, wrote to or heard from. */
+	private readonly focus = new Map<string, { nodeId: string; at: number }>();
 	/** Why a waiting session could not be started when its turn came, so it is said once and not at every retry. */
 	private readonly releaseComplaints = new Map<string, string>();
 	private sharing: SharingPort | undefined;
@@ -501,6 +509,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			...(waitsOn.some((other) => !other.done) ? { waitsOn: waitsOn.map((other) => other.id) } : {}),
 			...(planned ? { planned: true } : {}),
 		});
+		this.touch(askerId, node.id);
 		if (held) return node;
 		try {
 			await this.giveBrief(node, waitsOn.map((other) => other.name));
@@ -509,6 +518,12 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			throw new Error(`The child "${name}" (${id}) was created but could not be started: ${message}`);
 		}
 		return this.must(node.id);
+	}
+
+	/** Note that a session has just worked on an item below it. Anything else is not a focus: a worker writing to its parent is still on its own task. */
+	private touch(sessionId: string, itemId: string, all: NodeMeta[] = this.store.listNodes()): void {
+		if (sessionId === itemId || !ancestorsOf(all, itemId).some((above) => above.id === sessionId)) return;
+		this.focus.set(sessionId, { nodeId: itemId, at: Date.now() });
 	}
 
 	/** Start a child and hand it its brief. `waited` names the sessions it was kept back for, when they have all finished. */
@@ -1048,11 +1063,16 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			const text = runtime.recent[runtime.recent.length - 1];
 			if (runtime.proc && text) activity[id] = { text, at: runtime.recentAt };
 		}
+		const now = Date.now();
+		const traffic = this.recentTraffic.filter((entry) => now - entry.at < TRAFFIC_MS);
+		const focus = Object.fromEntries([...this.focus].filter(([, entry]) => now - entry.at < FOCUS_MS));
 		return {
 			owner: this.owner,
 			nodes: this.store.listNodes().filter((node) => !node.archived),
 			attention,
 			activity,
+			...(traffic.length > 0 ? { traffic } : {}),
+			...(Object.keys(focus).length > 0 ? { focus } : {}),
 			foreground: [...this.runtimes].filter(([, runtime]) => runtime.foreground).map(([id]) => id),
 			sharing: this.sharing?.state() ?? null,
 			named: this.sharing?.named() ?? false,
@@ -1404,6 +1424,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const local = recipients.filter((id) => !remote.some((node) => node.id === id));
 		for (const recipient of local) this.store.journal(envelope, recipient);
 		for (const node of remote) this.remoteRouter?.(envelope, node);
+		this.noteTraffic(envelope, recipients);
 		this.emit("envelope", envelope, recipients);
 		for (const recipient of local) {
 			if (!this.flush(recipient)) {
@@ -1434,6 +1455,18 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			// More work from its parent: it owes an answer again.
 			this.owing.set(id, { reminded: false });
 			if (recipient.done) this.update(id, { done: false });
+		}
+	}
+
+	/** Keep who wrote to whom for a few seconds, and move the focus of whichever end is above the other. */
+	private noteTraffic(envelope: Envelope, recipients: string[]): void {
+		const at = Date.now();
+		const all = this.store.listNodes();
+		this.recentTraffic = this.recentTraffic.filter((entry) => at - entry.at < TRAFFIC_MS);
+		for (const to of recipients) {
+			this.recentTraffic.push({ from: envelope.from, to, intent: envelope.intent, at });
+			this.touch(envelope.from, to, all);
+			this.touch(to, envelope.from, all);
 		}
 	}
 
@@ -1477,6 +1510,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const recipient = this.must(recipientId);
 		if (recipient.owner !== this.owner) throw new Error(`Rejected remote mail: ${recipientId} is not owned here.`);
 		this.store.journal(checked.envelope, recipientId);
+		this.noteTraffic(checked.envelope, [recipientId]);
 		this.emit("envelope", checked.envelope, [recipientId]);
 		if (!this.flush(recipientId)) {
 			this.wake(recipientId).catch((error: unknown) => {

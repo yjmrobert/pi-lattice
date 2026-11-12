@@ -112,6 +112,13 @@ export interface UiState {
 	foreground: string[];
 	/** Per node running in the background: the last thing its agent did, and when. */
 	activity?: Record<string, { text: string; at: number }>;
+	/** The messages of the last few seconds: who wrote to whom, and why. Never what was said. */
+	traffic?: Array<{ from: string; to: string; intent: string; at: number }>;
+	/**
+	 * Per session: the item below it that it last worked on, and when. Read from what the session
+	 * does (it placed something there, wrote to it, or heard from it), never asked of it. Left out once stale.
+	 */
+	focus?: Record<string, { nodeId: string; at: number }>;
 	/** Present when this person is in a network: the tree is shared with its other members, peer to peer. */
 	sharing: null | {
 		network: string;

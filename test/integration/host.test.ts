@@ -477,6 +477,23 @@ describe("planned work", () => {
 		expect(h.isRunning(story.id)).toBe(false);
 	});
 
+	it("says what a session last worked on, and who just wrote to whom", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		expect(h.uiState().focus).toBeUndefined();
+		const story = await h.spawnChild(root.id, { name: "cards", kind: "story", brief: "save cards", planned: true });
+		// Placing an item is working on it.
+		expect(h.uiState().focus?.[root.id]?.nodeId).toBe(story.id);
+		const task = await h.spawnChild(root.id, { name: "vault", kind: "task", brief: result("vault done"), under: story.id });
+		await eventually(() => h.node(task.id)?.done === true, "the task to report");
+		const state = h.uiState();
+		// Hearing from an item below moves the focus there. The task, writing upward, is still on itself.
+		expect(state.focus?.[root.id]?.nodeId).toBe(task.id);
+		expect(state.focus?.[task.id]).toBeUndefined();
+		expect(state.traffic).toContainEqual(expect.objectContaining({ from: task.id, to: root.id, intent: "result" }));
+		expect(JSON.stringify(state.traffic)).not.toContain("vault done");
+	});
+
 	it("only puts an item under something below the session asking", async () => {
 		const h = await startHost();
 		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
