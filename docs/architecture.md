@@ -72,7 +72,7 @@ The full account is in [ADR 0014](decisions/0014-package-seams.md). In short:
 
 A **node** is a place in the tree. A **Pi session** is the conversation currently occupying it. They have separate ids, and addresses use the node id ([0004](decisions/0004-node-identity.md)).
 
-Node record: `id`, `parentId`, `rootId`, `kind`, `brief`, `fragments`, `owner`, `version`, `status`, `sessionId`, `sessionFile`, `cwd`, `workspace`, `branch`.
+Node record: `id`, `parentId`, `rootId`, `kind`, `brief`, `fragments`, `owner`, `version`, `status`, `sessionId`, `sessionFile`, `cwd`, `workspace`, `branch`, and `waitsOn` until it starts.
 
 Status is one of `dormant`, `starting`, `idle`, `running`, `blocked`, `exited`, `failed`. `blocked` means a dialog is waiting for a human ([0005](decisions/0005-host-control-plane.md)).
 
@@ -96,6 +96,7 @@ Details in [roles.md](roles.md). Each applied fragment becomes one system prompt
 
 - **Store**: SQLite through `node:sqlite` behind a `Store` interface ([0008](decisions/0008-host-store.md)).
 - **Supervisor**: one Pi child per running node, lazy resume, concurrency cap, explicit handling of exit and failure ([0005](decisions/0005-host-control-plane.md)).
+- **Order**: a child spawned to wait on other sessions is created at once and given its brief when each of them has sent its result ([0021](decisions/0021-waiting-on-other-sessions.md)).
 - **Broker**: routes and journals every envelope.
 - **Workspaces**: shared directory or a git worktree per node ([0010](decisions/0010-workspace-policy.md)).
 - **Foreground handover**: a session opened in a terminal is taken over from the host and handed back on leaving. Its messaging goes through the same broker either way.
