@@ -2,7 +2,7 @@
  * The pane's content: what is waiting on the person, then the sessions of each repository,
  * one line each. Pure: everything drawn comes from a {@link PaneView}. See ADR 0015.
  */
-import { type DialogInfo, type Envelope, type NodeMeta, type NodeStatus, treeLines, type UiState } from "@pi-lattice/protocol";
+import { type DialogInfo, type Envelope, isHeld, type NodeMeta, type NodeStatus, treeLines, type UiState, waitingFor } from "@pi-lattice/protocol";
 
 /** How text is styled. The extension supplies Pi's theme; tests supply plain text. */
 export interface Paint {
@@ -268,7 +268,9 @@ function sessionRow(node: NodeMeta, prefix: string, repo: PaneRepo, view: PaneVi
 	// A finished session with finished work under it says how much is folded away, in place of its kind.
 	const offered = state.sharing?.handoffs.find((handoff) => handoff.nodeId === node.id && handoff.role === "owner");
 	const asked = state.sharing?.requests.some((request) => request.nodeId === node.id && request.role === "asker");
-	const tag = sending ? `→ ${sending.to}…` : offered ? `→ ${offered.to}?` : folded > 0 ? `+${folded} done` : node.owner === state.owner ? node.kind : `@${node.owner}${away ? " offline" : asked ? " asked" : ""}`;
+	// A session that has not started says what it waits on, in place of its kind: one name, or how many.
+	const held = node.owner === state.owner ? waitingFor(state.nodes, node) : [];
+	const tag = sending ? `→ ${sending.to}…` : offered ? `→ ${offered.to}?` : held.length > 0 ? `waits on ${held.length === 1 ? (held[0] as NodeMeta).name : held.length}` : folded > 0 ? `+${folded} done` : node.owner === state.owner ? node.kind : `@${node.owner}${away ? " offline" : asked ? " asked" : ""}`;
 	const lead: Seg[] = [[here ? "▸" : " ", paint.accent], [` ${guides(prefix)}`, paint.dim], statusMark(node, (attention?.dialogs ?? 0) > 0, away, view.frame ?? 0, paint), [" "]];
 	const room = width - 1 - widthOf(lead);
 	const marksWidth = marks ? [...marks].length + 1 : 0;
@@ -297,7 +299,7 @@ export function foldedUnder(repo: PaneRepo, view: PaneView): { inside: Set<strin
 	const settled = (node: NodeMeta): boolean => {
 		const attention = repo.state.attention[node.id];
 		const waiting = (attention?.dialogs ?? 0) > 0 || (attention?.pending ?? 0) > 0;
-		return !waiting && node.id !== view.current && (node.done === true || node.status === "dormant" || node.status === "idle" || node.status === "exited");
+		return !waiting && node.id !== view.current && !isHeld(node) && (node.done === true || node.status === "dormant" || node.status === "idle" || node.status === "exited");
 	};
 	for (const node of nodes) {
 		if (!node.done || inside.has(node.id)) continue;

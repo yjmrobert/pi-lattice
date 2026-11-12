@@ -1,4 +1,5 @@
 /** What a key press means while the pane has the keyboard. Pure: the extension carries the actions out. */
+import { isHeld } from "@pi-lattice/protocol";
 import { findNode, gone, type InboxItem, itemKey, type PaneView, paneInbox, paneOrder } from "./view.ts";
 
 /** A key as the pane sees it: a name for the special ones, else the character typed. */
@@ -25,6 +26,8 @@ export type PaneAction =
 	| { do: "archive"; repo: string; nodeId: string }
 	/** Stop what a session's agent is doing. */
 	| { do: "interrupt"; repo: string; nodeId: string }
+	/** Start a session that is waiting on others, without waiting for them. */
+	| { do: "start"; repo: string; nodeId: string }
 	/** Ask for the same key again before doing something that loses work. `what` names it. */
 	| { do: "confirm"; what: string }
 	/** Show or hide the list of every key. */
@@ -37,17 +40,17 @@ export const stopKey = (nodeId: string): string => `stop:${nodeId}`;
 
 /**
  * What the session under the cursor allows: it is this person's, it is working, it is the one
- * open here; whether this person is in a network; and for a teammate's session, whether they
+ * open here, it has not started because it waits on others; whether this person is in a network; and for a teammate's session, whether they
  * can be reached and whether it has already been asked for.
  */
-function cursorSession(view: PaneView): { id: string; repo: string; mine: boolean; working: boolean; here: boolean; network: boolean; reachable: boolean; asked: boolean; remote: boolean } | undefined {
+function cursorSession(view: PaneView): { id: string; repo: string; mine: boolean; working: boolean; here: boolean; held: boolean; network: boolean; reachable: boolean; asked: boolean; remote: boolean } | undefined {
 	const id = cursorNode(view);
 	const found = id ? findNode(view, id) : undefined;
 	if (!found) return undefined;
 	const { node, repo } = found;
 	const sharing = repo.state.sharing;
 	return {
-		id: node.id, repo: repo.key, mine: node.owner === repo.state.owner, working: node.status === "running" || node.status === "starting", here: node.id === view.current,
+		id: node.id, repo: repo.key, mine: node.owner === repo.state.owner, working: node.status === "running" || node.status === "starting", here: node.id === view.current, held: isHeld(node),
 		network: sharing !== null, reachable: !gone(node, repo.state), asked: sharing?.requests.some((request) => request.role === "asker" && request.nodeId === node.id) ?? false,
 		remote: repo.remote !== undefined,
 	};
@@ -64,7 +67,7 @@ function handKey(at: ReturnType<typeof cursorSession>): readonly [key: string, d
 /** Every key the pane takes, for the help screen. */
 export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyArray<readonly [key: string, does: string]>]> = [
 	["Moving", [["↑ ↓  j k", "move through what is waiting, then the sessions"], ["1-9", "jump to a waiting item"], ["esc  alt+l", "give the keyboard back to Pi"], [",", "settings"], ["?", "show or hide this list"]]],
-	["A session", [["enter", "open it in this terminal"], ["-", "go back to the session you were in before"], ["n", "create a session under it"], ["r", "rename it"], ["s", "stop what its agent is doing (press twice)"], ["d", "archive it and everything under it"], ["o", "offer it to a teammate; before that, create or join a network"], ["t", "ask a teammate for theirs, or take the request back; in a repository you do not have, it is cloned first"]]],
+	["A session", [["enter", "open it in this terminal"], ["-", "go back to the session you were in before"], ["n", "create a session under it"], ["r", "rename it"], ["s", "stop what its agent is doing (press twice); start one that is waiting on others"], ["d", "archive it and everything under it"], ["o", "offer it to a teammate; before that, create or join a network"], ["t", "ask a teammate for theirs, or take the request back; in a repository you do not have, it is cloned first"]]],
 	["Something waiting", [["y  n", "answer a yes/no question"], ["a  x", "approve or reject a message; accept or decline an offer; hand over or keep a session someone asks for"], ["enter", "answer or review it with Pi's prompts"]]],
 	["A sleeping repository", [["enter", "start its host"]]],
 ];
@@ -93,11 +96,13 @@ export function cursorKeys(view: PaneView): Array<readonly [key: string, does: s
 	if (!found) {
 		const at = cursorSession(view);
 		const keys: Array<readonly [string, string]> = [];
-		if (at && !at.here) keys.push(["⏎", at.remote ? "read" : "open"]);
+		// A session that is waiting on others has nothing to open yet.
+		if (at && !at.here && !(at.mine && at.held)) keys.push(["⏎", at.remote ? "read" : "open"]);
 		// Nothing can be created in a repository that is not on this machine.
 		if (!at?.remote) keys.push(["n", "new"]);
 		if (at?.mine) keys.push(["r", "rename"]);
 		if (at?.mine && at.working) keys.push(["s", view.confirm === stopKey(at.id) ? "again to stop" : "stop"]);
+		if (at?.mine && at.held) keys.push(["s", "start now"]);
 		if (at?.mine && !at.here) keys.push(["d", "archive"]);
 		const hand = handKey(at);
 		if (hand) keys.push(hand);
@@ -159,13 +164,15 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 		return [];
 	}
 	const target = cursorNode(view) ?? view.current;
-	if (key === "enter") return target && target !== view.current ? [{ do: "leave" }, { do: "command", text: `/lattice open ${target}` }] : [{ do: "leave" }];
 	const on = cursorSession(view);
+	if (key === "enter" && on?.mine && on.held && !on.here) return [];
+	if (key === "enter") return target && target !== view.current ? [{ do: "leave" }, { do: "command", text: `/lattice open ${target}` }] : [{ do: "leave" }];
 	if (key === "n") return on?.remote ? [] : [{ do: "new", nodeId: target }];
 	if (on?.mine) {
 		if (key === "r") return [{ do: "leave" }, { do: "command", text: `/lattice rename ${on.id}` }];
 		if (key === "d" && !on.here) return [{ do: "archive", repo: on.repo, nodeId: on.id }];
 		// Stopping loses the step in flight, so it takes the key twice.
+		if (key === "s" && on.held) return [{ do: "start", repo: on.repo, nodeId: on.id }];
 		if (key === "s" && on.working) return view.confirm === stopKey(on.id) ? [{ do: "interrupt", repo: on.repo, nodeId: on.id }] : [{ do: "confirm", what: stopKey(on.id) }];
 	}
 	if (key === "a") return [{ do: "leave" }, { do: "command", text: "/lattice approvals" }];

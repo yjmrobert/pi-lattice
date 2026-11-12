@@ -1,11 +1,11 @@
 /**
- * The new-session form: name, kind, model, roles, workspace and brief on one screen, in place of
+ * The new-session form: name, kind, model, roles, what it waits on, workspace and brief on one screen, in place of
  * a series of prompts. Pure: a key turns one form state into the next.
  */
-import type { SpawnSpec } from "@pi-lattice/protocol";
+import { ancestorsOf, type NodeMeta, type SpawnSpec } from "@pi-lattice/protocol";
 import { draw, fit, flow, type Paint, PLAIN, type Seg, widthOf, wrap } from "./view.ts";
 
-const FIELDS = ["name", "kind", "model", "roles", "workspace", "brief", "create"] as const;
+const FIELDS = ["name", "kind", "model", "roles", "waits", "workspace", "brief", "create"] as const;
 type Field = (typeof FIELDS)[number];
 const TEXT_FIELDS = ["name", "kind", "model", "brief"] as const;
 type TextField = (typeof TEXT_FIELDS)[number];
@@ -24,6 +24,11 @@ export interface ChildForm {
 	picked: string[];
 	/** Which role the cursor is on, within the roles field. */
 	roleAt: number;
+	/** The sessions it could wait on before it starts, and the ones chosen. With none to choose from, the field is not shown. */
+	others: Array<{ id: string; name: string }>;
+	waits: string[];
+	/** Which session the cursor is on, within the waits field. */
+	waitAt: number;
 	workspace: "shared" | "worktree";
 	brief: string;
 	/** Where the caret is in the text field being edited, in characters from its start. */
@@ -32,8 +37,17 @@ export interface ChildForm {
 	error?: string;
 }
 
-export function newChildForm(parent: { id: string; name: string }, roles: string[]): ChildForm {
-	return { parentId: parent.id, parentName: parent.name, field: "name", name: "", kind: "task", model: "", roles, picked: [], roleAt: 0, workspace: "shared", brief: "", at: 0 };
+/**
+ * What a new session under `parent` could wait on: any unfinished session of the same person
+ * in the same tree, except the ones it will sit under, which finish after it.
+ */
+export function waitChoices(nodes: readonly NodeMeta[], parent: NodeMeta): Array<{ id: string; name: string }> {
+	const above = new Set([parent.id, ...ancestorsOf(nodes, parent.id).map((node) => node.id)]);
+	return nodes.filter((node) => node.rootId === parent.rootId && node.owner === parent.owner && !node.done && !node.archived && !above.has(node.id)).map((node) => ({ id: node.id, name: node.name }));
+}
+
+export function newChildForm(parent: { id: string; name: string }, roles: string[], others: Array<{ id: string; name: string }> = []): ChildForm {
+	return { parentId: parent.id, parentName: parent.name, field: "name", name: "", kind: "task", model: "", roles, picked: [], roleAt: 0, others, waits: [], waitAt: 0, workspace: "shared", brief: "", at: 0 };
 }
 
 /** A key as the form sees it: a name for the ones that act, or text to insert. */
@@ -45,7 +59,12 @@ const chars = (text: string): string[] => [...text];
 
 /** Move to a field, with the caret at the end of its text. */
 const go = (form: ChildForm, field: Field): ChildForm => ({ ...form, field, at: isText(field) ? chars(form[field]).length : 0 });
-const step = (form: ChildForm, delta: number): ChildForm => go(form, FIELDS[Math.min(FIELDS.length - 1, Math.max(0, FIELDS.indexOf(form.field) + delta))] as Field);
+/** The fields this form has: what to wait on is asked only when there is something to wait on. */
+const fieldsOf = (form: ChildForm): Field[] => FIELDS.filter((field) => field !== "waits" || form.others.length > 0);
+const step = (form: ChildForm, delta: number): ChildForm => {
+	const fields = fieldsOf(form);
+	return go(form, fields[Math.min(fields.length - 1, Math.max(0, fields.indexOf(form.field) + delta))] as Field);
+};
 
 function submit(form: ChildForm): FormResult {
 	const name = form.name.trim();
@@ -53,7 +72,7 @@ function submit(form: ChildForm): FormResult {
 	if (!name) return { form: { ...go(form, "name"), error: "Give it a name." } };
 	if (!brief) return { form: { ...go(form, "brief"), error: "Say what it should do. It sees only the brief." } };
 	const model = form.model.trim();
-	return { submit: { parentId: form.parentId, spec: { name, brief, kind: form.kind.trim() || "task", fragments: form.picked, workspace: form.workspace, ...(model ? { model } : {}) } } };
+	return { submit: { parentId: form.parentId, spec: { name, brief, kind: form.kind.trim() || "task", fragments: form.picked, workspace: form.workspace, ...(model ? { model } : {}), ...(form.waits.length > 0 ? { waitsOn: form.waits } : {}) } } };
 }
 
 /** Edit the text field the form is on: put text in at the caret, or take a character out beside it. */
@@ -93,6 +112,11 @@ export function formKey(form: ChildForm, key: FormKey): FormResult {
 		const role = form.roles[form.roleAt];
 		if (key === "left" || key === "right") return { form: { ...clean, roleAt: Math.min(Math.max(0, form.roles.length - 1), Math.max(0, form.roleAt + (key === "left" ? -1 : 1))) } };
 		if (key === "space" && role) return { form: { ...clean, picked: form.picked.includes(role) ? form.picked.filter((name) => name !== role) : [...form.picked, role] } };
+	}
+	if (field === "waits") {
+		const other = form.others[form.waitAt];
+		if (key === "left" || key === "right") return { form: { ...clean, waitAt: Math.min(Math.max(0, form.others.length - 1), Math.max(0, form.waitAt + (key === "left" ? -1 : 1))) } };
+		if (key === "space" && other) return { form: { ...clean, waits: form.waits.includes(other.id) ? form.waits.filter((id) => id !== other.id) : [...form.waits, other.id] } };
 	}
 	if (field === "workspace" && (key === "left" || key === "right" || key === "space")) return { form: { ...clean, workspace: form.workspace === "shared" ? "worktree" : "shared" } };
 	if (field === "create" && (key === "enter" || key === "space")) return submit(clean);
@@ -140,6 +164,22 @@ export function renderForm(form: ChildForm, width: number, paint: Paint = PLAIN,
 	});
 	out.push(row);
 
+	// What it waits on is chosen the same way. With something chosen it is created now and starts when those finish.
+	if (form.others.length > 0) {
+		row = [label("waits", "Waits on")];
+		form.others.forEach((other, index) => {
+			const chosen = form.waits.includes(other.id);
+			const cell = chosen ? `[${other.name}]` : ` ${other.name} `;
+			if (widthOf(row) + [...cell].length + 1 > inner) {
+				out.push(row);
+				row = [[" ".repeat(12)]];
+			}
+			const here = form.field === "waits" && index === form.waitAt;
+			row.push([cell, here ? paint.select : chosen ? paint.bold : paint.dim], [" "]);
+		});
+		out.push(row);
+	}
+
 	const option = (value: ChildForm["workspace"], words: string): Seg[] => [[form.workspace === value ? "◉ " : "○ ", form.workspace === value ? paint.accent : paint.dim], [words, form.workspace === value ? undefined : paint.dim]];
 	out.push([label("workspace", "Workspace"), ...option("shared", "this directory"), ["   "], ...option("worktree", "its own worktree and branch")]);
 	out.push([[""]]);
@@ -162,11 +202,11 @@ export function renderForm(form: ChildForm, width: number, paint: Paint = PLAIN,
 	}
 	out.push([[` ╰${"─".repeat(text - 2)}╯`, border]]);
 	out.push([[""]]);
-	out.push([[" "], ["  Create  ", form.field === "create" ? paint.select : paint.bold], ["  runs in the background", paint.dim]]);
+	out.push([[" "], ["  Create  ", form.field === "create" ? paint.select : paint.bold], [form.waits.length > 0 ? "  starts when what it waits on has finished" : "  runs in the background", paint.dim]]);
 	if (form.error) out.push([[""]], [[` ${fit(form.error, inner - 1)}`, paint.warn]]);
 
 	const keys: Array<readonly [string, string]> =
-		form.field === "roles"
+		form.field === "roles" || form.field === "waits"
 			? [["←→", "choose"], ["space", "toggle"]]
 			: form.field === "workspace"
 				? [["space", "switch"]]

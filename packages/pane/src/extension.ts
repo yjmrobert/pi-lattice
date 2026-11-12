@@ -12,8 +12,8 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import { emitEvent, formatSetting, type HostAssignment, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState } from "@pi-lattice/protocol";
-import { type ChildForm, type FormKey, formKey, newChildForm, renderForm } from "./form.ts";
+import { emitEvent, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState } from "@pi-lattice/protocol";
+import { type ChildForm, type FormKey, formKey, newChildForm, renderForm, waitChoices } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
 import { connectHost, hasTree, inRepository, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
@@ -121,7 +121,7 @@ function view(): PaneView {
 	const withGhost = (state: UiState): UiState => {
 		const parent = form ? state.nodes.find((node) => node.id === form.parentId) : undefined;
 		if (!form || !parent) return state;
-		const ghost: NodeMeta = { ...parent, id: GHOST, parentId: parent.id, name: form.name.trim() || "new session", kind: "new", status: "dormant", brief: form.brief, fragments: form.picked, createdAt: "9999", updatedAt: "" };
+		const ghost: NodeMeta = { ...parent, id: GHOST, parentId: parent.id, name: form.name.trim() || "new session", kind: "new", status: "dormant", brief: form.brief, fragments: form.picked, done: false, waitsOn: form.waits, createdAt: "9999", updatedAt: "" };
 		return { ...state, nodes: [...state.nodes, ghost] };
 	};
 	const repos = links
@@ -504,7 +504,7 @@ function onFormKey(data: string): void {
 				await refresh();
 				// Leave the cursor on what was just made.
 				shared.cursor = nodeKey(node.id);
-				tell(`Created "${node.name}". It is working in the background.`);
+				tell(isHeld(node) ? `Created "${node.name}". It starts when what it waits on has finished.` : `Created "${node.name}". It is working in the background.`);
 			})
 			.catch((error: unknown) => {
 				if (shared.form) shared.form = { ...shared.form, error: error instanceof Error ? error.message : String(error) };
@@ -596,6 +596,10 @@ function perform(action: PaneAction): void {
 			const client = shared.links.get(action.repo)?.client;
 			if (client) settle(client.ui("interrupt", { nodeId: action.nodeId }).then(() => tell(`Stopped "${name}". It is idle; open it or send it a message to carry on.`)));
 		}
+	} else if (action.do === "start") {
+		const client = shared.links.get(action.repo)?.client;
+		const name = nameOf(action.nodeId);
+		if (client) settle(client.ui("start", { nodeId: action.nodeId }).then(() => tell(`Started "${name}" without waiting for what it waits on.`)));
 	} else if (action.do === "archive") {
 		const client = shared.links.get(action.repo)?.client;
 		const name = nameOf(action.nodeId);
@@ -608,7 +612,7 @@ function perform(action: PaneAction): void {
 			// Ask whoever knows which roles exist here; with no answer the form simply offers none.
 			const request = { names: [] as string[] };
 			if (shared.pi) emitEvent(shared.pi.events, "lattice:roles:available", request);
-			shared.form = newChildForm(parent.node, request.names.sort());
+			shared.form = newChildForm(parent.node, request.names.sort(), waitChoices(linkOf(parent.node.id)?.state?.nodes ?? [], parent.node));
 		} else {
 			shared.focused = false;
 			shared.cursor = undefined;
@@ -974,14 +978,17 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		const workspace = await ctx.ui.select("Where should it work?", ["shared: this directory", "worktree: its own git worktree and branch"]);
 		if (workspace === undefined) return;
 		const model = (await ctx.ui.input("Model (optional; empty uses the default)", "anthropic/claude-haiku-4-5"))?.trim() ?? "";
+		// Asked only when there is something it could wait on.
+		const others = waitChoices(linkOf(parent.id)?.state?.nodes ?? [], parent);
+		const waits = others.length === 0 ? [] : ((await ctx.ui.input(`Start it only after these finish (optional; separated by commas): ${others.map((other) => other.name).join(", ")}`, ""))?.split(",") ?? []).map((name) => name.trim()).filter(Boolean);
 		const brief = (await ctx.ui.editor("Brief: what should it do? It sees only this text.", ""))?.trim();
 		if (!brief) return;
 		try {
 			const { node } = await client.ui("spawn", {
 				parentId: parent.id,
-				spec: { name: childName, brief, kind, fragments: roles.split(/[\s,+]+/).filter(Boolean), workspace: workspace.startsWith("worktree") ? "worktree" : "shared", ...(model ? { model } : {}) },
+				spec: { name: childName, brief, kind, fragments: roles.split(/[\s,+]+/).filter(Boolean), workspace: workspace.startsWith("worktree") ? "worktree" : "shared", ...(model ? { model } : {}), ...(waits.length > 0 ? { waitsOn: waits } : {}) },
 			});
-			ctx.ui.notify(`Created "${node.name}". It is working in the background; open it from the pane (alt+l).`, "info");
+			ctx.ui.notify(isHeld(node) ? `Created "${node.name}". It starts when what it waits on has finished.` : `Created "${node.name}". It is working in the background; open it from the pane (alt+l).`, "info");
 		} catch (error) {
 			fail(ctx, error);
 		}
@@ -1590,6 +1597,16 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		{ name: "new", usage: "new [session]", does: "create a child session", run: (ctx, arg) => create(ctx, arg) },
 		{ name: "rename", usage: "rename <session> [name]", does: "rename a session", run: (ctx, arg) => rename(ctx, arg) },
 		{ name: "interrupt", usage: "interrupt <session>", does: "stop what a session's agent is doing", run: (ctx, arg) => interrupt(ctx, arg) },
+		{
+			name: "start", usage: "start <session>", does: "start a session that is waiting on others, without waiting for them",
+			run: async (ctx, arg) => {
+				await refresh();
+				const node = named(ctx, arg);
+				if (!node) return;
+				await linkOf(node.id)?.client.ui("start", { nodeId: node.id });
+				ctx.ui.notify(`Started "${node.name}" without waiting for what it waits on.`, "info");
+			},
+		},
 		{
 			name: "sleep", usage: "sleep <session>", does: "stop a background session's process until it has work",
 			run: async (ctx, arg) => {
