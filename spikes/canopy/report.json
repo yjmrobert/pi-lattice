@@ -1,0 +1,15 @@
+{
+  "size": "140x40",
+  "rowsOwned": "40 of 40",
+  "apcReachedTerminal": true,
+  "apcLineIntact": true,
+  "keysSeen": "shift+right shift+up tab x 1 escape",
+  "stillOpenAfterEscape": true,
+  "bytesPerSecondWhileAnimating": 131439,
+  "editorGotTheKeys": false,
+  "framesAsked": 41,
+  "rendersDone": 45,
+  "rendersPerSecond": 13.1,
+  "apcWidthAsPiMeasuresIt": 6,
+  "glyphsNotOneColumn": "none"
+}

@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run --passWithNoTests",
     "spike:phase0": "node spikes/phase0/run.mjs",
+    "spike:canopy": "vitest --run --dir spikes/canopy --config spikes/canopy/vitest.config.ts",
     "check": "npm run typecheck && npm test",
     "lattice": "node packages/app/src/cli.ts",
     "dev": "node scripts/dev.mjs",
