@@ -24,11 +24,8 @@ function excludeLatticeDir(commonDir: string): void {
 	appendFileSync(path, `${current.endsWith("\n") || current === "" ? "" : "\n"}.lattice/\n`);
 }
 
-/**
- * Create a worktree on a new branch for a node, starting from the commit checked out in
- * `parentCwd`. The node works at the same relative path inside it.
- */
-export function createWorktree(parentCwd: string, nodeId: string, name: string): Worktree {
+/** Where a worktree for a child of `parentCwd` would come from. Throws, in words for the agent, when there cannot be one. */
+export function worktreeSource(parentCwd: string): { top: string; commonDir: string } {
 	let top: string;
 	let commonDir: string;
 	try {
@@ -43,6 +40,15 @@ export function createWorktree(parentCwd: string, nodeId: string, name: string):
 	} catch {
 		throw new Error('A worktree workspace needs at least one commit in the repository. Commit first, or use workspace "shared".');
 	}
+	return { top, commonDir };
+}
+
+/**
+ * Create a worktree on a new branch for a node, starting from the commit checked out in
+ * `parentCwd`. The node works at the same relative path inside it.
+ */
+export function createWorktree(parentCwd: string, nodeId: string, name: string): Worktree {
+	const { top, commonDir } = worktreeSource(parentCwd);
 	const mainRoot = dirname(commonDir);
 	const path = join(mainRoot, ".lattice", "worktrees", nodeId);
 	const branch = `lattice/${slug(name)}-${nodeId.slice(-6)}`;

@@ -9,6 +9,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync,
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
+	ancestorsOf,
 	assignmentToEnv,
 	type Channel,
 	childrenOf,
@@ -19,6 +20,7 @@ import {
 	HOST_ENV,
 	type HostAssignment,
 	type InboundState,
+	isHeld,
 	isRelativeAddress,
 	latticeHome,
 	type Limits,
@@ -50,12 +52,13 @@ import {
 	type UiState,
 	validateEnvelope,
 	WORKSPACE_MODES,
+	waitingFor,
 } from "@pi-lattice/protocol";
 import { buildSessionContext, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import { type ExitInfo, PiProcess, type RpcRecord } from "./pi-process.ts";
 import { type Connection, type Hello, SocketServer } from "./socket-server.ts";
 import { type JournalRecord, SqliteStore, type Store } from "./store.ts";
-import { createWorktree, repoName } from "./workspace.ts";
+import { createWorktree, repoName, worktreeSource } from "./workspace.ts";
 
 export interface HostOptions {
 	/** Directory for the database, sessions and child mailboxes. One host per directory. */
@@ -231,6 +234,10 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	 * says the child has already been told once that its parent is waiting.
 	 */
 	private readonly owing = new Map<string, { reminded: boolean }>();
+	/** Sessions that waited on others and are being started right now. */
+	private readonly releasing = new Map<string, Promise<void>>();
+	/** Why a waiting session could not be started when its turn came, so it is said once and not at every retry. */
+	private readonly releaseComplaints = new Map<string, string>();
 	private sharing: SharingPort | undefined;
 	/** The name this person's sessions here were under until this start, when it changed. */
 	readonly renamedFrom: string | undefined;
@@ -315,6 +322,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			if (node.status !== "dormant" && node.status !== "exited" && node.status !== "failed") host.store.updateNode(node.id, { status: "dormant" });
 		}
 		await host.server.listen();
+		// A session whose wait ended as the host last stopped starts now.
+		host.releaseReady();
 		// A person's own Pi proves it is the same user by reading this file.
 		writeFileSync(join(host.stateDir, "ui.token"), host.uiToken, { mode: 0o600 });
 		chmodSync(join(host.stateDir, "ui.token"), 0o600);
@@ -458,30 +467,141 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		// Every child is told how to talk to the tree and how to answer its parent, whatever else it was given.
 		const fragments = rolesFor(this.settings(), "child", chosen);
 		const model = typeof spec.model === "string" && spec.model.trim() !== "" ? spec.model.trim() : undefined;
+		const waitsOn = this.resolveWaitsOn(all, parent, spec.waitsOn);
+		const held = waitsOn.some((other) => !other.done);
 
 		const id = newNodeId();
 		const name = clean(spec.name, id);
 		let cwd = parent.cwd;
 		let branch: string | null = null;
 		if (workspace === "worktree") {
-			const worktree = createWorktree(parent.cwd, id, name);
-			cwd = worktree.cwd;
-			branch = worktree.branch;
+			if (held) {
+				// Its worktree is made when it starts, from what is checked out then: the work it waits on may be there by that time.
+				worktreeSource(parent.cwd);
+			} else {
+				const worktree = createWorktree(parent.cwd, id, name);
+				cwd = worktree.cwd;
+				branch = worktree.branch;
+			}
 		}
 		const node = this.insert({
 			id, parentId, rootId: parent.rootId, kind: (spec.kind ?? "task").trim() || "task", name, brief: spec.brief, fragments, cwd, workspace, branch,
 			...(model ? { model } : {}),
+			...(held ? { waitsOn: waitsOn.map((other) => other.id) } : {}),
 		});
-		// It owes its parent an answer from the moment it has the brief.
-		this.owing.set(node.id, { reminded: false });
+		if (held) return node;
 		try {
-			await this.ensureRunning(node.id);
-			await this.prompt(node.id, this.template("brief", { "parent.name": parent.name, "parent.id": parent.id, name: node.name, kind: node.kind, branch: node.branch, brief: node.brief }));
+			await this.giveBrief(node, waitsOn.map((other) => other.name));
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new Error(`The child "${name}" (${id}) was created but could not be started: ${message}`);
 		}
 		return this.must(node.id);
+	}
+
+	/** Start a child and hand it its brief. `waited` names the sessions it was kept back for, when they have all finished. */
+	private async giveBrief(node: NodeMeta, waited: string[] = []): Promise<void> {
+		const parent = node.parentId ? this.store.getNode(node.parentId) : undefined;
+		// It owes its parent an answer from the moment it has the brief.
+		this.owing.set(node.id, { reminded: false });
+		await this.ensureRunning(node.id);
+		await this.prompt(node.id, this.template("brief", {
+			"parent.name": parent?.name ?? "", "parent.id": parent?.id ?? "", name: node.name, kind: node.kind, branch: node.branch, waited: waited.map((name) => `"${name}"`).join(", "), brief: node.brief,
+		}));
+	}
+
+	// --- sessions that wait on others ------------------------------------------
+
+	/**
+	 * The sessions a new child of `parent` is to wait on, from the ids or names it was given.
+	 * A name must be the only one of its kind in the tree. Nothing above the child can be waited
+	 * on, because a parent finishes after its children; nor can a teammate's session, whose
+	 * result this host does not see.
+	 */
+	private resolveWaitsOn(all: NodeMeta[], parent: NodeMeta, given: unknown): NodeMeta[] {
+		if (given === undefined || given === null) return [];
+		if (!Array.isArray(given) || given.some((entry) => typeof entry !== "string")) throw new Error("Not spawned: waits_on is a list of session ids or names.");
+		const tree = treeOf(all, parent.rootId).filter((node) => !node.archived);
+		const above = new Set([parent.id, ...ancestorsOf(all, parent.id).map((node) => node.id)]);
+		const out: NodeMeta[] = [];
+		for (const entry of given as string[]) {
+			const wanted = entry.trim();
+			if (wanted === "") continue;
+			const named = tree.filter((node) => node.name.toLowerCase() === wanted.toLowerCase());
+			const found = tree.find((node) => node.id === wanted) ?? (named.length === 1 ? named[0] : undefined);
+			if (!found) {
+				if (named.length > 1) throw new Error(`Not spawned: ${named.length} sessions are named "${wanted}" (${named.map((node) => node.id).join(", ")}). Say which to wait on by id.`);
+				throw new Error(`Not spawned: there is no session "${wanted}" in this tree to wait on. Use list_sessions to see the tree.`);
+			}
+			if (above.has(found.id)) throw new Error(`Not spawned: "${found.name}" is above the new session in the tree, and finishes only after its children. Wait on a session beside it instead.`);
+			if (found.owner !== this.owner) throw new Error(`Not spawned: "${found.name}" belongs to ${found.owner}. Only sessions you run can be waited on.`);
+			if (!out.includes(found)) out.push(found);
+		}
+		return out;
+	}
+
+	/** Start every waiting session whose wait is over. Called whenever a session finishes, and whenever room may have been freed. */
+	private releaseReady(): void {
+		if (this.stopped) return;
+		const all = this.store.listNodes();
+		for (const node of all) {
+			if (!isHeld(node) || node.archived || node.owner !== this.owner || waitingFor(all, node).length > 0) continue;
+			this.release(node.id).catch(() => {
+				// Said by release; the next freed slot retries.
+			});
+		}
+	}
+
+	/**
+	 * Give a waiting session its brief: because what it waited on has finished, or, with
+	 * `early`, because a person or another session wants it started without that.
+	 */
+	private release(id: string, early = false): Promise<void> {
+		const inFlight = this.releasing.get(id);
+		if (inFlight) return inFlight;
+		const run = async (): Promise<void> => {
+			let node = this.must(id);
+			if (!isHeld(node)) return;
+			const all = this.store.listNodes();
+			const waited = early && waitingFor(all, node).length > 0 ? [] : (node.waitsOn ?? []).flatMap((other) => all.find((candidate) => candidate.id === other)?.name ?? []);
+			try {
+				if (node.workspace === "worktree" && !node.branch) {
+					const from = (node.parentId ? this.store.getNode(node.parentId)?.cwd : undefined) ?? node.cwd;
+					const worktree = createWorktree(from, node.id, node.name);
+					node = this.update(id, { cwd: worktree.cwd, branch: worktree.branch });
+				}
+				await this.giveBrief(node, waited);
+				this.update(id, { waitsOn: [] });
+				this.releaseComplaints.delete(id);
+			} catch (error) {
+				this.owing.delete(id);
+				const message = error instanceof Error ? error.message : String(error);
+				if (this.releaseComplaints.get(id) !== message) this.emit("log", "warn", `"${node.name}" was due to start, and could not be: ${message}`);
+				this.releaseComplaints.set(id, message);
+				throw error;
+			}
+		};
+		// Mail that came for it meanwhile, such as the message that started it, follows the brief.
+		const started = run().finally(() => {
+			this.releasing.delete(id);
+			this.flush(id);
+		});
+		this.releasing.set(id, started);
+		return started;
+	}
+
+	/** Start a waiting session now, on a person's say-so. */
+	async startHeld(id: string): Promise<void> {
+		const node = this.must(id);
+		if (node.owner !== this.owner) throw new Error(`"${node.name}" is owned by ${node.owner}. Only they can start it.`);
+		if (!isHeld(node)) throw new Error(`"${node.name}" is not waiting on anything.`);
+		await this.release(id, true);
+	}
+
+	/** Start a session because it has mail. One that was waiting on others gets its brief with it. */
+	private wake(id: string): Promise<void> {
+		const node = this.store.getNode(id);
+		return node && isHeld(node) ? this.release(id, true) : this.ensureRunning(id);
 	}
 
 	private insert(fields: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "cwd" | "workspace" | "branch"> & Pick<Partial<NodeMeta>, "model">): NodeMeta {
@@ -711,7 +831,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (!toggleSetting(this.settings(), "reports.remind")) return;
 		// It may be waiting itself: on a person, on mail not yet delivered, or on its own children.
 		if (runtime.dialogs.size > 0 || this.store.unacked(id).length > 0) return;
-		const waitingOn = childrenOf(this.store.listNodes(), id).some((kid) => this.owing.has(kid.id) || kid.status === "running" || kid.status === "starting" || kid.status === "blocked");
+		const waitingOn = childrenOf(this.store.listNodes(), id).some((kid) => this.owing.has(kid.id) || isHeld(kid) || kid.status === "running" || kid.status === "starting" || kid.status === "blocked");
 		if (waitingOn) return;
 		if (!owed.reminded) {
 			owed.reminded = true;
@@ -734,10 +854,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (!node?.parentId || this.stopped) return;
 		if (!owed && (!crashed || node.done)) return;
 		const last = detail || runtime.recent.filter((line) => !line.startsWith("→ ")).at(-1) || "";
+		const held = this.store.listNodes().filter((other) => !other.archived && other.waitsOn?.includes(id)).map((other) => `"${other.name}" (${other.id})`).join(", ");
 		try {
 			this.route(node, createEnvelope({
 				from: node.id, fromOwner: node.owner, fromName: node.name, to: "parent", intent: "stopped", seq: 1,
-				text: this.template("child-stopped", { name: node.name, id: node.id, reason, last }),
+				text: this.template("child-stopped", { name: node.name, id: node.id, reason, last, held }),
 			}));
 		} catch (error) {
 			this.emit("log", "warn", `"${node.name}" stopped without reporting, and its parent could not be told: ${error instanceof Error ? error.message : String(error)}`);
@@ -754,10 +875,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			if (this.runtimes.has(id) || this.starting.has(id)) continue;
 			const node = this.store.getNode(id);
 			if (!node || node.status === "failed") continue;
-			this.ensureRunning(id).catch(() => {
+			this.wake(id).catch(() => {
 				// Still no room; the next freed slot retries.
 			});
 		}
+		this.releaseReady();
 	}
 
 	// --- foreground: nodes open in a person's own Pi ----------------------------
@@ -784,6 +906,10 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	async attachForeground(id: string, clientId: string): Promise<{ node: NodeMeta; sessionFile: string; assignment: HostAssignment; wasWorking: boolean }> {
 		let node = this.must(id);
 		if (node.owner !== this.owner) throw new Error(`"${node.name}" is owned by ${node.owner} and runs on their machine.`);
+		if (isHeld(node)) {
+			const names = waitingFor(this.store.listNodes(), node).map((other) => `"${other.name}"`).join(", ");
+			throw new Error(`"${node.name}" has not started: it waits on ${names || "sessions that have finished, and starts in a moment"}. To start it now, press s on it in the pane or run /lattice start.`);
+		}
 		await this.starting.get(id)?.catch(() => {});
 		let runtime = this.runtimes.get(id);
 		if (runtime?.foreground && runtime.foreground !== clientId) throw new Error(`"${node.name}" is already open in another terminal.`);
@@ -962,6 +1088,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			case "interrupt":
 				await this.interrupt(call("interrupt").nodeId);
 				return {};
+			case "start":
+				await this.startHeld(call("start").nodeId);
+				return {};
 			case "tail":
 				return { lines: await this.tail(call("tail").nodeId) };
 			case "usage": {
@@ -1051,6 +1180,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			this.update(entry.id, { archived });
 			count++;
 		}
+		if (!archived) this.releaseReady();
 		return count;
 	}
 
@@ -1156,6 +1286,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const runtime = this.runtimes.get(nodeId);
 		const connection = runtime?.channels.get("a2a");
 		if (!runtime || !connection) return false;
+		// A session being given its brief gets that first; its mail is pushed once it has it.
+		if (this.releasing.has(nodeId)) return true;
 		for (const envelope of this.store.unacked(nodeId)) {
 			if (runtime.inflight.has(envelope.id)) continue;
 			runtime.inflight.add(envelope.id);
@@ -1217,8 +1349,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				if (sender.rootId === sender.id) throw new Error("This session is the root of its tree.");
 				recipients = [sender.rootId];
 			} else {
-				recipients = childrenOf(this.store.listNodes(), sender.id).map((node) => node.id);
-				if (recipients.length === 0) throw new Error("This session has no children to message.");
+				const children = childrenOf(this.store.listNodes(), sender.id);
+				if (children.length === 0) throw new Error("This session has no children to message.");
+				// A child that is waiting on others has not started, and a message to all of them does not start it.
+				recipients = children.filter((node) => !isHeld(node)).map((node) => node.id);
+				if (recipients.length === 0) throw new Error("Every child of this session is waiting on other sessions and has not started. To start one without that, message it by id.");
 			}
 		} else {
 			if (envelope.to === sender.id) throw new Error("Cannot send a message to yourself.");
@@ -1238,7 +1373,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		for (const recipient of local) {
 			if (!this.flush(recipient)) {
 				// Dormant recipient: wake it. The mail is delivered when its session connects.
-				this.ensureRunning(recipient).catch((error: unknown) => {
+				this.wake(recipient).catch((error: unknown) => {
 					this.emit("log", "warn", `Mail for ${recipient} is queued; the session could not be started: ${error instanceof Error ? error.message : String(error)}`);
 				});
 			}
@@ -1251,7 +1386,10 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (sender.parentId && recipients.includes(sender.parentId) && envelope.intent !== "stopped") {
 			// Anything a child says to its parent is an answer of a kind; a result is the end of the work.
 			this.owing.delete(sender.id);
-			if (envelope.intent === "result" && !sender.done) this.update(sender.id, { done: true });
+			if (envelope.intent === "result" && !sender.done) {
+				this.update(sender.id, { done: true });
+				this.releaseReady();
+			}
 		}
 		for (const id of recipients) {
 			const recipient = this.store.getNode(id);
@@ -1304,7 +1442,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		this.store.journal(checked.envelope, recipientId);
 		this.emit("envelope", checked.envelope, [recipientId]);
 		if (!this.flush(recipientId)) {
-			this.ensureRunning(recipientId).catch((error: unknown) => {
+			this.wake(recipientId).catch((error: unknown) => {
 				this.emit("log", "warn", `Mail for ${recipientId} is queued; the session could not be started: ${error instanceof Error ? error.message : String(error)}`);
 			});
 		}

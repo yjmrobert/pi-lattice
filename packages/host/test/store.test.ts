@@ -33,6 +33,15 @@ describe("SqliteStore nodes", () => {
 		expect(store.getNode(n.id)).toEqual(updated);
 	});
 
+	it("keeps what a node waits on, and nothing once it waits on nothing", () => {
+		const n = node({ waitsOn: ["nd_a", "nd_b"] });
+		store.insertNode(n);
+		expect(store.getNode(n.id)?.waitsOn).toEqual(["nd_a", "nd_b"]);
+		expect(store.updateNode(n.id, { status: "idle" }).waitsOn).toEqual(["nd_a", "nd_b"]);
+		expect(store.updateNode(n.id, { waitsOn: [] })).not.toHaveProperty("waitsOn");
+		expect(store.getNode(n.id)).not.toHaveProperty("waitsOn");
+	});
+
 	it("refuses to update a node that does not exist", () => {
 		expect(() => store.updateNode("nd_missing00000", { status: "idle" })).toThrow(/no node/);
 	});
