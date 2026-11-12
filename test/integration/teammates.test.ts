@@ -110,7 +110,7 @@ describe("teammates, through the pane", () => {
 		await answer("input", "A name for the network", { value: "team" });
 		const created = await told("Created team");
 		const code = created.split("\n").at(-1) ?? "";
-		expect(code).toMatch(/^team\.[A-Za-z0-9_-]{43}@127\.0\.0\.1/);
+		expect(code).toMatch(/^\/lattice join team\.[A-Za-z0-9_-]{43}@127\.0\.0\.1/);
 
 		// Sam joins with it, working in api.
 		const samState = join(samBox.work, ".lattice");
@@ -155,4 +155,68 @@ describe("teammates, through the pane", () => {
 		// It is no longer somewhere else: it is in a repository that is here.
 		await eventually(async () => (await stateOf(shopState)).sharing?.elsewhere.every((tree) => !tree.nodes.some((node) => node.id === auth.id)), "it to stop being listed as elsewhere", 30_000);
 	}, 180_000);
+
+	it("joins with one pasted line before any session exists, asking only what to be called", async () => {
+		const scratch = createSandbox();
+		const samBox = createSandbox();
+		const robinBox = createSandbox();
+		sandboxes = [scratch, samBox, robinBox];
+		const origin = join(scratch.root, "shop.git");
+		git(scratch.root, "init", "-q", "--bare", "-b", "main", origin);
+		git(samBox.work, "init", "-q", "-b", "main");
+		git(samBox.work, "config", "user.email", "sam@example.com");
+		git(samBox.work, "config", "user.name", "sam");
+		writeFileSync(join(samBox.work, "README.md"), "shop\n");
+		git(samBox.work, "add", ".");
+		git(samBox.work, "commit", "-q", "-m", "init");
+		git(samBox.work, "remote", "add", "origin", origin);
+		git(samBox.work, "push", "-q", "origin", "main");
+		git(robinBox.work, "clone", "-q", origin, ".");
+
+		// Sam has a network and a session, and sends the line their Pi showed.
+		const samState = join(samBox.work, ".lattice");
+		teammate = await runDaemon({
+			stateDir: samState, cwd: samBox.work, owner: "sam", idleExitMs: 0, tickMs: 100, home: samBox.home, discovery: false, advertise: "127.0.0.1",
+			hostOptions: hostOptionsFor(samBox, { stateDir: samState, owner: "sam" }),
+		});
+		const line = (await teammate.host.runSharing("create", ["team"])).split("\n").at(-1) ?? "";
+		expect(line).toMatch(/^\/lattice join team\./);
+		const checkout = await teammate.host.createRoot({ name: "checkout", cwd: samBox.work, fragments: [] });
+
+		// A new teammate's Pi, in their clone: no name chosen, no message sent, no tree.
+		const state = join(robinBox.work, ".lattice");
+		hostDirs.push(state);
+		pi = await startPi(robinBox, {
+			name: "terminal",
+			extensions: [extensionPaths.launcher, extensionPaths.pane, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
+			env: {
+				LATTICE_OWNER: "", LATTICE_DISCOVERY: "off", LATTICE_ADVERTISE: "127.0.0.1",
+				LATTICE_PI_COMMAND: JSON.stringify([process.execPath, piCli]),
+				LATTICE_PI_ARGS: JSON.stringify(fauxArgs),
+				LATTICE_EXTENSION_PATHS: JSON.stringify([extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]),
+				LATTICE_FAUX_SCRIPT: directorScript,
+			},
+		});
+		const terminal = pi;
+		const told = (saying: string) => terminal.waitFor(() => terminal.notifications().find((text) => text.includes(saying)), `to be told "${saying}"`, 40_000);
+
+		void terminal.command(line).catch(() => {});
+		const asked = await terminal.waitFor(
+			() => terminal.events.find((event) => event.type === "extension_ui_request" && event.method === "input" && String(event.title).includes("The name your teammates will see you as")),
+			"to be asked for a name", 30_000,
+		);
+		terminal.answer(asked.id, { value: "robin" });
+		await told("You are in team");
+		await told("Found sam");
+
+		const client = await eventually(() => connectHost(state), "robin's host", 20_000);
+		clients.push(client);
+		const seen = await eventually(async () => {
+			const now = await client.ui("state", {});
+			return now.nodes.some((node) => node.id === checkout.id) ? now : undefined;
+		}, "sam's session to be in robin's tree", 30_000);
+		expect(seen).toMatchObject({ owner: "robin", named: true });
+		expect(seen.nodes.find((node) => node.id === checkout.id)).toMatchObject({ owner: "sam", name: "checkout" });
+		expect(readFileSync(join(robinBox.home, "name"), "utf8").trim()).toBe("robin");
+	});
 });

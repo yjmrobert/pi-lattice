@@ -1026,11 +1026,87 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	const WHAT_GOES = "It stops here, and its whole conversation, including any file contents and command output in it, goes directly to them, with its branch if it has one. After that you can read it but not run it.";
 	const NO_NETWORK = "You are not in a network yet. /lattice network creates one, or joins a teammate's.";
 
+	/** This repository's host, started if it is not running. A network needs no session tree first. */
+	const ensureHost = async (ctx: ExtensionCommandContext): Promise<void> => {
+		const stateDir = stateDirFor(ctx.cwd);
+		shared.home = stateDir;
+		if (!shared.links.has(stateDir)) addLink(await launchHost(pi.events, stateDir, ctx.cwd), stateDir);
+		await refresh();
+	};
+
+	/**
+	 * Before the first network: settle the name teammates will see, which until then is the OS
+	 * user name. Asked once per machine. False when the person backed out.
+	 */
+	const introduce = async (ctx: ExtensionCommandContext, given?: string): Promise<boolean> => {
+		const state = homeLink()?.state;
+		if (!state) return false;
+		let name = given;
+		if (!name) {
+			if (state.named || state.sharing) return true;
+			const typed = await ctx.ui.input(`The name your teammates will see you as. Enter keeps "${state.owner}".`, state.owner);
+			if (typed === undefined) return false;
+			name = typed.trim() || state.owner;
+		}
+		try {
+			await homeLink()?.client.ui("sharing", { action: "name", args: [name] });
+		} catch (error) {
+			fail(ctx, error);
+			return false;
+		}
+		// Sessions here are under the old name until the host starts again; do that now, quietly.
+		if (name !== state.owner) await restart(ctx, false);
+		return homeLink() !== undefined;
+	};
+
+	/** After joining: say who was found, or what was tried and why it did not answer. */
+	const lookAround = async (ctx: ExtensionCommandContext, waitMs = 10_000): Promise<void> => {
+		for (const end = Date.now() + waitMs; ; ) {
+			await refresh();
+			const state = homeLink()?.state?.sharing;
+			if (!state) return;
+			const found = state.people.filter((person) => !person.self && person.online);
+			if (found.length > 0) return ctx.ui.notify(`Found ${found.map((person) => person.name).join(", ")}. Their sessions are in the pane.`, "info");
+			if (Date.now() >= end) break;
+			await new Promise((resolve) => setTimeout(resolve, 500));
+		}
+		const tried = homeLink()?.state?.sharing?.tried ?? [];
+		ctx.ui.notify(
+			[
+				"Nobody has answered yet. This keeps trying, and their sessions appear when it gets through.",
+				...(tried.length > 0 ? ["Tried:", ...tried.map((entry) => `  ${entry.address}  ${entry.why}`)] : ["No machine is known yet, and nobody is announcing themselves on this network."]),
+				"Check that their Pi is open and that both machines are on the same network or VPN. If the address above is not the one to reach them at, they set LATTICE_ADVERTISE to the right one, run /lattice restart, and send a fresh code.",
+			].join("\n"),
+			"warning",
+		);
+	};
+
+	/** Start a network: `/lattice create [network] [your name]`. */
+	const createNetwork = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
+		const [name = "", as] = arg.split(/\s+/).filter(Boolean);
+		await ensureHost(ctx);
+		if (!(await introduce(ctx, as))) return;
+		const client = homeLink()?.client;
+		if (client) await sharing(ctx, client, "create", [name || "team"]);
+	};
+
+	/** Join one: `/lattice join <code> [your name]`. The code may be a whole pasted line ending in it. */
+	const joinNetwork = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
+		const words = arg.split(/\s+/).filter(Boolean);
+		const at = words.findIndex((word) => word.includes("."));
+		const code = words[at];
+		if (!code) return ctx.ui.notify("Join with the code a teammate gave you: /lattice join <code>", "warning");
+		await ensureHost(ctx);
+		if (!(await introduce(ctx, words[at + 1]))) return;
+		const client = homeLink()?.client;
+		if (client && (await sharing(ctx, client, "join", [code]))) void lookAround(ctx).catch(() => {});
+	};
+
 	/** The network: create or join one; then who is in it, the join code, and anything being handed over. */
 	const network = async (ctx: ExtensionCommandContext): Promise<void> => {
+		await ensureHost(ctx);
 		const client = need(ctx);
 		if (!client) return;
-		await refresh();
 		const run = (action: string, args: string[]): Promise<boolean> => sharing(ctx, client, action, args);
 		const state = homeLink()?.state?.sharing;
 		if (!state) {
@@ -1041,11 +1117,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				[create, join],
 			);
 			if (picked === create) {
-				const name = await ctx.ui.input("A name for the network (letters, digits, dashes)", "team");
-				if (name?.trim()) await run("create", [name.trim()]);
+				const name = await ctx.ui.input('A name for the network (letters, digits, dashes). Enter keeps "team".', "team");
+				if (name !== undefined) await createNetwork(ctx, name.trim());
 			} else if (picked === join) {
 				const code = await ctx.ui.input("Paste the join code your teammate gave you", "name.secret@host");
-				if (code?.trim()) await run("join", [code.trim()]);
+				if (code?.trim()) await joinNetwork(ctx, code.trim());
 			}
 			return;
 		}
@@ -1089,7 +1165,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				"info",
 			),
 		});
-		options.push({ label: "Look for teammates again", act: () => run("refresh", []) });
+		options.push({ label: "Look for teammates again", act: async () => void ((await run("refresh", [])) && (await lookAround(ctx, 5000))) });
 		options.push({
 			label: `Leave ${state.network}`,
 			act: async () => {
@@ -1417,7 +1493,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	};
 
 	/** Stop the host of this repository and start it again, keeping this terminal's session where it is. */
-	const restart = async (ctx: ExtensionCommandContext): Promise<void> => {
+	const restart = async (ctx: ExtensionCommandContext, say = true): Promise<void> => {
 		const stateDir = shared.home;
 		const client = need(ctx);
 		if (!client || !stateDir) return;
@@ -1433,7 +1509,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		if (open && link.state?.nodes.some((node) => node.id === open)) await attach(open);
 		emitEvent(pi.events, "lattice:host:assigned", { assignment: shared.current ? (shared.assignment ?? null) : null });
 		await refresh();
-		ctx.ui.notify("The host was restarted. Background sessions start again as soon as they have work, with the current settings.", "info");
+		if (say) ctx.ui.notify("The host was restarted. Background sessions start again as soon as they have work, with the current settings.", "info");
 	};
 
 	/** Check everything the pane depends on and say what to do about what is wrong. */
@@ -1539,6 +1615,8 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		},
 		{ name: "approvals", does: "review messages waiting for approval", run: (ctx) => approvals(ctx) },
 		{ name: "network", does: "create or join a network of teammates; who is in it, the join code, what is being handed over", run: (ctx) => network(ctx) },
+		{ name: "join", usage: "join <code> [your name]", does: "join a teammate's network with the code they gave you", run: (ctx, arg) => joinNetwork(ctx, arg) },
+		{ name: "create", usage: "create [network] [your name]", does: "start a network and get the code teammates join with", run: (ctx, arg) => createNetwork(ctx, arg) },
 		{ name: "offer", usage: "offer <session> [person]", does: "offer one of your sessions to a teammate", run: (ctx, arg) => offer(ctx, arg) },
 		{ name: "take", usage: "take <session>", does: "ask a teammate for one of their sessions", run: (ctx, arg) => take(ctx, arg) },
 		{ name: "approve", usage: "approve <session> [person]", does: "hand a session to the teammate who asked for it", run: (ctx, arg) => approve(ctx, arg) },

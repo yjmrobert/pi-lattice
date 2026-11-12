@@ -36,6 +36,8 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | `d` / `/lattice archive <name>` | Hide a session and everything under it, and stop their processes. Nothing is deleted |
 | `/lattice restore [name]` | Bring archived sessions back |
 | `?` | List every key |
+| `/lattice create [network] [your name]` | Start a network. Answers with the line teammates paste. Asks once what teammates should call you |
+| `/lattice join <code> [your name]` | Join a teammate's network. Says who was found, or which addresses were tried and why they did not answer |
 | `/lattice network` | Create a network or join a teammate's, once for every repository. Then: who is in it, the join code, what is being handed over, leaving |
 | `o` / `/lattice offer <name> [person]` | Offer one of your sessions to a teammate. It is theirs as soon as they accept. Outside a network, `o` opens `/lattice network` |
 | `t` / `/lattice take <name>` | Ask a teammate for one of their sessions. It is yours as soon as they approve. `t` again takes the request back. For a session in a repository that is not on this machine, the repository is cloned first, after showing you where from and where to |
