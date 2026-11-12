@@ -6,6 +6,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, matchesKey, type TUI } from "@earendil-works/pi-tui";
 import { emitEvent, type LatticeEvents, onEvent, SETTINGS } from "@pi-lattice/protocol";
+import { type Animation, advance, happenings, type Motion } from "./animate.ts";
+import type { Shape } from "./layout.ts";
 import { buildWorld, type World } from "./model.ts";
 import { FPS } from "./paint.ts";
 import { type CanopyKey, type CanopyState, initial, interpret, render } from "./screen.ts";
@@ -28,10 +30,13 @@ export default function (pi: ExtensionAPI) {
 	let context: ExtensionContext | undefined;
 	let closeOpen: (() => void) | undefined;
 
-	const levels = (): string[] => {
+	const settings = (): Record<string, unknown> => {
 		const request: LatticeEvents["lattice:settings:query"] = {};
 		emitEvent(pi.events, "lattice:settings:query", request);
-		const value = request.values?.["canopy.levels"];
+		return request.values ?? {};
+	};
+	const levels = (): string[] => {
+		const value = settings()["canopy.levels"];
 		return Array.isArray(value) && value.length > 0 ? (value as string[]) : DEFAULT_LEVELS;
 	};
 	const look = (): { world: World; current: string | undefined } => {
@@ -42,15 +47,19 @@ export default function (pi: ExtensionAPI) {
 
 	function screen(tui: TUI, on: string | undefined, done: (result: string | undefined) => void): Component & { dispose(): void } {
 		let { world, current } = look();
-		let state: CanopyState = initial(world, on ?? current);
+		const chosen = settings();
+		const motion: Motion = chosen["canopy.motion"] === "off" || process.env.NO_COLOR ? "off" : chosen["canopy.motion"] === "calm" ? "calm" : "full";
+		let state: CanopyState = initial(world, on ?? current, (chosen["canopy.shape"] === "ruled" ? "ruled" : "grown") satisfies Shape);
+		// Opening plays nothing: only what changes while the canopy is open moves.
+		let moving: Animation[] = [];
 		let tick = 0;
 		let said: { text: string; until: number } | undefined;
 		const size = (): [number, number] => [tui.terminal.columns, tui.terminal.rows];
 		const timer = setInterval(() => {
 			tick++;
-			const moving = [...world.items.values()].some((item) => item.agent?.state === "working" || item.asks > 0 || item.agent?.state === "asking");
+			const busy = motion !== "off" && (moving.length > 0 || [...world.items.values()].some((item) => item.agent?.state === "working" || item.asks > 0 || item.agent?.state === "asking"));
 			if (said && Date.now() > said.until) said = undefined;
-			if (moving || tick % LOOK_EVERY === 0) tui.requestRender();
+			if (busy || tick % LOOK_EVERY === 0) tui.requestRender();
 		}, FRAME_MS);
 		const close = (result?: string): void => {
 			clearInterval(timer);
@@ -60,10 +69,13 @@ export default function (pi: ExtensionAPI) {
 		closeOpen = () => close();
 		return {
 			render(width) {
+				const before = world;
 				({ world, current } = look());
+				const now = Date.now();
+				moving = advance(moving, motion === "full" ? happenings(before, world) : [], world, now);
 				// What was selected may be gone: archived, or handed to someone whose tree is not shown.
 				if (state.selected && !world.items.has(state.selected)) state = { ...state, selected: world.root.children[0]?.id, framed: false };
-				const lines = render(world, state, width, tui.terminal.rows, tick);
+				const lines = render(world, state, width, tui.terminal.rows, motion === "off" ? 0 : tick, { animations: moving, now });
 				if (said && lines.length > 0) {
 					const text = said.text.slice(0, Math.max(0, width - 2));
 					lines[lines.length - 1] = ` \x1b[38;2;243;246;251m${text}\x1b[0m${" ".repeat(Math.max(0, width - 1 - text.length))}`;

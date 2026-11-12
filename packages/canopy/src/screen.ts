@@ -3,6 +3,7 @@
  * with a panel beside it, and the keys. The tree is as big as it needs to be and the window
  * moves over it. Everything here is a function of the world, the state and the size: no Pi.
  */
+import type { Animation } from "./animate.ts";
 import { Grid, type Style } from "./grid.ts";
 import { cut, type Layout, layout, type Place, type Shape } from "./layout.ts";
 import { type Item, pathTo, ROOT_ID, walk, type World } from "./model.ts";
@@ -321,7 +322,13 @@ function edges(plan: Layout, state: CanopyState, win: { width: number; height: n
 	return [...out].map(([side, count]) => ({ col: (at[side] as { col: number }).col, row: (at[side] as { row: number }).row, text: side === "left" ? `◀${count}` : `${count}${(at[side] as { arrow: string }).arrow}` }));
 }
 
-function compose(world: World, state: CanopyState, width: number, height: number, tick: number, lines: (grid: Grid, col?: number, row?: number, width?: number, height?: number) => string[]): string[] {
+/** What is moving on the screen because something just happened, and when it is drawn. */
+export interface Moving {
+	animations: readonly Animation[];
+	now: number;
+}
+
+function compose(world: World, state: CanopyState, width: number, height: number, tick: number, moving: Moving | undefined, lines: (grid: Grid, col?: number, row?: number, width?: number, height?: number) => string[]): string[] {
 	if (width < FLOOR.cols || height < FLOOR.rows) {
 		const grid = new Grid(width, height);
 		run(grid, 1, 1, [["The canopy needs ", DIM], [`${FLOOR.cols} columns by ${FLOOR.rows} rows`, { fg: COLOR.bright }], [".", DIM]]);
@@ -332,7 +339,7 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const view = state.framed ? state : frame(state, plan, width, height, true);
 	const win = windowOf(view, width, height);
 	const side = sideWidth(view, width);
-	const tree = paint(world, plan, { frame: tick, letters: view.letters, folded: view.folded, ...(view.selected ? { selected: view.selected } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
+	const tree = paint(world, plan, { frame: tick, letters: view.letters, folded: view.folded, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
 	const blink = tick === 0 || tick % FPS < FPS / 2;
 	for (const edge of edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
 	const canvas = lines(tree, view.camera.col, view.camera.row, win.width, win.height);
@@ -341,9 +348,9 @@ function compose(world: World, state: CanopyState, width: number, height: number
 }
 
 /** The screen as terminal lines, exactly `height` of them and `width` cells wide. */
-export const render = (world: World, state: CanopyState, width: number, height: number, tick = 0): string[] =>
-	compose(world, state, width, height, tick, (grid, col, row, w, h) => grid.lines(col, row, w, h));
+export const render = (world: World, state: CanopyState, width: number, height: number, tick = 0, moving?: Moving): string[] =>
+	compose(world, state, width, height, tick, moving, (grid, col, row, w, h) => grid.lines(col, row, w, h));
 
 /** The screen as text with no colour: what a test compares. */
-export const renderPlain = (world: World, state: CanopyState, width: number, height: number, tick = 0): string[] =>
-	compose(world, state, width, height, tick, (grid, col, row, w, h) => grid.plain(col, row, w, h).map((line) => line.padEnd(w ?? grid.width))).map((line) => line.trimEnd());
+export const renderPlain = (world: World, state: CanopyState, width: number, height: number, tick = 0, moving?: Moving): string[] =>
+	compose(world, state, width, height, tick, moving, (grid, col, row, w, h) => grid.plain(col, row, w, h).map((line) => line.padEnd(w ?? grid.width))).map((line) => line.trimEnd());

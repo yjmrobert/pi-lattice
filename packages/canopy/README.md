@@ -27,6 +27,7 @@ Press `c` in the pane, or run `/lattice canopy`. It takes the whole screen; `esc
 - **Amber needs someone.** A question, an approval. It is the only thing that blinks, and no person is given it. An arrow at the edge of the screen counts what needs someone out of view; `tab` goes to the next.
 - **A bright branch has landed.** Dim while it grows, dotted while it is only planned.
 - **A thin dotted line ties an agent to what it is working on**, when that is not the item it sits on.
+- **What moves is something that happened.** A light running along the branches is a message, from the sender to the receiver. A branch lighting downward is a task that landed. A ring spreading in amber is a question that just arrived; a ring closing in on an item is a session put on it. A colour spreading along a branch is an item that changed hands. With nothing happening the screen is still. `canopy.motion` turns it down (`calm`) or off.
 
 ## Keys
 
@@ -54,6 +55,7 @@ Press `c` in the pane, or run `/lattice canopy`. It takes the whole screen; `esc
 | `layout.ts` | Where everything goes, at whatever size the labels need. |
 | `grid.ts` | Cells with braille dots under them. |
 | `paint.ts` | A layout drawn into a grid. |
+| `animate.ts` | What happened between two looks, and the path each animation takes. |
 | `screen.ts` | The whole screen and what each key does. |
 | `extension.ts` | The only part that knows Pi: an overlay, and the event bus. |
 

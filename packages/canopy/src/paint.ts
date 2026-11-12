@@ -3,6 +3,7 @@
  * someone". What moves here moves with the frame it is given: a working agent's ring turns,
  * and amber blinks. No Pi, no terminal.
  */
+import { type Animation, centre, progress, trail } from "./animate.ts";
 import { Grid, type Style } from "./grid.ts";
 import { chipOf, cut, type Layout, type Place, under } from "./layout.ts";
 import type { Agent, Item, World } from "./model.ts";
@@ -21,6 +22,9 @@ export interface PaintOptions {
 	spotlight?: string;
 	/** Items drawn as one node: each says how many it holds. */
 	folded?: ReadonlySet<string>;
+	/** What is moving because something just happened, and the time it is drawn at. */
+	animations?: readonly Animation[];
+	now?: number;
 	/** Put each owner's letter beside their items, for reading without colour. */
 	letters?: boolean;
 }
@@ -40,6 +44,17 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 	const strength = (item: Item, level: number): number => (lit(item) ? (item.away ? level * 0.55 : level) : Math.min(level, 0.5));
 	const grey = (item: Item, color: string): string => (lit(item) ? color : COLOR.faint);
 
+	const now = options.now ?? 0;
+	const animations = options.animations ?? [];
+	// An item that was just planned grows out of its parent; one that just changed hands takes its new colour from the node outward.
+	const growing = new Map<string, number>();
+	const sweeping = new Map<string, { t: number; from: string }>();
+	for (const animation of animations) {
+		const happening = animation.happening;
+		if (happening.kind === "planted") growing.set(happening.id, progress(animation, now));
+		if (happening.kind === "handed") sweeping.set(happening.id, { t: progress(animation, now), from: happening.from });
+	}
+
 	// Branches: bright once everything on them has landed, dotted while only planned.
 	for (const branch of plan.branches) {
 		const item = branch.to;
@@ -48,10 +63,17 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		const style: Style = { fg: item.failed ? COLOR.failed : hue(item), level: strength(item, landed ? 1 : planned ? 0.5 : 0.62) };
 		const weight = landed ? 2 : planned ? 0 : 1;
 		const thick = branch.kind === "branch" && item.level === 0;
+		const grown = branch.kind === "stem" ? 1 : (growing.get(item.id) ?? 1);
+		const sweep = branch.kind === "stem" ? undefined : sweeping.get(item.id);
+		const old: Style | undefined = sweep ? { fg: lit(item) ? colorOf(world, sweep.from) : COLOR.faint, level: style.level ?? 1 } : undefined;
+		const count = branch.points.length;
 		branch.points.forEach(([x, y], index) => {
+			if (index > grown * count) return;
 			if (planned && branch.kind !== "twig" && index % 7 > 1) return;
-			grid.plot(x, y, style, weight);
-			if (thick) grid.plot(x + 1, y, style, weight);
+			// The new colour spreads from the item back toward its parent.
+			const paintAs = old && index < (1 - (sweep?.t ?? 1)) * count ? old : style;
+			grid.plot(x, y, paintAs, weight);
+			if (thick) grid.plot(x + 1, y, paintAs, weight);
 		});
 	}
 
@@ -85,6 +107,38 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		}
 		// Its mark at the far end: a small ring beside the item it is on.
 		for (let a = 0; a < 6.28; a += 0.8) grid.plot(bx + Math.cos(a) * 1.6, by + Math.sin(a) * 1.6, { fg: hue(place.item), level: strength(place.item, 1) }, 5);
+	}
+
+	// What just happened.
+	for (const animation of animations) {
+		const happening = animation.happening;
+		const t = progress(animation, now);
+		if (happening.kind === "message" || happening.kind === "landed") {
+			const from = world.items.get(happening.kind === "message" ? happening.from : happening.id);
+			let to = happening.kind === "message" ? world.items.get(happening.to) : from?.parent;
+			// A landing carries on down through every item it completes.
+			if (happening.kind === "landed") while (to?.parent && to.level >= 0 && to.leaves > 0 && to.landed === to.leaves) to = to.parent;
+			if (!from || !to) continue;
+			const dots = trail(plan, from, to);
+			const head = Math.round(t * (dots.length + 14));
+			const tail = happening.kind === "landed" ? 22 : 12;
+			const color = lit(from) ? colorOf(world, from.owner) : COLOR.faint;
+			for (let i = Math.max(0, head - tail); i <= Math.min(dots.length - 1, head); i++) {
+				const [x, y] = dots[i] as [number, number];
+				// A bright head and a tail in the sender's colour.
+				grid.plot(x, y, head - i < 4 ? { fg: lit(from) ? COLOR.bright : COLOR.dim } : { fg: color, level: 1 }, 20);
+			}
+			continue;
+		}
+		const place = plan.places.get(happening.id);
+		if (!place || place.item.level < 0) continue;
+		const [cx, cy] = centre(place);
+		if (happening.kind === "asked" || happening.kind === "seated") {
+			// A question spreads outward once, in amber; a session arrives inward, in its owner's colour.
+			const radius = happening.kind === "asked" ? 2 + t * 9 : 9 - t * 5.7;
+			const style: Style = happening.kind === "asked" ? { fg: grey(place.item, COLOR.attention), level: 1 - t * 0.6 } : { fg: hue(place.item), level: 0.5 + t * 0.5 };
+			for (let a = 0; a < 6.28; a += 0.22) grid.plot(cx + Math.cos(a) * radius, cy + Math.sin(a) * radius * 0.95, style, 15);
+		}
 	}
 
 	// The root.
