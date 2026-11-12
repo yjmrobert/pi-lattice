@@ -68,7 +68,7 @@ const TREE = [
 const LEVEL = ['epic', 'feature', 'story', 'task'], ROWY = [33, 24, 14], LEAF = 10, COLS = 128, ROWS = 44, CW = 8, CH = 17, CORE = [64, 41];
 const items = []; let lane = 0;
 (function walk(list, level, parent) { list.forEach(it => { it.level = level; it.parent = parent; it.row = ROWY[level]; items.push(it);
-  if (level === 2) { it.x = Math.round(8 + lane++ * 12.2); it.tasks = it.kids.map((k, j, a) => ({ name: k[0], state: k[1], waits: k[2], col: it.x + 2 * j - (a.length - 1) })); it.kids = []; }
+  if (level === 2) { it.x = Math.round(8 + lane++ * 11.9); it.tasks = it.kids.map((k, j, a) => ({ name: k[0], state: k[1], waits: k[2], col: it.x + 2 * j - (a.length - 1) })); it.kids = []; }
   else { walk(it.kids, level + 1, it); it.x = Math.round(it.kids.reduce((a, k) => a + k.x, 0) / it.kids.length); } }); })(TREE, 0, null);
 const leaves = it => it.level === 2 ? it.tasks : it.kids.flatMap(leaves), done = it => leaves(it).filter(t => t.state === 'done').length;
 const live = it => (it.seat && it.seat[1] === 'run') || leaves(it).some(t => t.state === 'run');
