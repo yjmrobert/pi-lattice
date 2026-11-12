@@ -108,7 +108,7 @@ export interface SharingHandoff {
 /** Everything the pane shows, fetched in one request. */
 export interface UiState {
 	owner: string;
-	/** Whether the person chose that name. Until they do it is their OS user name, and they are asked before joining a network. */
+	/** Whether the person chose that name. Until they do it is their OS user name, and they are asked before joining a server. */
 	named?: boolean;
 	nodes: NodeMeta[];
 	/** Per node: dialogs blocking it and messages awaiting approval. */
@@ -126,10 +126,11 @@ export interface UiState {
 	focus?: Record<string, { nodeId: string; at: number }>;
 	/** Present when this person has joined a server: the team's work, as last heard from it. */
 	work?: WorkState;
-	/** Present when this person is in a network: the tree is shared with its other members, peer to peer. */
+	/** Present when this person is on a server and this tree is shared with the people on it: sessions go between their machines directly. */
 	sharing: null | {
-		network: string;
-		/** What identifies this host's repository to the network. */
+		/** What the team is shown as: the server it is on. */
+		team: string;
+		/** What identifies this host's repository to the team. */
 		scope: string;
 		people: SharingPerson[];
 		handoffs: SharingHandoff[];
@@ -168,8 +169,8 @@ export interface UiApi {
 	/** A node's conversation, for reading. Fetched from its owner when it is someone else's, in this repository or another. */
 	messages: { params: { nodeId: string }; result: { messages: unknown[] } };
 	/**
-	 * Network and handoff actions. Returns text to show.
-	 * The network: `create <name>`, `join <code>`, `leave`, `code`, `trust <person>`, `refresh`.
+	 * Sharing and handoff actions. Returns text to show.
+	 * The team: `name [name]`, `trust <person>`, `refresh`.
 	 * Handing over: `offer <node> <person>`, `accept <node>`, `cancel <node>`, `confirm <node>`.
 	 * Asking: `ask <node>`, `withdraw <node>`, `approve <node> <person>`, `decline <node> <person>`.
 	 */

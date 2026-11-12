@@ -1,5 +1,5 @@
 /**
- * The work of a network as the canopy sees it: items on levels, who owns each, and the agent
+ * The work of a team as the canopy sees it: items on levels, who owns each, and the agent
  * sitting on it. Built from the same state the pane reads. No Pi, no terminal.
  */
 import { type Issue, isPlanned, misfit, type NodeMeta, roleOf, type Scheme, stateKind, type UiState, type WorkState, waitingOn } from "@pi-lattice/protocol";
@@ -113,9 +113,9 @@ export function buildWorld(sources: readonly TreeSource[], levels: readonly stri
 	if (work) return buildFromWork(sources, work, rootName);
 	const first = sources[0]?.state;
 	const me = first?.owner ?? "";
-	const network = sources.map((source) => source.state.sharing?.network).find((name) => name);
+	const team = sources.map((source) => source.state.sharing?.team).find((name) => name);
 	const root: Item = {
-		id: ROOT_ID, name: rootName || network || (sources.length === 1 ? (sources[0]?.repo ?? "") : "your work"), kind: "network", level: -1, owner: me, away: false, repo: "", tree: "",
+		id: ROOT_ID, name: rootName || team || (sources.length === 1 ? (sources[0]?.repo ?? "") : "your work"), kind: "network", level: -1, owner: me, away: false, repo: "", tree: "",
 		parent: undefined, children: [], buds: [], agent: undefined, planned: false, done: false, failed: false, leaves: 0, landed: 0, asks: 0, waitsOn: [], node: undefined,
 	};
 	const items = new Map<string, Item>([[ROOT_ID, root]]);

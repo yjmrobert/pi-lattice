@@ -35,7 +35,7 @@ export function world(specs: Spec[], me = "yan", extra: Partial<UiState> = {}): 
 		key: "/shop/.lattice", repo: "shop",
 		state: {
 			owner: me, nodes, attention, foreground: [],
-			sharing: { network: "harbor", scope: "shop", people: owners.map((name) => ({ name, fingerprint: name, trust: "trusted", online: name !== "teo", here: name !== "teo", self: name === me })), handoffs: [], requests: [], pendingTransfers: [], elsewhere: [] },
+			sharing: { team: "harbor", scope: "shop", people: owners.map((name) => ({ name, fingerprint: name, trust: "trusted", online: name !== "teo", here: name !== "teo", self: name === me })), handoffs: [], requests: [], pendingTransfers: [], elsewhere: [] },
 			...extra,
 		},
 	};

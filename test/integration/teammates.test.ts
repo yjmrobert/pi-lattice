@@ -4,11 +4,13 @@ import { join } from "node:path";
 import type { HostClient, UiState } from "@pi-lattice/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { type Daemon, runDaemon } from "../../packages/app/src/index.ts";
+import { joinAndSave } from "../../packages/app/src/work.ts";
 import { connectHost } from "../../packages/pane/src/index.ts";
+import { WorkServer } from "../../packages/server/src/index.ts";
 import { createSandbox, directorScript, eventually, extensionPaths, hostOptionsFor, type PiChild, piCli, type RpcEvent, type Sandbox, startPi } from "../support/harness.ts";
 
 /**
- * What a person does, through a real Pi and its prompts: create a network, see a teammate's
+ * What a person does, through a real Pi and its prompts: join the team's server, see a teammate's
  * session in a repository they do not have, read it, and take it, which clones the
  * repository. The teammate is a background host with its own home on this computer.
  */
@@ -20,6 +22,12 @@ let pi: PiChild | undefined;
 let teammate: Daemon | undefined;
 let clients: HostClient[] = [];
 let hostDirs: string[] = [];
+let server: WorkServer | undefined;
+/** Start a team's server and give the address people join it with. */
+const serve = async (): Promise<string> => {
+	server = new WorkServer({ file: ":memory:", host: "127.0.0.1" });
+	return `http://127.0.0.1:${await server.start()}/#${server.tracker.code}`;
+};
 afterEach(async () => {
 	await pi?.stop().catch(() => {});
 	for (const client of clients) client.close();
@@ -39,10 +47,13 @@ afterEach(async () => {
 	hostDirs = [];
 	pi = undefined;
 	teammate = undefined;
+	await server?.stop();
+	server = undefined;
 });
 
 describe("teammates, through the pane", () => {
-	it("creates a network from a prompt, reads a teammate's session in a repository that is not here, and takes it by cloning", async () => {
+	it("joins the server with one command, reads a teammate's session in a repository that is not here, and takes it by cloning", async () => {
+		const address = await serve();
 		const scratch = createSandbox();
 		const yanBox = createSandbox();
 		const samBox = createSandbox();
@@ -72,7 +83,7 @@ describe("teammates, through the pane", () => {
 			name: "terminal",
 			extensions: [extensionPaths.launcher, extensionPaths.pane, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
 			env: {
-				LATTICE_OWNER: "yan", LATTICE_DISCOVERY: "off", LATTICE_ADVERTISE: "127.0.0.1",
+				LATTICE_OWNER: "yan", LATTICE_ADVERTISE: "127.0.0.1",
 				LATTICE_PI_COMMAND: JSON.stringify([process.execPath, piCli]),
 				LATTICE_PI_ARGS: JSON.stringify(fauxArgs),
 				LATTICE_EXTENSION_PATHS: JSON.stringify([extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]),
@@ -104,22 +115,18 @@ describe("teammates, through the pane", () => {
 		await terminal.command("/lattice");
 		await eventually(async () => existsSync(join(shopState, "host.json")) && (await stateOf(shopState)).nodes.length === 1, "yan's tree to start", 30_000);
 
-		// One prompt creates the network and gives the code.
-		start("/lattice network");
-		await answer("select", "A network is you and your teammates", { value: "Create a network" });
-		await answer("input", "A name for the network", { value: "team" });
-		const created = await told("Created team");
-		const code = created.split("\n").at(-1) ?? "";
-		expect(code).toMatch(/^\/lattice join team\.[A-Za-z0-9_-]{43}@127\.0\.0\.1/);
+		// One command joins the server. Yan already goes by a name, so nothing is asked.
+		start(`/lattice server ${address}`);
+		await told("Joined http://127.0.0.1");
 
-		// Sam joins with it, working in api.
+		// Sam is on it too, working in api.
+		await joinAndSave(samBox.home, address, "sam");
 		const samState = join(samBox.work, ".lattice");
 		teammate = await runDaemon({
-			stateDir: samState, cwd: samBox.work, owner: "sam", idleExitMs: 0, tickMs: 100, home: samBox.home, discovery: false, advertise: "127.0.0.1",
+			stateDir: samState, cwd: samBox.work, owner: "sam", idleExitMs: 0, tickMs: 100, home: samBox.home, advertise: "127.0.0.1",
 			hostOptions: hostOptionsFor(samBox, { stateDir: samState, owner: "sam" }),
 		});
 		const sam = teammate.host;
-		await sam.runSharing("join", [code]);
 		const auth = await sam.createRoot({ name: "auth-rework", cwd: samBox.work, fragments: [] });
 		await sam.prompt(auth.id, "rotate the signing keys");
 		await eventually(() => sam.node(auth.id)?.status === "idle", "sam's session to settle");
@@ -157,6 +164,7 @@ describe("teammates, through the pane", () => {
 	}, 180_000);
 
 	it("joins with one pasted line before any session exists, asking only what to be called", async () => {
+		const address = await serve();
 		const scratch = createSandbox();
 		const samBox = createSandbox();
 		const robinBox = createSandbox();
@@ -173,14 +181,14 @@ describe("teammates, through the pane", () => {
 		git(samBox.work, "push", "-q", "origin", "main");
 		git(robinBox.work, "clone", "-q", origin, ".");
 
-		// Sam has a network and a session, and sends the line their Pi showed.
+		// Sam is on the server and has a session, and sends the line that joins it.
+		await joinAndSave(samBox.home, address, "sam");
 		const samState = join(samBox.work, ".lattice");
 		teammate = await runDaemon({
-			stateDir: samState, cwd: samBox.work, owner: "sam", idleExitMs: 0, tickMs: 100, home: samBox.home, discovery: false, advertise: "127.0.0.1",
+			stateDir: samState, cwd: samBox.work, owner: "sam", idleExitMs: 0, tickMs: 100, home: samBox.home, advertise: "127.0.0.1",
 			hostOptions: hostOptionsFor(samBox, { stateDir: samState, owner: "sam" }),
 		});
-		const line = (await teammate.host.runSharing("create", ["team"])).split("\n").at(-1) ?? "";
-		expect(line).toMatch(/^\/lattice join team\./);
+		const line = `/lattice server ${address}`;
 		const checkout = await teammate.host.createRoot({ name: "checkout", cwd: samBox.work, fragments: [] });
 
 		// A new teammate's Pi, in their clone: no name chosen, no message sent, no tree.
@@ -190,7 +198,7 @@ describe("teammates, through the pane", () => {
 			name: "terminal",
 			extensions: [extensionPaths.launcher, extensionPaths.pane, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
 			env: {
-				LATTICE_OWNER: "", LATTICE_DISCOVERY: "off", LATTICE_ADVERTISE: "127.0.0.1",
+				LATTICE_OWNER: "", LATTICE_ADVERTISE: "127.0.0.1",
 				LATTICE_PI_COMMAND: JSON.stringify([process.execPath, piCli]),
 				LATTICE_PI_ARGS: JSON.stringify(fauxArgs),
 				LATTICE_EXTENSION_PATHS: JSON.stringify([extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]),
@@ -206,7 +214,7 @@ describe("teammates, through the pane", () => {
 			"to be asked for a name", 30_000,
 		);
 		terminal.answer(asked.id, { value: "robin" });
-		await told("You are in team");
+		await told("Joined http://127.0.0.1");
 		await told("Found sam");
 
 		const client = await eventually(() => connectHost(state), "robin's host", 20_000);

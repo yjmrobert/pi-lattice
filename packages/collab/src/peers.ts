@@ -1,5 +1,5 @@
 /**
- * The people in this person's network: a pinned public key each, and the machines they have
+ * The people on this person's team: a pinned public key each, and the machines they have
  * been seen at. The first key seen under a name is pinned; a different key later is never
  * taken silently.
  *
@@ -13,7 +13,7 @@ import { isPersonName } from "./identity.ts";
 export interface Peer {
 	name: string;
 	publicKey: string;
-	/** Host names or addresses they were reached at, most recent first. No ports: see `sharedPort`. */
+	/** Host names or addresses they were reached at, most recent first, without ports. */
 	hosts?: string[];
 }
 

@@ -12,17 +12,10 @@ describe("parseArgs", () => {
 		});
 	});
 
-	it("reads sharing options", () => {
-		expect(parseArgs(["--join", "team.secret@10.0.0.9", "--advertise", "10.0.0.5", "--as", "yan"], "/proj")).toMatchObject({
-			join: "team.secret@10.0.0.9", advertise: "10.0.0.5", as: "yan",
-		});
-	});
-
-	it("reads joining and creating a network as commands of their own", () => {
-		expect(parseArgs(["join", "team.secret@10.0.0.9", "--as", "robin"], "/proj")).toMatchObject({ command: "join", subject: "team.secret@10.0.0.9", as: "robin" });
-		expect(parseArgs(["create"], "/proj")).toMatchObject({ command: "create", subject: undefined });
-		expect(parseArgs(["create", "crew"], "/proj")).toMatchObject({ command: "create", subject: "crew" });
-		expect(() => parseArgs(["join"], "/proj")).toThrow(/needs the code/);
+	it("reads sharing options, and no longer knows the commands that joined a network by a code", () => {
+		expect(parseArgs(["--advertise", "10.0.0.5", "--as", "yan"], "/proj")).toMatchObject({ advertise: "10.0.0.5", as: "yan" });
+		expect(() => parseArgs(["join", "team.secret@10.0.0.9"], "/proj")).toThrow(/Unknown option join/);
+		expect(() => parseArgs(["--join", "team.secret@10.0.0.9"], "/proj")).toThrow(/Unknown option --join/);
 	});
 
 	it("recognises the daemon command and its idle timeout", () => {

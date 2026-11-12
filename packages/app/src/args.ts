@@ -2,17 +2,13 @@
 
 export interface CliOptions {
 	/** `daemon`: the background host a person's Pi talks to. `plain`: a line-based interface, for scripting. */
-	command: "plain" | "daemon" | "join" | "create" | "server";
-	/** `join`: the code. `create`: the network's name. */
-	subject: string | undefined;
+	command: "plain" | "daemon" | "server";
 	cwd: string;
 	stateDir: string | undefined;
 	name: string | undefined;
 	kind: string | undefined;
 	fragments: string[];
 	brief: string | undefined;
-	/** A join code: become a member of that network before starting. */
-	join: string | undefined;
 	/** Host name or address teammates should use to reach this machine. */
 	advertise: string | undefined;
 	/** The name this person acts as: owner of the nodes created here. */
@@ -39,9 +35,6 @@ export const USAGE = `Usage: pi-lattice [daemon] [options] [-- <pi arguments>]
 Most people never run this directly: install the pi-lattice package into Pi, open
 pi in a project and run /lattice. Pi starts the host in the background as needed.
 
-  pi-lattice join <code>    Join a teammate's network, once for every project on this machine.
-  pi-lattice create [name]  Start a network and print the code teammates join with.
-                            Both take --as <name>: the name your teammates see you as.
   pi-lattice server   Run a team's server: one always-on place for its work. Prints the address
                       teammates join with. Takes --port (default 7420), --data <file> (default
                       <lattice home>/server/work.db) and --url <address teammates reach it at>.
@@ -54,7 +47,6 @@ Options:
   --cwd <dir>        Project directory (default: current directory)
   --state <dir>      Where the host keeps its tree and sessions (default: <cwd>/.lattice)
   --as <name>        The name you act as (default: the one you chose, or your OS user name)
-  --join <code>      Join a network with the code a teammate gave you
   --advertise <host> Address teammates should use to reach you (default: every network address)
   --idle-exit <sec>  daemon: exit after this long with nobody connected (default 600, 0 = never)
   -h, --help         Show this help
@@ -70,8 +62,8 @@ Arguments after -- are passed to every Pi session, for example -- --model sonnet
 
 export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 	const options: CliOptions = {
-		command: "plain", subject: undefined, cwd, stateDir: undefined, name: undefined, kind: undefined, fragments: [], brief: undefined,
-		join: undefined, advertise: undefined, as: undefined, idleExit: undefined, help: false, port: undefined, data: undefined, url: undefined, board: false, shared: false, piArgs: [],
+		command: "plain", cwd, stateDir: undefined, name: undefined, kind: undefined, fragments: [], brief: undefined,
+		advertise: undefined, as: undefined, idleExit: undefined, help: false, port: undefined, data: undefined, url: undefined, board: false, shared: false, piArgs: [],
 	};
 	const value = (flag: string, index: number): string => {
 		const next = argv[index + 1];
@@ -93,14 +85,6 @@ export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 		else if (arg === "--url") options.url = value(arg, i++);
 		else if (arg === "--board") options.board = true;
 		else if (arg === "--shared") options.shared = true;
-		else if (i === 0 && (arg === "join" || arg === "create")) {
-			options.command = arg;
-			const next = argv[1];
-			if (next !== undefined && !next.startsWith("-")) {
-				options.subject = next;
-				i++;
-			} else if (arg === "join") throw new Error("join needs the code a teammate gave you");
-		}
 		else if (arg === "-h" || arg === "--help") options.help = true;
 		else if (arg === "--plain") options.command = "plain";
 		else if (arg === "--cwd") options.cwd = value(arg, i++);
@@ -108,7 +92,6 @@ export function parseArgs(argv: readonly string[], cwd: string): CliOptions {
 		else if (arg === "--name") options.name = value(arg, i++);
 		else if (arg === "--kind") options.kind = value(arg, i++);
 		else if (arg === "--brief") options.brief = value(arg, i++);
-		else if (arg === "--join") options.join = value(arg, i++);
 		else if (arg === "--advertise") options.advertise = value(arg, i++);
 		else if (arg === "--as") options.as = value(arg, i++);
 		else if (arg === "--idle-exit") {

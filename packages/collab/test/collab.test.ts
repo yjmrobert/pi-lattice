@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEnvelope, type Envelope, type NodeMeta, newNodeId } from "@pi-lattice/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CollabSession, createNetwork, decodeBeacon, encodeBeacon, formatJoinCode, type HostPort, Identity, LanDiscovery, networkKey, parseJoinCode, PeerBook, sharedPort, TcpTransport } from "../src/index.ts";
+import { CollabSession, type HostPort, Identity, type Network, PeerBook, TcpTransport } from "../src/index.ts";
 
 /** An in-memory stand-in for a lattice host. */
 class FakeHost extends EventEmitter implements HostPort {
@@ -90,29 +91,53 @@ interface Seat {
 	logs: string[];
 	dir: string;
 }
-const TEAM = createNetwork("team");
-/** A person's host. `code` is the join code they were given; without one they are the first in the network. */
-const seat = (name: string, code?: string, keyDir?: string): Seat => {
+const teamOf = (name: string): Network => ({ name, secret: randomBytes(32).toString("base64url") });
+const TEAM = teamOf("team");
+
+/**
+ * Hosts do not look for each other: they are told where a teammate's host is, which in
+ * practice the team's server does. Here a test says it, with what `whereIs` gives.
+ */
+const places = new WeakMap<CollabSession, { name: string; scope: string }>();
+const whereIs = (collab: CollabSession): string => {
+	const { name, scope } = places.get(collab) as { name: string; scope: string };
+	return `${name}|${scope}|${collab.listening()[0]}`;
+};
+/** Note who a host is, and have it told where another is as soon as it starts. */
+const enrol = (collab: CollabSession, name: string, scope: string, where?: string): void => {
+	places.set(collab, { name, scope });
+	if (where === undefined) return;
+	const [who = "", theirs = "", address = ""] = where.split("|");
+	const start = collab.start.bind(collab);
+	collab.start = async () => {
+		await start();
+		collab.heardAt(who, [address], theirs === scope);
+	};
+};
+
+/** A person's host. `code` is where a teammate's host is; without it nobody has told them of anyone. */
+const seat = (name: string, code?: string, keyDir?: string, network = TEAM): Seat => {
 	const host = new FakeHost(name);
 	const dir = join(root, keyDir ?? name);
 	mkdirSync(join(dir, "project"), { recursive: true });
 	const collab = new CollabSession({
-		host, identity: Identity.loadOrCreate(join(dir, "keys"), name), peers: new PeerBook(join(dir, "people.json")), network: code ? parseJoinCode(code) : TEAM,
+		host, identity: Identity.loadOrCreate(join(dir, "keys"), name), peers: new PeerBook(join(dir, "people.json")), network,
 		transport: new TcpTransport({ host: "127.0.0.1", port: 0 }), dir: join(dir, "collab"), projectDir: join(dir, "project"),
 		advertise: "127.0.0.1", redialMs: 0, offerTtlMs: 60_000, requestTimeoutMs: 5000, now: () => clock,
 	});
+	enrol(collab, name, "", code);
 	sessions.push(collab);
 	const logs: string[] = [];
 	collab.on("log", (_level, message) => logs.push(message));
 	return { host, collab, logs, dir };
 };
-/** Two people in one network, connected; yan has a root with one child. */
+/** Two people on one team, connected; yan has a root with one child. */
 const pair = async () => {
 	const yan = seat("yan");
 	const top = yan.host.add("checkout");
 	const kid = yan.host.add("impl", top.id);
 	await yan.collab.start();
-	const code = yan.collab.joinCode();
+	const code = whereIs(yan.collab);
 	const sam = seat("sam", code);
 	await sam.collab.start();
 	await until(() => yan.collab.isOnline("sam") && sam.collab.isOnline("yan"), "both to be online");
@@ -127,68 +152,8 @@ const handOver = async (from: Seat, to: Seat, nodeId: string) => {
 	await until(() => from.host.node(nodeId)?.owner === to.host.owner, "the old owner to let go");
 };
 
-describe("join codes", () => {
-	it("round-trip a network and where to find it, and reject anything else", () => {
-		const network = createNetwork("acme-web");
-		const code = formatJoinCode(network, ["10.0.0.5", "laptop.local:47123"]);
-		expect(code).toMatch(/^acme-web\.[A-Za-z0-9_-]{43}@10\.0\.0\.5,laptop\.local:47123$/);
-		expect(parseJoinCode(` ${code}\n`)).toEqual({ ...network, seeds: ["10.0.0.5", "laptop.local:47123"] });
-		expect(parseJoinCode(formatJoinCode(network))).toEqual(network);
-		for (const bad of ["", "acme", "acme.short", "../x.k", `a b.${network.secret}`]) expect(() => parseJoinCode(bad)).toThrow(/not a join code/);
-		expect(() => createNetwork("no spaces")).toThrow(/cannot be used as a network name/);
-	});
-
-	it("give every member the same port for the same work, and another for other work", () => {
-		const key = networkKey(TEAM);
-		expect(sharedPort(key, "repo-a")).toBe(sharedPort(networkKey(parseJoinCode(formatJoinCode(TEAM))), "repo-a"));
-		expect(sharedPort(key, "repo-a")).not.toBe(sharedPort(key, "repo-b"));
-		expect(sharedPort(key, "repo-a")).toBeGreaterThanOrEqual(47000);
-		expect(sharedPort(key, "repo-a")).toBeLessThan(49000);
-	});
-});
-
-describe("beacons", () => {
-	it("are read only by members of the network, and say whether they are for the same work", () => {
-		const key = networkKey(TEAM);
-		const beacon = encodeBeacon(key, "repo-a", { name: "yan", port: 47123 });
-		expect(decodeBeacon(key, "repo-a", beacon)).toEqual({ name: "yan", port: 47123, same: true });
-		// Someone working on something else still learns a teammate is there, to ask what they have running.
-		expect(decodeBeacon(key, "repo-b", beacon)).toEqual({ name: "yan", port: 47123, same: false });
-		expect(decodeBeacon(networkKey(createNetwork("other")), "repo-a", beacon)).toBeUndefined();
-		expect(beacon.toString()).not.toContain("repo-a"); // the LAN does not learn what is being worked on
-		const forged = Buffer.from(beacon.toString().replace("47123", "47124"));
-		expect(decodeBeacon(key, "repo-a", forged)).toBeUndefined();
-		expect(decodeBeacon(key, "repo-a", Buffer.from("not json"))).toBeUndefined();
-	});
-});
-
-describe("finding teammates on the local network", () => {
-	it("connects two hosts that were never told where the other is", async (context) => {
-		const key = networkKey(TEAM);
-		const udpPort = 47000 + Math.floor(Math.random() * 900);
-		const found = (name: string) => {
-			const dir = join(root, name);
-			const collab = new CollabSession({
-				host: new FakeHost(name), identity: Identity.loadOrCreate(join(dir, "keys"), name), peers: new PeerBook(join(dir, "people.json")), network: TEAM,
-				transport: new TcpTransport({ port: 0 }), dir: join(dir, "collab"), projectDir: dir, redialMs: 0, scope: "repo-a",
-				discovery: new LanDiscovery({ key, scope: "repo-a", name, udpPort, intervalMs: 100 }),
-			});
-			sessions.push(collab);
-			return collab;
-		};
-		const yan = found("yan");
-		const sam = found("sam");
-		await yan.start();
-		await sam.start();
-		// Multicast is not available everywhere tests run (some containers, some CI); where it is not, there is nothing to check.
-		const met = await until(() => yan.isOnline("sam") && sam.isOnline("yan"), "the hosts to hear each other", 3000).then(() => true, () => false);
-		if (!met) context.skip();
-		expect(yan.people().map((p) => [p.name, p.online])).toEqual([["yan", true], ["sam", true]]);
-	});
-});
-
-describe("a network", () => {
-	it("lets in whoever has the join code, with nothing for anyone to approve, and says who joined", async () => {
+describe("a team", () => {
+	it("lets in whoever holds the team's secret, with nothing for anyone to approve, and says who joined", async () => {
 		const { yan, sam } = await pair();
 		expect(sam.host.nodes().map((n) => [n.name, n.owner]).sort()).toEqual([["checkout", "yan"], ["impl", "yan"]]);
 		expect(yan.collab.people().map((p) => [p.name, p.trust, p.online])).toEqual([["yan", "trusted", true], ["sam", "trusted", true]]);
@@ -197,9 +162,9 @@ describe("a network", () => {
 		expect(sam.logs).toContain("yan joined team.");
 	});
 
-	it("keeps out someone without the network's secret, and tells them nothing", async () => {
+	it("keeps out someone without the team's secret, and tells them nothing", async () => {
 		const { yan, code } = await pair();
-		const outsider = seat("kim", formatJoinCode(createNetwork("team"), parseJoinCode(code).seeds));
+		const outsider = seat("kim", code, undefined, teamOf("team")); // knows where yan is, and holds another secret
 		await outsider.collab.start();
 		await new Promise((resolve) => setTimeout(resolve, 200));
 		expect(outsider.collab.isOnline("yan")).toBe(false);
@@ -207,34 +172,24 @@ describe("a network", () => {
 		expect(yan.collab.people().map((p) => p.name)).toEqual(["yan", "sam"]);
 	});
 
-	it("introduces everyone to everyone: knowing one member is enough", async () => {
-		const { yan, sam, kid, code } = await pair();
-		const kim = seat("kim", code); // kim was only told where yan is
-		const hers = kim.host.add("kim's work");
-		await kim.collab.start();
-		await until(() => kim.collab.isOnline("sam") && sam.collab.isOnline("kim"), "kim and sam to find each other through yan");
-		await until(() => sam.host.node(hers.id) && kim.host.node(kid.id), "trees to be exchanged");
-		expect(yan.collab.people().map((p) => p.name)).toEqual(["yan", "kim", "sam"]);
-		expect(sam.logs).toContain("kim joined team.");
-	});
-
 	it("connects hosts only when they are working on the same thing", async () => {
 		const scoped = (name: string, scope: string, code?: string) => {
 			const dir = join(root, `${name}-${scope}`);
 			const collab = new CollabSession({
-				host: new FakeHost(name), identity: Identity.loadOrCreate(join(root, name, "keys"), name), peers: new PeerBook(join(root, name, "people.json")), network: code ? parseJoinCode(code) : TEAM,
+				host: new FakeHost(name), identity: Identity.loadOrCreate(join(root, name, "keys"), name), peers: new PeerBook(join(root, name, "people.json")), network: TEAM,
 				transport: new TcpTransport({ host: "127.0.0.1", port: 0 }), dir: join(dir, "collab"), projectDir: dir, advertise: "127.0.0.1", redialMs: 0, scope,
 			});
+			enrol(collab, name, scope, code);
 			sessions.push(collab);
 			return collab;
 		};
 		const yan = scoped("yan", "repo-a");
 		await yan.start();
-		const elsewhere = scoped("sam", "repo-b", yan.joinCode());
+		const elsewhere = scoped("sam", "repo-b", whereIs(yan));
 		await elsewhere.start();
 		await new Promise((resolve) => setTimeout(resolve, 200));
 		expect(elsewhere.isOnline("yan")).toBe(false);
-		const here = scoped("sam", "repo-a", yan.joinCode());
+		const here = scoped("sam", "repo-a", whereIs(yan));
 		await here.start();
 		await until(() => here.isOnline("yan") && yan.isOnline("sam"), "the hosts for the same repository to connect");
 	});
@@ -286,7 +241,7 @@ describe("a network", () => {
 		expect(yan.logs.join("\n")).toContain("with a different key");
 
 		await yan.collab.trustPerson("sam"); // sam really did get a new machine
-		impostor.collab.reach();
+		impostor.collab.heardAt("yan", yan.collab.listening(), true);
 		await until(() => impostor.collab.isOnline("yan"), "sam's new machine to get in");
 		expect(yan.collab.people().find((p) => p.name === "sam")).toMatchObject({ trust: "trusted", online: true });
 	});
@@ -477,10 +432,11 @@ describe("everything everyone has running", () => {
 		const host = new FakeHost(name);
 		const logs: string[] = [];
 		const collab = new CollabSession({
-			host, identity: Identity.loadOrCreate(join(person, "keys"), name), peers: new PeerBook(join(person, "people.json")), network: code ? parseJoinCode(code) : TEAM,
+			host, identity: Identity.loadOrCreate(join(person, "keys"), name), peers: new PeerBook(join(person, "people.json")), network: TEAM,
 			transport: new TcpTransport({ host: "127.0.0.1", port: 0 }), dir: join(dir, "collab"), projectDir: dir, advertise: "127.0.0.1", redialMs: 0, requestTimeoutMs: 5000, now: () => clock,
 			scope: `git:${repo}`, repo: { name: repo, url: `git@example.com:team/${repo}.git` }, directoryDir: join(person, "summaries"), followMs: 20,
 		});
+		enrol(collab, name, `git:${repo}`, code);
 		sessions.push(collab);
 		collab.on("log", (_level, message) => logs.push(message));
 		return { host, collab, logs };
@@ -491,7 +447,7 @@ describe("everything everyone has running", () => {
 		const yan = hostFor("yan", "shop");
 		yan.host.add("checkout");
 		await yan.collab.start();
-		const sam = hostFor("sam", "api", yan.collab.joinCode());
+		const sam = hostFor("sam", "api", whereIs(yan.collab));
 		sam.host.add("auth-rework");
 		await sam.collab.start();
 
@@ -519,7 +475,7 @@ describe("everything everyone has running", () => {
 		await api.collab.start();
 
 		// Sam works in a third repository and was only told where yan's shop host is.
-		const sam = hostFor("sam", "infra", shop.collab.joinCode());
+		const sam = hostFor("sam", "infra", whereIs(shop.collab));
 		await sam.collab.start();
 		await until(() => names(sam).length === 2, "sam to hear of both of yan's repositories");
 		expect(names(sam)).toEqual(["yan/api: auth-rework", "yan/shop: checkout"]);
@@ -533,7 +489,7 @@ describe("everything everyone has running", () => {
 		const kid = api.host.add("auth-rework");
 		await shop.collab.start();
 		await api.collab.start();
-		const sam = hostFor("sam", "api", shop.collab.joinCode()); // the code names yan's shop host, not the api one
+		const sam = hostFor("sam", "api", whereIs(shop.collab)); // told of yan's shop host, not the api one
 		await sam.collab.start();
 		await until(() => sam.collab.isOnline("yan"), "sam's api host to find yan's api host");
 		await until(() => sam.host.node(kid.id), "yan's api sessions to join sam's tree");
@@ -544,7 +500,7 @@ describe("everything everyone has running", () => {
 		const yan = hostFor("yan", "shop");
 		yan.host.add("checkout");
 		await yan.collab.start();
-		const code = yan.collab.joinCode();
+		const code = whereIs(yan.collab);
 		const sam = hostFor("sam", "api", code);
 		await sam.collab.start();
 		await until(() => names(sam).length === 1);
@@ -560,7 +516,7 @@ describe("everything everyone has running", () => {
 		const yan = hostFor("yan", "shop");
 		const top = yan.host.add("checkout");
 		await yan.collab.start();
-		const sam = hostFor("sam", "api", yan.collab.joinCode());
+		const sam = hostFor("sam", "api", whereIs(yan.collab));
 		await sam.collab.start();
 		await until(() => names(sam).length === 1);
 		await expect(sam.collab.ask(top.id)).rejects.toThrow(/No node/);
@@ -629,7 +585,7 @@ describe("mail between owners", () => {
 		yan.host.router?.(mail(top, kid, "while you were out"), yan.host.node(kid.id) as NodeMeta);
 		expect(yan.logs.join("\n")).toContain("sam is offline; the message");
 
-		const back = seat("sam", yan.collab.joinCode());
+		const back = seat("sam", whereIs(yan.collab));
 		back.host.set({ ...(sam.host.node(kid.id) as NodeMeta) });
 		await back.collab.start();
 		await until(() => back.host.delivered.length === 1, "the queued message to arrive");

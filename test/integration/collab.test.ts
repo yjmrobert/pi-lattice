@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CollabSession, createNetwork, Identity, parseJoinCode, PeerBook, TcpTransport } from "../../packages/collab/src/index.ts";
+import { CollabSession, Identity, PeerBook, TcpTransport } from "../../packages/collab/src/index.ts";
 import { LatticeHost } from "../../packages/host/src/index.ts";
 import { createSandbox, eventually, hostOptionsFor, type Sandbox } from "../support/harness.ts";
 
@@ -10,7 +11,7 @@ interface Person {
 	name: string;
 	sandbox: Sandbox;
 	host: LatticeHost;
-	/** Set once the person is in the network. */
+	/** Set once the person is on the team. */
 	collab: CollabSession;
 }
 
@@ -41,12 +42,13 @@ const machine = async (name: string, prepareProject: (dir: string) => void): Pro
 	people.push(person);
 	return person;
 };
-/** Put a person in the network: the first one creates it, the others use the code they were given. */
-const enter = async (person: Person, code?: string): Promise<string> => {
+const TEAM = { name: "team", secret: randomBytes(32).toString("base64url") };
+/** Put a person on the team. `at` is where a teammate's host is, which the team's server would say. */
+const enter = async (person: Person, at?: Person): Promise<void> => {
 	person.collab = new CollabSession({
 		host: person.host,
 		identity: Identity.loadOrCreate(join(person.sandbox.root, "keys"), person.name),
-		network: code ? parseJoinCode(code) : createNetwork("team"),
+		network: TEAM,
 		peers: new PeerBook(join(person.sandbox.root, "people.json")),
 		transport: new TcpTransport({ host: "127.0.0.1", port: 0 }),
 		scope: "the-project",
@@ -56,7 +58,7 @@ const enter = async (person: Person, code?: string): Promise<string> => {
 		redialMs: 200,
 	});
 	await person.collab.start();
-	return person.collab.joinCode();
+	if (at) person.collab.heardAt(at.name, at.collab.listening(), true);
 };
 const assistantTexts = async (h: LatticeHost, id: string): Promise<string> => {
 	const { messages } = await h.rpc<{ messages: Array<{ role: string; content: unknown }> }>(id, { type: "get_messages" });
@@ -67,7 +69,7 @@ const assistantTexts = async (h: LatticeHost, id: string): Promise<string> => {
 };
 const sendTool = (to: string, text: string) => `!tool send_message ${JSON.stringify({ to, text })}`;
 
-describe("two people sharing a tree, peer to peer", () => {
+describe("two people sharing a tree, machine to machine", () => {
 	it("moves a node between owners with its conversation and branch, and gates mail between them", async () => {
 		const origin = join(shared.root, "project.git");
 		git(shared.root, "init", "-q", "--bare", "-b", "main", origin);
@@ -96,10 +98,10 @@ describe("two people sharing a tree, peer to peer", () => {
 		git(kid.cwd, "add", ".");
 		git(kid.cwd, "-c", "user.email=yan@example.com", "-c", "user.name=Yan", "commit", "-q", "-m", "wip");
 
-		// Yan creates a network; sam joins with the code, and their hosts connect directly. Nobody approves anybody.
-		const code = await enter(yan);
+		// Both are on the team; sam's host is told where yan's is, and they connect directly. Nobody approves anybody.
+		await enter(yan);
 		expect(sam.host.nodes()).toEqual([]);
-		await enter(sam, code);
+		await enter(sam, yan);
 		await eventually(() => sam.host.nodes().length === 2, "yan's sessions to appear for sam");
 		expect(sam.host.nodes().map((n) => [n.name, n.owner])).toEqual([["checkout", "yan"], ["impl", "yan"]]);
 

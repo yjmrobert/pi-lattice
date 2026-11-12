@@ -12,7 +12,7 @@ export interface KnownTree {
 	stateDir: string;
 	/** The directory the tree was started for, usually a repository's main checkout. */
 	root: string;
-	/** What identifies the repository to the person's network, the same for every clone of it. */
+	/** What identifies the repository to the person's team, the same for every clone of it. */
 	scope?: string;
 }
 

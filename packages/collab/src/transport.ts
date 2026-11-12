@@ -19,8 +19,6 @@ export interface TcpTransportOptions {
 	host?: string;
 	/** Port to listen on. 0 picks a free one. */
 	port?: number;
-	/** When the port is taken, listen on a free one instead of failing. */
-	orAnyPort?: boolean;
 	connectTimeoutMs?: number;
 }
 
@@ -59,7 +57,6 @@ export class TcpTransport implements PeerTransport {
 		const wanted = this.options.port ?? 0;
 		const server = await open(wanted).catch((error: NodeJS.ErrnoException) => {
 			if (error.code !== "EADDRINUSE") throw new Error(error.message);
-			if (this.options.orAnyPort) return open(0);
 			throw new Error(`Port ${wanted} is already in use.`);
 		});
 		this.server = server;

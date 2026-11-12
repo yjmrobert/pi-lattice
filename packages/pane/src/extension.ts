@@ -19,7 +19,7 @@ import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } fro
 import { connectHost, hasTree, inRepository, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
 import { newSettingsScreen, renderSettings, type SettingsData, type SettingsLink, type SettingsScreen, settingsKey } from "./settings.ts";
 import { readSettings, readTemplate, type SettingsRead, templatePath, writeSetting, writeTemplate } from "./settings-io.ts";
-import { type InboxDetails, inboxItems, networkLine, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane, renderStrip } from "./view.ts";
+import { type InboxDetails, inboxItems, teamLine, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane, renderStrip } from "./view.ts";
 
 const NODE_ENTRY = "lattice:node";
 const MIN_TERMINAL_WIDTH = 90;
@@ -131,7 +131,7 @@ function view(): PaneView {
 	const base: PaneView = {
 		// Then the repositories teammates are working in that are not on this machine.
 		repos: [...repos, ...remoteRepos(repos, shared.asleep.flatMap((tree) => (tree.scope !== undefined ? [tree.scope] : [])))],
-		network: networkLine(repos),
+		team: teamLine(repos),
 		asleep: shared.asleep.map((tree) => ({ key: tree.stateDir, name: basename(tree.root) })),
 		previous: shared.previous !== undefined && shared.previous !== shared.current,
 		current: shared.current,
@@ -1023,7 +1023,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	/** Run a network or handoff action on a repository's host and say what it answers. */
+	/** Run a sharing or handoff action on a repository's host and say what it answers. */
 	const sharing = async (ctx: ExtensionCommandContext, client: HostClient, action: string, args: string[]): Promise<boolean> => {
 		let done = true;
 		try {
@@ -1041,13 +1041,17 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	const server = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
 		const words = arg.split(/\s+/).filter(Boolean);
 		await ensureHost(ctx);
+		const [first, second] = words;
+		const action = first === undefined ? "status" : first === "leave" || first === "start" ? first : first === "share" ? (second === "off" ? "unshare" : "share") : "join";
+		// Teammates see this person by one name, on the server and on their sessions: settle it before joining.
+		if (action === "join" && !(await introduce(ctx, second))) return;
 		const client = need(ctx);
 		if (!client) return;
 		try {
-			const [first, second] = words;
-			const action = first === undefined ? "status" : first === "leave" || first === "start" ? first : first === "share" ? (second === "off" ? "unshare" : "share") : "join";
 			const { text } = await client.ui("server", { action, args: action === "join" ? words : action === "start" ? words.slice(1) : [] });
 			ctx.ui.notify(text, "info");
+			// Say so when teammates are there; when nobody is yet, there is nothing to report.
+			if (action === "join") void lookAround(ctx, 10_000, true).catch(() => {});
 		} catch (error) {
 			fail(ctx, error);
 		}
@@ -1172,9 +1176,9 @@ export default function paneExtension(pi: ExtensionAPI): void {
 
 	/** What handing a session to someone does, said before the one step that cannot be taken back. */
 	const WHAT_GOES = "It stops here, and its whole conversation, including any file contents and command output in it, goes directly to them, with its branch if it has one. After that you can read it but not run it.";
-	const NO_NETWORK = "You are not in a network yet. /lattice network creates one, or joins a teammate's.";
+	const NO_TEAM = "Sessions are shared with the people on your server, and you are on none yet. Join your team's with /lattice server <address>, or start a board with /lattice server start and share it.";
 
-	/** This repository's host, started if it is not running. A network needs no session tree first. */
+	/** This repository's host, started if it is not running. Joining a server needs no session tree first. */
 	const ensureHost = async (ctx: ExtensionCommandContext): Promise<void> => {
 		const stateDir = stateDirFor(ctx.cwd);
 		shared.home = stateDir;
@@ -1183,7 +1187,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	};
 
 	/**
-	 * Before the first network: settle the name teammates will see, which until then is the OS
+	 * Before joining a server: settle the name teammates will see, which until then is the OS
 	 * user name. Asked once per machine. False when the person backed out.
 	 */
 	const introduce = async (ctx: ExtensionCommandContext, given?: string): Promise<boolean> => {
@@ -1207,72 +1211,38 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		return homeLink() !== undefined;
 	};
 
-	/** After joining: say who was found, or what was tried and why it did not answer. */
-	const lookAround = async (ctx: ExtensionCommandContext, waitMs = 10_000): Promise<void> => {
+	/** Say which teammates' hosts were reached, or what was tried and why it did not answer. */
+	const lookAround = async (ctx: ExtensionCommandContext, waitMs = 10_000, onlyIfFound = false): Promise<void> => {
 		for (const end = Date.now() + waitMs; ; ) {
 			await refresh();
 			const state = homeLink()?.state?.sharing;
-			if (!state) return;
-			const found = state.people.filter((person) => !person.self && person.online);
+			// Just after joining, sharing has not started yet: that is worth waiting for.
+			if (!state && !onlyIfFound) return;
+			const found = (state?.people ?? []).filter((person) => !person.self && person.online);
 			if (found.length > 0) return ctx.ui.notify(`Found ${found.map((person) => person.name).join(", ")}. Their sessions are in the pane.`, "info");
 			if (Date.now() >= end) break;
 			await new Promise((resolve) => setTimeout(resolve, 500));
 		}
+		if (onlyIfFound) return;
 		const tried = homeLink()?.state?.sharing?.tried ?? [];
 		ctx.ui.notify(
 			[
 				"Nobody has answered yet. This keeps trying, and their sessions appear when it gets through.",
-				...(tried.length > 0 ? ["Tried:", ...tried.map((entry) => `  ${entry.address}  ${entry.why}`)] : ["No machine is known yet, and nobody is announcing themselves on this network."]),
-				"Check that their Pi is open and that both machines are on the same network or VPN. If the address above is not the one to reach them at, they set LATTICE_ADVERTISE to the right one, run /lattice restart, and send a fresh code.",
+				...(tried.length > 0 ? ["Tried:", ...tried.map((entry) => `  ${entry.address}  ${entry.why}`)] : ["No teammate's Pi is on the server right now."]),
+				"Check that their Pi is open and that the two machines can reach each other: the same network, or a VPN. If an address above is not the one to reach them at, they set LATTICE_ADVERTISE to the right one and run /lattice restart.",
 			].join("\n"),
 			"warning",
 		);
 	};
 
-	/** Start a network: `/lattice create [network] [your name]`. */
-	const createNetwork = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
-		const [name = "", as] = arg.split(/\s+/).filter(Boolean);
-		await ensureHost(ctx);
-		if (!(await introduce(ctx, as))) return;
-		const client = homeLink()?.client;
-		if (client) await sharing(ctx, client, "create", [name || "team"]);
-	};
-
-	/** Join one: `/lattice join <code> [your name]`. The code may be a whole pasted line ending in it. */
-	const joinNetwork = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
-		const words = arg.split(/\s+/).filter(Boolean);
-		const at = words.findIndex((word) => word.includes("."));
-		const code = words[at];
-		if (!code) return ctx.ui.notify("Join with the code a teammate gave you: /lattice join <code>", "warning");
-		await ensureHost(ctx);
-		if (!(await introduce(ctx, words[at + 1]))) return;
-		const client = homeLink()?.client;
-		if (client && (await sharing(ctx, client, "join", [code]))) void lookAround(ctx).catch(() => {});
-	};
-
-	/** The network: create or join one; then who is in it, the join code, and anything being handed over. */
-	const network = async (ctx: ExtensionCommandContext): Promise<void> => {
+	/** The team: who is on it, and anything being handed over. */
+	const team = async (ctx: ExtensionCommandContext): Promise<void> => {
 		await ensureHost(ctx);
 		const client = need(ctx);
 		if (!client) return;
 		const run = (action: string, args: string[]): Promise<boolean> => sharing(ctx, client, action, args);
 		const state = homeLink()?.state?.sharing;
-		if (!state) {
-			const create = "Create a network";
-			const join = "Join with a teammate's code";
-			const picked = await ctx.ui.select(
-				"A network is you and your teammates. Everyone in it sees everyone's sessions in the repositories they share, can read them, and can hand them to each other. You set it up once; every repository uses it.",
-				[create, join],
-			);
-			if (picked === create) {
-				const name = await ctx.ui.input('A name for the network (letters, digits, dashes). Enter keeps "team".', "team");
-				if (name !== undefined) await createNetwork(ctx, name.trim());
-			} else if (picked === join) {
-				const code = await ctx.ui.input("Paste the join code your teammate gave you", "name.secret@host");
-				if (code?.trim()) await joinNetwork(ctx, code.trim());
-			}
-			return;
-		}
+		if (!state) return ctx.ui.notify(NO_TEAM, "info");
 		const options: Array<{ label: string; act: () => Promise<unknown> }> = [];
 		for (const request of state.requests) {
 			const node = `"${request.nodeName}"`;
@@ -1305,23 +1275,16 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			});
 		}
 		const others = state.people.filter((person) => !person.self);
-		options.push({ label: "Show the join code", act: () => run("code", []) });
 		options.push({
-			label: `Who is in ${state.network}`,
+			label: "Who is on the team",
 			act: async () => ctx.ui.notify(
-				[...state.people.map((person) => `${person.name}${person.self ? " (you)" : person.trust === "changed" ? "  key changed" : person.online ? "  here" : "  not in this repository right now"}`), ...(others.length === 0 ? ["Nobody else yet. Give a teammate the join code."] : [])].join("\n"),
+				[...state.people.map((person) => `${person.name}${person.self ? " (you)" : person.trust === "changed" ? "  key changed" : person.online ? "  here" : "  not in this repository right now"}`), ...(others.length === 0 ? ["Nobody else yet. They join the same server you did."] : [])].join("\n"),
 				"info",
 			),
 		});
 		options.push({ label: "Look for teammates again", act: async () => void ((await run("refresh", [])) && (await lookAround(ctx, 5000))) });
-		options.push({
-			label: `Leave ${state.network}`,
-			act: async () => {
-				if (await ctx.ui.confirm(`Leave ${state.network}?`, "Your sessions are no longer shown to your teammates, and theirs stay here as last seen. This applies to every repository. You can join again with the code.")) await run("leave", []);
-			},
-		});
 		const here = others.filter((person) => person.online).length;
-		const picked = await ctx.ui.select(`${state.network} · ${others.length === 0 ? "only you so far" : `${others.length + 1} people, ${here} here with you`}`, options.map((option) => option.label));
+		const picked = await ctx.ui.select(`${state.team} · ${others.length === 0 ? "only you so far" : `${others.length + 1} people, ${here} here with you`}`, options.map((option) => option.label));
 		await options.find((option) => option.label === picked)?.act();
 	};
 
@@ -1334,9 +1297,9 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		if (!node || !link) return;
 		if (node.owner !== link.state?.owner) return ctx.ui.notify(`"${node.name}" belongs to ${node.owner}. To get it, ask for it: /lattice take ${node.name}.`, "warning");
 		const state = link.state?.sharing;
-		if (!state) return ctx.ui.notify(NO_NETWORK, "info");
+		if (!state) return ctx.ui.notify(NO_TEAM, "info");
 		const others = state.people.filter((person) => !person.self && person.trust === "trusted");
-		if (others.length === 0) return ctx.ui.notify(`Nobody else is in ${state.network} yet. /lattice network shows the code to give a teammate.`, "info");
+		if (others.length === 0) return ctx.ui.notify("Nobody else has joined your server yet.", "info");
 		const labels = others.map((person) => `${person.name}${person.online ? "" : " (away: they see it when they are back)"}`);
 		const picked = to || (await ctx.ui.select(`Offer "${node.name}" to whom? It is theirs as soon as they accept; you are not asked again.\n\n${WHAT_GOES}`, labels))?.split(" ")[0];
 		if (!picked) return;
@@ -1350,7 +1313,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		const link = node ? linkOf(node.id) : undefined;
 		if (!node || !link) return;
 		if (node.owner === link.state?.owner) return ctx.ui.notify(`"${node.name}" is already yours.`, "info");
-		if (!link.state?.sharing) return ctx.ui.notify(NO_NETWORK, "info");
+		if (!link.state?.sharing) return ctx.ui.notify(NO_TEAM, "info");
 		const elsewhere = link.state.nodes.some((each) => each.id === node.id) ? undefined : elsewhereOf(node.id);
 		if (elsewhere) return takeElsewhere(ctx, node, elsewhere.tree);
 		await sharing(ctx, link.client, "ask", [node.id]);
@@ -1706,7 +1669,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		const state = homeLink()?.state;
 		ctx.ui.notify(
 			state
-				? [`Tree of ${state.nodes.length} session${state.nodes.length === 1 ? "" : "s"}, as ${state.owner}. Open here: ${shared.current ? name(shared.current) : "none"}.`, ...renderCompact(view(), 30), "alt+l focuses the pane · /lattice new · /lattice approvals · /lattice network"].join("\n")
+				? [`Tree of ${state.nodes.length} session${state.nodes.length === 1 ? "" : "s"}, as ${state.owner}. Open here: ${shared.current ? name(shared.current) : "none"}.`, ...renderCompact(view(), 30), "alt+l focuses the pane · /lattice new · /lattice approvals · /lattice team"].join("\n")
 				: "No session tree here yet. Run /lattice to start one.",
 			"info",
 		);
@@ -1789,9 +1752,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		{ name: "issue", usage: "issue <number> | add <parent | top> <title> | set <number> <field> <value> | comment <number> <text>", does: "look at one of the team's issues, add one, change one, or comment on one", run: (ctx, arg) => issue(ctx, arg) },
 		{ name: "scheme", usage: "scheme [edit]", does: "how the team structures its work: the types, states and fields; edit changes them for everyone", run: (ctx, arg) => scheme(ctx, arg) },
 		{ name: "on", usage: "on <issue | none>", does: "say which of the team's issues this session is working on", run: (ctx, arg) => workOn(ctx, arg) },
-		{ name: "network", does: "create or join a network of teammates; who is in it, the join code, what is being handed over", run: (ctx) => network(ctx) },
-		{ name: "join", usage: "join <code> [your name]", does: "join a teammate's network with the code they gave you", run: (ctx, arg) => joinNetwork(ctx, arg) },
-		{ name: "create", usage: "create [network] [your name]", does: "start a network and get the code teammates join with", run: (ctx, arg) => createNetwork(ctx, arg) },
+		{ name: "team", does: "the people on your server: who is here, what is being handed over, and a teammate's changed key", run: (ctx) => team(ctx) },
 		{ name: "offer", usage: "offer <session> [person]", does: "offer one of your sessions to a teammate", run: (ctx, arg) => offer(ctx, arg) },
 		{ name: "take", usage: "take <session>", does: "ask a teammate for one of their sessions", run: (ctx, arg) => take(ctx, arg) },
 		{ name: "approve", usage: "approve <session> [person]", does: "hand a session to the teammate who asked for it", run: (ctx, arg) => approve(ctx, arg) },

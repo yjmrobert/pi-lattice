@@ -1,6 +1,6 @@
 # @pi-lattice/canopy
 
-All the work of a network as a tree that grows upward: the network at the root, then epics, features and stories, with tasks at the tips. It answers what the pane's list cannot: who owns each piece, which agent is on it, and how far along each branch is.
+All the work of a team as a tree that grows upward: the team at the root, then epics, features and stories, with tasks at the tips. It answers what the pane's list cannot: who owns each piece, which agent is on it, and how far along each branch is.
 
 Press `c` in the pane, or run `/lattice canopy`. It takes the whole screen; `esc` gives it back.
 

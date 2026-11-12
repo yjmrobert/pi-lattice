@@ -17,6 +17,9 @@ export type Account = ServerAccount & { board?: boolean };
 export const SERVER_FILE = "server.json";
 
 /** Which server this person has joined, if any. */
+/** The people this person's hosts know, with the key each was first known by. They are a server's people: forgotten when it is left. */
+export const PEOPLE_FILE = "people.json";
+
 export function readAccount(home: string, file = join(home, SERVER_FILE)): Account | undefined {
 	try {
 		const value = JSON.parse(readFileSync(file, "utf8")) as Partial<Account>;
@@ -154,9 +157,9 @@ export class Work implements WorkPort {
 	}
 
 	/** The server this host is on, and as whom. */
-	account(): { url: string; name: string } | undefined {
+	account(): { url: string; name: string; board: boolean } | undefined {
 		const account = this.client?.account;
-		return account ? { url: account.url, name: account.name } : undefined;
+		return account ? { url: account.url, name: account.name, board: readAccount(this.options.home)?.board === true } : undefined;
 	}
 
 	/** What lets the team's hosts connect to each other. Asked of the server once for each server joined. */
@@ -265,6 +268,7 @@ export class Work implements WorkPort {
 			const before = readAccount(this.options.home);
 			if ((await liveBoard(this.options.home))?.shared) throw new Error("This machine shares its own board. Stop sharing first with /lattice server share off, so teammates are not left on a board nobody looks at.");
 			const account = await joinAndSave(this.options.home, address, name ?? this.options.name());
+			if (before && before.url !== account.url) rmSync(join(this.options.home, PEOPLE_FILE), { force: true });
 			this.sync();
 			await this.client?.refresh().catch(() => {});
 			const count = this.state()?.issues.length ?? 0;
@@ -274,6 +278,7 @@ export class Work implements WorkPort {
 			const account = readAccount(this.options.home);
 			if (!account) return "You have not joined a server.";
 			rmSync(file, { force: true });
+			rmSync(join(this.options.home, PEOPLE_FILE), { force: true });
 			this.sync();
 			if (account.board) return "Left the board on this machine. Its work is kept: /lattice server start brings it back.";
 			return `Left ${account.url}. Your name there, ${account.name}, stays taken: to come back as ${account.name} you need the file you just removed, so nothing was deleted from the server.`;

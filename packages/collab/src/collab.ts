@@ -1,11 +1,13 @@
 /**
- * Sharing a session tree between the people of a network, peer to peer. Each person runs
- * their own host, and the hosts find each other and talk directly over an authenticated,
- * encrypted channel. There is no server and no shared storage: a teammate's sessions are
- * fetched from them while they are online, and shown as last seen when they are not.
+ * Sharing a session tree between the people of a team. Each person runs their own host, and
+ * the hosts talk directly over an authenticated, encrypted channel. Nothing of a session is
+ * stored anywhere else: a teammate's sessions are fetched from them while they are online,
+ * and shown as last seen when they are not.
  *
- * Nobody pairs with anybody. Being in the network is holding its secret, which a host
- * proves on every connection; the first key seen under a name is pinned from then on.
+ * Hosts do not look for each other. Whatever starts one tells it who is on the team and
+ * where their hosts are (`learn`, `heardAt`): in practice the team's server. Being on the
+ * team is holding its secret, which a host proves on every connection; the first key known
+ * under a name is pinned from then on.
  *
  * Each node's ownership log has exactly one writer, its current owner. Everyone else asks
  * the owner to append (for example, the recipient's acceptance of an offer), and verifies
@@ -21,8 +23,7 @@ import { type Envelope, isId, type LeaseEvent, newHandoffId, type NodeMeta, vali
 import { type ChannelOptions, openChannel, type SecureChannel } from "./channel.ts";
 import { fingerprint, type Identity, type Signed } from "./identity.ts";
 import { appendEvent, type Folded, foldRecord, type KeyLookup, type NodeRecord, parseRecord, type SharedMeta, toSharedMeta } from "./ledger.ts";
-import type { Discovery } from "./discovery.ts";
-import { formatJoinCode, type Network, networkKey, sharedPort } from "./network.ts";
+import { type Network, networkKey } from "./network.ts";
 import type { PeerBook } from "./peers.ts";
 import { type PeerTransport, splitAddress } from "./transport.ts";
 
@@ -65,21 +66,13 @@ const RELAYED: ReadonlySet<string> = new Set(["offered", "accept", "cancel", "as
 export interface CollabOptions {
 	host: HostPort;
 	identity: Identity;
-	/** The network this person is in. Its secret is what lets other hosts connect. */
+	/** The team this person is on. Its secret is what lets other hosts connect. */
 	network: Network;
-	/** The people of the network seen so far, with their pinned keys. */
+	/** The people of the team known so far, with their pinned keys. */
 	peers: PeerBook;
 	transport: PeerTransport;
 	/** What this host is working on, usually a repository. Hosts connect only when it is the same. */
 	scope?: string;
-	/** Finds teammates on the local network. Without it, only known machines and seeds are tried. */
-	discovery?: Discovery;
-	/**
-	 * A second place to listen, on the port every member knows (`lobbyPort`). Whichever of a
-	 * person's hosts gets it is where teammates who share no repository with them first ask.
-	 * The others keep trying, and take over when it stops.
-	 */
-	lobby?: PeerTransport;
 	/** A directory all of this person's hosts share, where each says what it has running, so any one of them can answer for all. */
 	directoryDir?: string;
 	/** What this host's repository is called, and where a teammate can clone it from. */
@@ -134,12 +127,8 @@ export interface ElsewhereTree extends DirectoryTree {
 	online: boolean;
 }
 
-/** The scope of the port every member knows; see `CollabOptions.lobby`. */
-const LOBBY = "|lobby";
-export const lobbyPort = (network: Pick<Network, "secret">): number => sharedPort(networkKey(network), LOBBY);
-
-/** What a member working on something else may ask of a host: who is in the network, what is running, and to read it. */
-const GUEST_OPS = new Set(["roster", "directory", "messages", "follow"]);
+/** What a member working on something else may ask of a host: what is running, and to read it. */
+const GUEST_OPS = new Set(["directory", "messages", "follow"]);
 
 /** Someone asking to take a session over. `owner`: they ask this person. `asker`: this person asked. */
 export interface RequestView {
@@ -173,13 +162,6 @@ interface OutboxItem {
 	envelope: Envelope;
 	recipient: string;
 	toOwner: string;
-}
-interface RosterEntry {
-	name: string;
-	publicKey: string;
-	hosts: string[];
-	/** The port their host for this work listens on, when known. */
-	port?: number;
 }
 interface Ask {
 	nodeId: string;
@@ -236,7 +218,6 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private readonly addresses = new Map<string, string>(); // name -> `host:port` they were last heard at
 	private readonly told = new Map<string, string[]>(); // name -> every `host:port` they are said to be at
 	private readonly offeredTo = new Set<string>(); // offers the recipient's host has been handed, by handoff id
-	private readonly seedPeer = new Map<string, string>(); // seed -> who answered there
 	private readonly failures = new Map<string, { count: number; retryAt: number }>();
 	private readonly key: Buffer;
 	private settling = false;
@@ -249,7 +230,6 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private readonly followers = new Map<string, Map<string, { until: number; sent: number }>>();
 	private followTimer: NodeJS.Timeout | undefined;
 	private polling = false;
-	private lobbyOpen = false;
 	private summary = "";
 	private directoryStamp = "";
 	private readonly waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; peer: string }>();
@@ -287,19 +267,16 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 
 	// --- lifecycle -------------------------------------------------------------
 
-	/** Start listening, publish this host's nodes, and reach out to the rest of the network. */
+	/** Start listening, publish this host's nodes, and reach out to whoever is known. */
 	async start(): Promise<void> {
 		this.bound = await this.options.transport.listen(this.answer);
 		this.options.relay?.listen((from, frame) => this.onRelayed(from, frame as Frame));
-		await this.openLobby();
 		this.host.setRemoteRouter((envelope, recipient) => this.queueOutbound(envelope, recipient));
 		this.host.on("node", this.onNode);
 		await this.publishOwn();
-		await this.options.discovery?.start(this.port(), (name, address, same) => this.heard(name, address, same)).catch(() => {});
 		const redialMs = this.options.redialMs ?? 5000;
 		if (redialMs > 0) {
 			this.redial = setInterval(() => {
-				void this.openLobby();
 				this.tellDirectory();
 				this.reach();
 				void this.settle();
@@ -317,11 +294,9 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		this.host.off("node", this.onNode);
 		this.host.setRemoteRouter(undefined);
 		if (this.followTimer) clearInterval(this.followTimer);
-		await this.options.discovery?.stop().catch(() => {});
 		for (const { channel } of [...this.channels.values(), ...this.guests.values()]) channel.close();
 		const mine = this.summaryPath();
 		if (mine) rmSync(mine, { force: true });
-		await this.options.lobby?.close().catch(() => {});
 		await this.options.transport.close();
 		await this.chain.catch(() => {});
 	}
@@ -347,24 +322,13 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 
 	// --- people and connections ------------------------------------------------
 
-	/** Someone connected to one of this host's ports. */
+	/** Someone connected to this host. */
 	private readonly answer = (stream: import("node:stream").Duplex, from?: string): void => {
 		openChannel(stream, { ...this.channelOptions(), initiator: false }).then(
 			(channel) => this.adopted(channel, channel.peer, from),
-			() => {}, // refused: not in the network, or a changed key, which knocked() reports
+			() => {}, // refused: not on the team, or a changed key, which knocked() reports
 		);
 	};
-
-	/** Take the port every member knows, if no other host of this person has it. */
-	private async openLobby(): Promise<void> {
-		if (this.lobbyOpen || !this.options.lobby || this.stopped) return;
-		try {
-			await this.options.lobby.listen(this.answer);
-			this.lobbyOpen = true;
-		} catch {
-			// Another of this person's hosts has it, and answers for this one too.
-		}
-	}
 
 	private channelOptions(): Omit<ChannelOptions, "initiator"> {
 		return {
@@ -378,7 +342,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		};
 	}
 
-	/** Someone new showed they are in the network. Their key is pinned from here on. */
+	/** Someone new is on the team: the server said so, or they proved it by connecting. Their key is pinned from here on. */
 	private joined(name: string, key: string): void {
 		if (name === this.identity.name || !this.book.learn(name, key)) return;
 		this.emit("log", "notice", `${name} joined ${this.options.network.name}.`);
@@ -401,17 +365,6 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	/** The machines teammates can reach this host at. */
 	hosts(): string[] {
 		return this.options.advertise !== undefined ? [this.options.advertise] : localHosts();
-	}
-
-	/** The code a teammate joins with: the network, and where this host is right now. */
-	joinCode(): string {
-		const port = this.port();
-		return formatJoinCode(this.options.network, this.hosts().map((host) => (port === this.wellKnownPort() ? host : `${host}:${port}`)));
-	}
-
-	/** The port every member's host for this work listens on, unless it was taken. */
-	private wellKnownPort(): number {
-		return sharedPort(this.key, this.options.scope ?? "");
 	}
 
 	/** Accept the key someone now uses in place of the pinned one. Call only after the human checked the fingerprint. */
@@ -464,7 +417,6 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		return [...view.values()].sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name));
 	}
 
-	/** A beacon, or a teammate, says where someone is. Worth trying at once. `same`: it is their host for this work. */
 	/** Where this host can be connected to, for telling teammates. */
 	listening(): string[] {
 		const port = this.port();
@@ -485,7 +437,10 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			this.told.set(name, [...addresses]);
 			this.failures.delete(name);
 		}
-		if (!this.channels.has(name) && this.book.get(name)) void this.dial(name);
+		if (this.channels.has(name)) return;
+		// Someone whose key is not known yet is pinned when they prove they are on the team.
+		if (this.book.get(name)) void this.dial(name);
+		else void this.dialAddress(first);
 	}
 
 	/** Whether their host for this work is there to be told something: by the relay when there is one, else by the connection. */
@@ -493,6 +448,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		return this.options.relay ? this.options.relay.online(name) : this.channels.has(name);
 	}
 
+	/** Where someone is, worth trying at once. `same`: it is their host for this work. */
 	private heard(name: string, address: string, same = true): void {
 		if (name === this.identity.name || this.stopped) return;
 		if (!same) {
@@ -517,36 +473,21 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		return [...this.unanswered].map(([address, why]) => ({ address, why }));
 	}
 
-	/** Try everyone in the network, and every machine the join code named, now. */
+	/** Try everyone on the team, now. */
 	reach(): void {
 		if (this.stopped) return;
 		for (const peer of this.book.list()) {
 			// Their host for this work first; failing that, any host of theirs, to know what they have running.
 			void this.dial(peer.name).then((here) => (here || this.isReachable(peer.name) ? undefined : this.dialGuest(peer.name)));
 		}
-		const known = new Set(this.book.list().flatMap((peer) => peer.hosts ?? []));
-		for (const seed of this.options.network.seeds) {
-			const answered = this.seedPeer.get(seed);
-			// A seed is only for the first contact: once its machine belongs to someone known, they are dialled by name.
-			if ((answered !== undefined && this.book.get(answered)) || known.has(seed)) continue;
-			// Whoever gave the code may be working on something else: then the port every member knows is where they answer.
-			const tries = seed.includes(":") ? [seed] : [`${seed}:${this.wellKnownPort()}`, `${seed}:${lobbyPort(this.options.network)}`];
-			void (async () => {
-				for (const address of tries) {
-					const name = await this.dialAddress(address);
-					if (name) return void this.seedPeer.set(seed, name);
-				}
-			})();
-		}
 	}
 
-	/** Where a person might be: where they were last heard, then every machine they are known at. */
+	/** Where a person might be: where they were last heard, then everywhere they are said to be. */
 	private candidates(name: string): string[] {
 		const out: string[] = [];
 		const heard = this.addresses.get(name);
 		if (heard) out.push(heard);
 		out.push(...(this.told.get(name) ?? []));
-		for (const host of this.book.get(name)?.hosts ?? []) out.push(`${host}:${this.wellKnownPort()}`);
 		return out.filter((address, index) => out.indexOf(address) === index);
 	}
 
@@ -562,7 +503,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			this.unanswered.delete(address);
 			return channel.peer;
 		} catch (error) {
-			// Not there, not them, or not in the network; a changed key is reported by knocked().
+			// Not there, not them, or not on the team; a changed key is reported by knocked().
 			this.unanswered.delete(address);
 			this.unanswered.set(address, whyNot(error));
 			if (this.unanswered.size > 12) this.unanswered.delete(this.unanswered.keys().next().value as string);
@@ -572,7 +513,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		}
 	}
 
-	/** Try to connect to someone in the network. Resolves true when a channel to them is open. */
+	/** Try to connect to someone on the team. Resolves true when a channel to them is open. */
 	async dial(name: string): Promise<boolean> {
 		if (this.stopped || name === this.identity.name) return false;
 		if (this.channels.has(name)) return true;
@@ -606,7 +547,8 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		try {
 			const hosts = this.book.get(name)?.hosts ?? [];
 			const heard = this.guestAddresses.get(name);
-			const ports = [lobbyPort(this.options.network), ...(this.directory.get(name) ?? []).map((tree) => tree.port)];
+			// Every host they were known to have, on every machine they were reached at.
+			const ports = (this.directory.get(name) ?? []).map((tree) => tree.port).filter((port) => port > 0);
 			const tries = [...(heard ? [heard] : []), ...ports.flatMap((port) => hosts.map((host) => `${host}:${port}`))];
 			for (const address of tries.filter((address, index) => tries.indexOf(address) === index)) {
 				if (this.isReachable(name)) return true;
@@ -653,7 +595,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 				this.emit("changed");
 			});
 			this.emit("changed");
-			void this.meet(id, from).then(() => this.fetchDirectory(id)).catch(() => {});
+			void this.fetchDirectory(id).catch(() => {});
 			return;
 		}
 		this.failures.delete(peer);
@@ -677,7 +619,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			this.emit("changed");
 		});
 		this.emit("changed");
-		void this.greet(peer, from);
+		void this.greet(peer);
 	}
 
 	private failWaiting(peer: string): void {
@@ -690,9 +632,8 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	}
 
 	/** Everything owed to a peer the moment they are reachable. */
-	private async greet(peer: string, from?: string): Promise<void> {
+	private async greet(peer: string): Promise<void> {
 		try {
-			await this.meet(peer, from);
 			await this.fetchDirectory(peer).catch(() => {});
 			await this.fetchTree(peer);
 			await this.flushOutbox(peer);
@@ -701,38 +642,6 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		} catch (error) {
 			this.emit("log", "warn", `Talking to ${peer}: ${error instanceof Error ? error.message : String(error)}`);
 		}
-	}
-
-	/** Who this host knows, and where: what a teammate is told so that knowing one member leads to all of them. */
-	private roster(): RosterEntry[] {
-		const out: RosterEntry[] = [{ name: this.identity.name, publicKey: this.identity.publicKey, hosts: this.hosts(), port: this.port() }];
-		for (const peer of this.book.list()) {
-			if (peer.name === this.identity.name) continue;
-			const heard = this.addresses.get(peer.name);
-			out.push({ name: peer.name, publicKey: peer.publicKey, hosts: peer.hosts ?? [], ...(heard ? { port: splitAddress(heard).port } : {}) });
-		}
-		return out;
-	}
-
-	/** Learn the rest of the network from someone in it. Keys already pinned are never replaced this way. */
-	private async meet(link: string, from?: string): Promise<void> {
-		const peer = personOf(link);
-		const { people } = await this.request<{ people: RosterEntry[] }>(link, "roster", {});
-		for (const entry of Array.isArray(people) ? people : []) {
-			if (!entry || typeof entry.name !== "string" || typeof entry.publicKey !== "string" || entry.name === this.identity.name) continue;
-			const hosts = Array.isArray(entry.hosts) ? entry.hosts.filter((host): host is string => typeof host === "string") : [];
-			if (entry.name !== peer) this.joined(entry.name, entry.publicKey);
-			if (this.book.keyOf(entry.name) !== entry.publicKey) continue;
-			this.book.sawAt(entry.name, hosts);
-			const port = typeof entry.port === "number" && Number.isInteger(entry.port) && entry.port > 0 && entry.port < 65536 ? entry.port : undefined;
-			const host = entry.name === peer ? from : hosts[0];
-			if (port === undefined || host === undefined) continue;
-			// Where the peer itself listens is worth keeping even though they are connected: others will ask.
-			if (entry.name === peer) (link === peer ? this.addresses : this.guestAddresses).set(peer, `${host}:${port}`);
-			// A guest speaks of ports for its own work, which is not this host's.
-			else if (!this.isReachable(entry.name)) this.heard(entry.name, `${host}:${port}`, link === peer);
-		}
-		this.reach();
 	}
 
 	// --- requests --------------------------------------------------------------
@@ -800,8 +709,6 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 				return { trees: this.ownTrees() };
 			case "follow":
 				return this.followed(link, p.nodeId, p.have);
-			case "roster":
-				return { people: this.roster() };
 			case "tree":
 				return { records: this.ownRecords() };
 			case "messages": {
@@ -1271,7 +1178,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	}
 
 	/**
-	 * By the owner: offer a node to someone in the network. This is the owner's whole part.
+	 * By the owner: offer a node to someone on the team. This is the owner's whole part.
 	 * When they accept, the session is released to them without asking the owner again, so
 	 * whoever calls this must already have told the human what a release sends.
 	 */

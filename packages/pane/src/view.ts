@@ -61,8 +61,8 @@ export interface PaneRepo {
 	remote?: { scope: string; url?: string; via: string };
 }
 
-/** Who is in the network, for the line at the top of the pane. */
-export interface NetworkLine {
+/** Who is on the team, for the line at the top of the pane. */
+export interface TeamLine {
 	name: string;
 	/** Teammates with a host that can be reached right now. */
 	here: string[];
@@ -73,8 +73,8 @@ export interface PaneView {
 	repos: PaneRepo[];
 	/** Repositories with a tree whose host is not running. Each is one line; opening it starts its host. */
 	asleep?: Array<{ key: string; name: string }>;
-	/** The network this person is in, when they are in one. */
-	network?: NetworkLine | undefined;
+	/** The team this person is on, when they are on one. */
+	team?: TeamLine | undefined;
 	/** Whether there is a session to go back to with `-`. */
 	previous?: boolean;
 	/** Whether the inspector is showing beside the pane. It then lists the keys that act, and the pane keeps the ones that move. */
@@ -389,8 +389,8 @@ export function renderPane(view: PaneView, width: number, paint: Paint = PLAIN):
 	const asleep = view.asleep ?? [];
 	const groups = view.repos.filter((repo) => repo.state.nodes.length > 0);
 	const several = groups.length + asleep.length > 1;
-	if (view.network) {
-		const { name, here, away } = view.network;
+	if (view.team) {
+		const { name, here, away } = view.team;
 		const rest = (who: string): string => [who, away > 0 ? `${away} away` : ""].filter(Boolean).join(" · ");
 		const full = rest(here.join(" ")) || "only you so far";
 		// Names when they fit, a count when they do not.
@@ -526,10 +526,10 @@ export function renderStrip(view: PaneView, width: number, paint: Paint = PLAIN)
 	return lines;
 }
 
-/** Who is in the network, from what each repository's host reports. Someone reachable from any of them is here. */
-export function networkLine(repos: readonly PaneRepo[]): NetworkLine | undefined {
+/** Who is on the team, from what each repository's host reports. Someone reachable from any of them is here. */
+export function teamLine(repos: readonly PaneRepo[]): TeamLine | undefined {
 	const shared = repos.filter((repo) => !repo.remote && repo.state.sharing);
-	const name = shared[0]?.state.sharing?.network;
+	const name = shared[0]?.state.sharing?.team;
 	if (name === undefined) return undefined;
 	const online = new Map<string, boolean>();
 	for (const repo of shared) for (const person of repo.state.sharing?.people ?? []) if (!person.self) online.set(person.name, (online.get(person.name) ?? false) || person.online);
@@ -555,7 +555,7 @@ export function remoteRepos(repos: readonly PaneRepo[], have: readonly string[] 
 				const self = sharing.people.filter((person) => person.self);
 				remote = {
 					key: `net:${tree.scope}`, name: tree.repo || "a repository", here: false, inbox: [], remote: { scope: tree.scope, via: repo.key },
-					state: { owner: repo.state.owner, nodes: [], attention: {}, foreground: [], sharing: { network: sharing.network, scope: tree.scope, people: [...self], handoffs: [], requests: [], pendingTransfers: [], elsewhere: [] } },
+					state: { owner: repo.state.owner, nodes: [], attention: {}, foreground: [], sharing: { team: sharing.team, scope: tree.scope, people: [...self], handoffs: [], requests: [], pendingTransfers: [], elsewhere: [] } },
 				};
 				made.set(tree.scope, remote);
 			}

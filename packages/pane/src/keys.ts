@@ -40,10 +40,10 @@ export const stopKey = (nodeId: string): string => `stop:${nodeId}`;
 
 /**
  * What the session under the cursor allows: it is this person's, it is working, it is the one
- * open here, it has not started because it waits on others; whether this person is in a network; and for a teammate's session, whether they
+ * open here, it has not started because it waits on others; whether this person is on a team; and for a teammate's session, whether they
  * can be reached and whether it has already been asked for.
  */
-function cursorSession(view: PaneView): { id: string; repo: string; mine: boolean; working: boolean; here: boolean; held: boolean; planned: boolean; network: boolean; reachable: boolean; asked: boolean; remote: boolean } | undefined {
+function cursorSession(view: PaneView): { id: string; repo: string; mine: boolean; working: boolean; here: boolean; held: boolean; planned: boolean; team: boolean; reachable: boolean; asked: boolean; remote: boolean } | undefined {
 	const id = cursorNode(view);
 	const found = id ? findNode(view, id) : undefined;
 	if (!found) return undefined;
@@ -51,14 +51,14 @@ function cursorSession(view: PaneView): { id: string; repo: string; mine: boolea
 	const sharing = repo.state.sharing;
 	return {
 		id: node.id, repo: repo.key, mine: node.owner === repo.state.owner, working: node.status === "running" || node.status === "starting", here: node.id === view.current, held: isHeld(node), planned: isPlanned(node),
-		network: sharing !== null, reachable: !gone(node, repo.state), asked: sharing?.requests.some((request) => request.role === "asker" && request.nodeId === node.id) ?? false,
+		team: sharing !== null, reachable: !gone(node, repo.state), asked: sharing?.requests.some((request) => request.role === "asker" && request.nodeId === node.id) ?? false,
 		remote: repo.remote !== undefined,
 	};
 }
 
-/** The key that hands a session over, and what it does there: offer yours, ask for a teammate's, or set a network up first. */
+/** The key that hands a session over, and what it does there: offer yours, ask for a teammate's, or say how to get on a team first. */
 function handKey(at: ReturnType<typeof cursorSession>): readonly [key: string, does: string] | undefined {
-	if (!at || !at.network) return ["o", "network"];
+	if (!at || !at.team) return ["o", "team"];
 	if (at.mine) return ["o", "offer"];
 	if (at.reachable) return ["t", at.asked ? "withdraw" : "take"];
 	return undefined;
@@ -161,7 +161,7 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 			if (key === "x") return [{ do: "sharing", repo, action: "cancel", args: [nodeId] }];
 			return [];
 		}
-		if (key === "enter") return [{ do: "leave" }, { do: "command", text: "/lattice network" }];
+		if (key === "enter") return [{ do: "leave" }, { do: "command", text: "/lattice team" }];
 		return [];
 	}
 	const target = cursorNode(view) ?? view.current;
@@ -179,7 +179,7 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 	if (key === "a") return [{ do: "leave" }, { do: "command", text: "/lattice approvals" }];
 	const hand = handKey(on);
 	if (hand && key === hand[0]) {
-		if (!on || hand[1] === "network") return [{ do: "leave" }, { do: "command", text: "/lattice network" }];
+		if (!on || hand[1] === "team") return [{ do: "leave" }, { do: "command", text: "/lattice team" }];
 		if (hand[1] === "withdraw") return [{ do: "sharing", repo: on.repo, action: "withdraw", args: [on.id] }];
 		return [{ do: "leave" }, { do: "command", text: `/lattice ${hand[1]} ${on.id}` }];
 	}
