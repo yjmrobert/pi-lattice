@@ -17,6 +17,7 @@ const ALLOWED: Record<string, string[]> = {
 	roles: ["protocol"],
 	graph: ["protocol"],
 	pane: ["protocol"],
+	canopy: ["protocol"],
 	collab: ["protocol"],
 	host: ["protocol"],
 	// The composition root: the only package allowed to know about more than the contracts.
@@ -24,7 +25,7 @@ const ALLOWED: Record<string, string[]> = {
 };
 
 /** Which packages may depend on Pi itself. The contracts and the sharing library must not. */
-const MAY_USE_PI = new Set(["a2a", "roles", "graph", "pane", "host", "app"]);
+const MAY_USE_PI = new Set(["a2a", "roles", "graph", "pane", "canopy", "host", "app"]);
 
 function sources(dir: string): string[] {
 	const out: string[] = [];

@@ -1,0 +1,35 @@
+{
+  "name": "@pi-lattice/canopy",
+  "version": "0.1.0",
+  "description": "The work of a pi-lattice network as a tree that grows upward: epics, features, stories and tasks, who owns each and which agent is on it.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "multi-agent",
+    "session-tree"
+  ],
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "dependencies": {
+    "@pi-lattice/protocol": "0.1.0"
+  },
+  "bundledDependencies": [
+    "@pi-lattice/protocol"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
