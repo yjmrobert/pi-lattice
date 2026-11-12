@@ -1,6 +1,6 @@
 import type { NodeMeta, UiState } from "@pi-lattice/protocol";
 import { describe, expect, it } from "vitest";
-import { ago, ALL_KEYS, type ChildForm, cursorKeys, stopKey, usageText, formKey, newChildForm, renderForm, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, networkLine, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane } from "../src/index.ts";
+import { ago, ALL_KEYS, type ChildForm, cursorKeys, waitChoices, stopKey, usageText, formKey, newChildForm, renderForm, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, networkLine, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane } from "../src/index.ts";
 
 const node = (id: string, parentId: string | null, over: Partial<NodeMeta> = {}): NodeMeta => ({
 	id, parentId, rootId: "r", kind: "task", name: id, brief: "", fragments: [], owner: "yan", version: 1, status: "idle",
@@ -85,6 +85,22 @@ describe("renderPane", () => {
 		const lines = renderPane(view({}, s), 30);
 		expect(lines.findLast((line) => line.includes("a-very"))).toBe("▸ ● a-very-long-session-… ?1 ");
 		for (const line of renderPane(view({ focused: true }, s), 24)) expect([...line].length).toBeLessThanOrEqual(23);
+	});
+
+	it("says what a session that has not started waits on, in place of its kind", () => {
+		const nodes = [node("r", null, { name: "checkout", kind: "feature" }), node("a", "r", { name: "schema", status: "running" }), node("b", "r", { name: "seed", done: true }), node("c", "r", { name: "api", status: "dormant", waitsOn: ["a", "b"] }), node("d", "r", { name: "docs", status: "dormant", waitsOn: ["a", "c"] })];
+		expect(renderPane(view({}, state({ nodes })), 34).slice(1, 6)).toEqual([
+			"▸ ● checkout             feature ",
+			"  ├ ⠋ schema                task ",
+			"  ├ ✓ seed                  task ",
+			"  ├ ○ api        waits on schema ",
+			"  └ ○ docs            waits on 2 ",
+		]);
+		// With little room it says only that it waits.
+		expect(renderPane(view({}, state({ nodes })), 24)[4]).toBe("  ├ ○ api        waits ");
+		const inspector = renderInspector({ repos: [repo(state({ nodes }))], current: "r", cursor: nodeKey("c"), focused: true }, 70).join("\n");
+		expect(inspector).toContain("not started: waiting on others");
+		expect(inspector).toContain("waits on   schema · seed ✓");
 	});
 
 	it("animates a working session with the frame it is given", () => {
@@ -368,6 +384,14 @@ describe("keys while the pane has the keyboard", () => {
 		expect(interpretKey(at(nodeKey("b")), "r")).toEqual([]);
 	});
 
+	it("starts a session that is waiting on others with s, and has nothing to open until then", () => {
+		const s = state({ nodes: [node("r", null, { name: "checkout", kind: "feature" }), node("a", "r", { name: "schema", status: "running" }), node("c", "r", { name: "api", status: "dormant", waitsOn: ["a"] })] });
+		const on = (cursor: string): PaneView => ({ repos: [repo(s)], current: "r", cursor, focused: true });
+		expect(cursorKeys(on(nodeKey("c")))).toEqual([["n", "new"], ["r", "rename"], ["s", "start now"], ["d", "archive"], ["o", "offer"], [",", "settings"], ["?", "keys"]]);
+		expect(interpretKey(on(nodeKey("c")), "s")).toEqual([{ do: "start", repo: "/shop/.lattice", nodeId: "c" }]);
+		expect(interpretKey(on(nodeKey("c")), "enter")).toEqual([]);
+	});
+
 	it("stops a working session only when s is pressed twice", () => {
 		expect(interpretKey(at(nodeKey("a")), "s")).toEqual([{ do: "confirm", what: stopKey("a") }]);
 		const asked = { ...at(nodeKey("a")), confirm: stopKey("a") };
@@ -560,6 +584,23 @@ describe("the new-session form", () => {
 			"─────────────────────────────────────────────────────────────────────",
 			" ←→ move  tab next field  ctrl+s create  esc cancel",
 		]);
+	});
+
+	it("offers what it could wait on, when there is something, and sends what was chosen", () => {
+		const tree = [node("r", null, { name: "checkout" }), node("a", "r", { name: "payments" }), node("b", "r", { name: "schema" }), node("c", "r", { name: "seed", done: true }), node("d", "r", { name: "theirs", owner: "sam" }), node("a1", "a", { name: "refunds" })];
+		// Not what is above it, not what has finished, not a teammate's.
+		expect(waitChoices(tree, tree[1] as NodeMeta)).toEqual([{ id: "b", name: "schema" }, { id: "a1", name: "refunds" }]);
+		const form = newChildForm({ id: "a", name: "payments" }, ["worker"], waitChoices(tree, tree[1] as NodeMeta));
+		// tab: kind, model, roles, waits.
+		const chosen = press(form, "api", "tab", "tab", "tab", "tab", "space", "right", "space", "left", "space", "tab", "tab", "Build it.");
+		expect(chosen).toMatchObject({ waits: ["a1"], field: "brief" });
+		const lines = renderForm(chosen, 70);
+		expect(lines[6]).toBe(" Waits on    schema  [refunds] ");
+		expect(lines.join("\n")).toContain("starts when what it waits on has finished");
+		expect(formKey(chosen, "submit")).toMatchObject({ submit: { spec: { name: "api", waitsOn: ["a1"] } } });
+		// With nothing to wait on there is no such field, and nothing is sent.
+		expect(renderForm(blank(), 70).join("\n")).not.toContain("Waits on");
+		expect(formKey(press(blank(), "x", "tab", "tab", "tab", "tab", "tab", "y"), "submit")).toEqual({ submit: { parentId: "a", spec: { name: "x", brief: "y", kind: "task", fragments: [], workspace: "shared" } } });
 	});
 
 	it("edits text where the caret is: move, insert, delete either side, jump to either end", () => {

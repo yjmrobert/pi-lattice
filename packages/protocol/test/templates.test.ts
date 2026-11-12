@@ -18,6 +18,17 @@ describe("templates", () => {
 		expect(renderTemplate(TEMPLATES.brief.text, { ...values, branch: null })).toContain("priority.\n\nBrief:\nDo it.");
 	});
 
+	it("tells a child that waited what it waited for, and a parent what a stopped child holds up", () => {
+		const values = { "parent.name": "checkout", "parent.id": "nd_1", name: "api", kind: "task", brief: "Do it.", branch: null };
+		expect(renderTemplate(TEMPLATES.brief.text, { ...values, waited: '"schema", "seed"' })).toContain(
+			'priority.\nYou were kept from starting until these sessions had sent their results, which they now have: "schema", "seed".\n\nBrief:\nDo it.',
+		);
+		expect(renderTemplate(TEMPLATES.brief.text, { ...values, waited: "" })).not.toContain("kept from starting");
+		const stopped = { name: "schema", id: "nd_2", reason: "its process failed", last: "" };
+		expect(renderTemplate(TEMPLATES["child-stopped"].text, { ...stopped, held: '"api" (nd_3)' })).toMatch(/or tell the user\.\nStill waiting on it before they start: "api" \(nd_3\)\. They start when it sends its result; send one a message to start it without that\.$/);
+		expect(renderTemplate(TEMPLATES["child-stopped"].text, { ...stopped, held: "" })).not.toContain("Still waiting");
+	});
+
 	it("puts values in once, so braces in a brief are left as written", () => {
 		expect(renderTemplate("{{brief}} / {{name}}", { brief: "use {{name}} and {{#x}}y{{/x}}", name: "n" })).toBe("use {{name}} and {{#x}}y{{/x}} / n");
 		// A name the template has no value for is left alone, so a typo is visible.

@@ -29,10 +29,11 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | `enter` | Open the selected session here; on a question, answer it with Pi's prompt |
 | `y` `n` | Answer the selected yes/no question, where it is |
 | `a` `x` | Approve or reject the selected message; accept or decline an offered session; hand over or keep a session a teammate asks for |
-| `n` | Create a child under the selected session, in one form: name, kind, model, roles, workspace, brief |
+| `n` | Create a child under the selected session, in one form: name, kind, model, roles, what it waits on, workspace, brief |
 | `/lattice new` | The same, as a series of prompts |
 | `r` / `/lattice rename <name> [new name]` | Rename a session |
 | `s` `s` / `/lattice interrupt <name>` | Stop what a session's agent is doing. The key is pressed twice. The session stays, idle |
+| `s` / `/lattice start <name>` | On a session that is waiting on others: start it now, without waiting for them |
 | `d` / `/lattice archive <name>` | Hide a session and everything under it, and stop their processes. Nothing is deleted |
 | `/lattice restore [name]` | Bring archived sessions back |
 | `?` | List every key |
@@ -64,11 +65,11 @@ While the pane has the keyboard, the chat steps aside for an inspector: everythi
 
 Marks: a spinner for working, `●` in the attention colour for waiting on you, dim `●` idle, `○` asleep or offline, `✓` done (it sent its parent its result) or finished, `✗` failed, `▸` open in this terminal, `?n` questions waiting on you, `✉n` messages to approve. The attention colour is used for nothing else.
 
-Each session is one line. The kind is on the right, or the owner when the session is someone else's. What is waiting on you is listed above the tree. The design, with drawings of every screen, is [ADR 0015](../../docs/decisions/0015-pane-design.md).
+Each session is one line. The kind is on the right, or the owner when the session is someone else's. A session that has not started because it waits on others says so there instead: `waits on schema`, or `waits on 2`. It starts by itself when they have sent their results, and cannot be opened until then. What is waiting on you is listed above the tree. The design, with drawings of every screen, is [ADR 0015](../../docs/decisions/0015-pane-design.md).
 
 ## Creating a session
 
-`n` opens a form where the chat was, with every field visible at once: name, kind, model, roles, workspace and brief. The session it will create is drawn in the tree as you type. `tab` and `shift+tab` move between fields. In a text field `←` `→` `home` `end` move the caret, and `backspace` and `delete` work beside it; paste works. Roles are chosen from the fragments that exist (`←` `→` to move, `space` to choose, in the order you want them applied). The model is as `pi --model` takes it; leave it empty for the default. `ctrl+s` creates the session from anywhere in the form; `esc` cancels.
+`n` opens a form where the chat was, with every field visible at once: name, kind, model, roles, what it waits on, workspace and brief. The session it will create is drawn in the tree as you type. `tab` and `shift+tab` move between fields. In a text field `←` `→` `home` `end` move the caret, and `backspace` and `delete` work beside it; paste works. Roles are chosen from the fragments that exist (`←` `→` to move, `space` to choose, in the order you want them applied). When the tree has unfinished sessions the new one could wait on, they are offered the same way under "Waits on": with any chosen, the session is created now and starts when each of them has sent its result. The model is as `pi --model` takes it; leave it empty for the default. `ctrl+s` creates the session from anywhere in the form; `esc` cancels.
 
 ## Settings
 
