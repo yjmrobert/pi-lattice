@@ -7,8 +7,9 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
 <link rel="stylesheet" href="shared.css">
 <style>
-/* Layout: the dendrite turned upright. The network is the root at the bottom, work rises through brief, build and verify, and lands at the top.
-   The whole drawing is a 128 x 44 grid of terminal cells painted on a canvas. Text sits in cells; branches are either braille dots (any terminal) or pixels under the text (terminals with a graphics protocol). */
+/* Layout: a tree of work, upright. The network is the root; epics, features and stories are the branches and tasks are the leaves. Height is the level of the work.
+   A session sits on the item it is working at, whatever the level. A branch is lit once everything on it has landed.
+   The drawing is a 128 x 44 grid of terminal cells on a canvas: text in cells, branches as braille dots (any terminal) or as pixels under the text (graphics protocol). */
 #c { display: block; width: 100%; max-width: 1280px; height: auto; cursor: pointer; }
 .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .modes button { border: 1px solid var(--t-edge); border-radius: 4px; padding: 7px 10px; background: var(--t-panel); }
@@ -20,7 +21,7 @@
 <div class="term">
   <header id="top"></header>
   <div class="stage">
-    <section class="view"><canvas id="c" role="img" aria-label="Workstreams rising from the network through brief, build and verify to landed"></canvas></section>
+    <section class="view"><canvas id="c" role="img" aria-label="A tree of work: epics, features, stories and tasks, with the sessions working on them"></canvas></section>
     <aside class="side">
       <div><h2>Renderer <span class="td"><span class="tk">g</span> switch</span></h2>
         <div class="modes">
@@ -29,117 +30,168 @@
         </div>
         <pre class="td" id="stat" style="margin-top:8px"></pre></div>
       <div><h2>Inspecting <span class="td">tab next</span></h2><div class="box sel" id="insp"></div></div>
-      <div><h2>Canopy health <span class="td">finished, 14 days</span></h2><div class="box"><pre id="hist"></pre></div></div>
+      <div><h2>Reading it</h2><pre><span class="tc">◉</span> <span class="td">a session sits here</span>   <span class="td">○ nobody yet</span>
+<span class="tg">⠹</span> <span class="td">working</span>  <span class="ty">●</span> <span class="td">asks someone</span>  <span class="tb">⧗</span> <span class="td">waits</span>
+<span class="tg">✓</span> <span class="td">landed</span>   <span class="td">○ planned, no session</span>
+<span class="tw">━━</span> <span class="td">landed branch</span>   <span class="td">── growing</span>
+<span class="td">┄┄ planned</span>   <span class="ty">⠒⠒</span> <span class="td">waits on another task</span></pre></div>
     </aside>
   </div>
   <footer id="keys"></footer>
 </div>
 <script src="shared.js"></script>
 <script>
-chrome(6, [['←→', 'workstream'], ['↑', 'into its sessions'], ['enter', 'open'], ['g', 'braille / pixels'], ['o', 'offer'], ['t', 'ask for it']]);
-const COLS = 128, ROWS = 44, CW = 8, CH = 17, cv = $('#c'), ctx = cv.getContext('2d'), dpr = Math.min(2, devicePixelRatio || 1);
-cv.width = COLS * CW * dpr; cv.height = ROWS * CH * dpr;
-const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-const K = { bg: css('--t-bg'), fg: css('--t-fg'), dim: css('--t-dim'), bright: css('--t-bright'), sel: css('--t-sel'), mag: css('--t-mag'), yellow: css('--t-yellow'), green: css('--t-green'), red: css('--t-red'), twig: '#465066' };
-const LANE = { 'checkout-v2': 12, 'invoice-export': 34, 'pricing-migration': 40, 'search-reindex': 44, 'docs-refresh': 64, 'sso-rollout': 70, 'rate-limits': 92, 'offline-cart': 100 };
-const ROW = { brief: 33, build: 25, verify: 15, landed: 6 }, CORE = [64, 41];
-const order = Object.keys(LANE), at = id => [LANE[id], ROW[S(id).phase]];
+chrome(6, [['←→', 'beside'], ['↑↓', 'level'], ['enter', 'open the session here'], ['s', 'seat a session'], ['n', 'add below'], ['g', 'braille / pixels']]);
+
+// The work. n(name, owner, seat, children); a seat is [role of the session sitting there, its state]. Tasks are [name, state, waits on].
+const n = (name, owner, seat, kids) => ({ name, owner, seat, kids });
+const TREE = [
+  n('checkout-v2', 'yan', ['coordinator', 'run'], [
+    n('payments', 'yan', ['planner', 'run'], [
+      n('cards', 'yan', null, [['card-vault', 'done'], ['card-form', 'done'], ['3ds-flow', 'run'], ['e2e', 'wait', '3ds-flow']]),
+      n('webhooks', 'yan', ['reviewer', 'ask'], [['stripe-listen', 'ask'], ['retry-queue', 'run'], ['signatures', 'plan']]),
+      n('tax-lines', 'yan', null, [['rates', 'wait', 'copy'], ['display', 'plan']])]),
+    n('cart', 'yan', null, [
+      n('totals-api', 'yan', null, [['endpoint', 'done'], ['cache', 'done'], ['docs', 'done']]),
+      n('offline', 'teo', null, [['local-store', 'done'], ['sync-engine', 'plan'], ['conflicts', 'ask']])])]),
+  n('pricing-migration', 'sam', ['coordinator', 'run'], [
+    n('new-tables', 'sam', null, [
+      n('tables', 'sam', ['planner', 'idle'], [['schema', 'done'], ['copy', 'run'], ['verify-copy', 'wait', 'copy']]),
+      n('dual-write', 'sam', null, [['writer', 'run'], ['reader', 'plan'], ['flag', 'plan'], ['cutover', 'plan']])]),
+    n('invoices', 'sam', null, [
+      n('export', 'sam', null, [['csv', 'done'], ['pdf', 'ask'], ['fixtures', 'done'], ['review', 'run']])])]),
+  n('sso-rollout', 'mira', ['coordinator', 'run'], [
+    n('sign-on', 'mira', ['planner', 'run'], [
+      n('oidc', 'mira', null, [['provider', 'run'], ['claims', 'done'], ['logout', 'plan']]),
+      n('sessions', 'mira', null, [['store', 'run'], ['failover', 'done'], ['load-test', 'wait', 'store']])])]),
+];
+const LEVEL = ['epic', 'feature', 'story', 'task'], ROWY = [33, 24, 14], LEAF = 10, COLS = 128, ROWS = 44, CW = 8, CH = 17, CORE = [64, 41];
+const items = []; let lane = 0;
+(function walk(list, level, parent) { list.forEach(it => { it.level = level; it.parent = parent; it.row = ROWY[level]; items.push(it);
+  if (level === 2) { it.x = Math.round(8 + lane++ * 12.2); it.tasks = it.kids.map((k, j, a) => ({ name: k[0], state: k[1], waits: k[2], col: it.x + 2 * j - (a.length - 1) })); it.kids = []; }
+  else { walk(it.kids, level + 1, it); it.x = Math.round(it.kids.reduce((a, k) => a + k.x, 0) / it.kids.length); } }); })(TREE, 0, null);
+const leaves = it => it.level === 2 ? it.tasks : it.kids.flatMap(leaves), done = it => leaves(it).filter(t => t.state === 'done').length;
+const live = it => (it.seat && it.seat[1] === 'run') || leaves(it).some(t => t.state === 'run');
+const allTasks = leaves({ level: 0, kids: TREE }), task = name => allTasks.find(t => t.name === name);
+const seated = items.filter(i => i.seat).length + allTasks.filter(t => ['run', 'ask', 'wait'].includes(t.state)).length;
+$('#top').children[2].innerHTML = `3 epics · 5 features · 10 stories · ${allTasks.length} tasks · <span class="tg">${seated}</span> sessions seated`;
+
+const cv = $('#c'), ctx = cv.getContext('2d'), dpr = Math.min(2, devicePixelRatio || 1); cv.width = COLS * CW * dpr; cv.height = ROWS * CH * dpr;
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const K = { bg: css('--t-bg'), fg: css('--t-fg'), dim: css('--t-dim'), bright: css('--t-bright'), sel: css('--t-sel'), mag: css('--t-mag'), yellow: css('--t-yellow'), green: css('--t-green'), blue: css('--t-blue') };
+const TG = { done: ['✓', K.green], run: ['⠹', K.green], ask: ['●', K.yellow], wait: ['⧗', K.blue], plan: ['○', K.dim], idle: ['○', K.dim] };
 const px = d => d * 4 + 2, py = d => d * 4.25 + 2.1;   // braille dot (2 x 4 per cell) to pixel
 
-// Geometry, in dots. A trunk flares sideways out of the root, then climbs its own lane with a slight sway.
-function trunk(x, row) {
-  const X = x * 2 + 1, cx = CORE[0] * 2 + 1, cy = CORE[1] * 4 - 2, fy = 146, ny = row * 4 + 3, p = [];
-  for (let i = 0; i <= 160; i++) { const t = i / 160, u = 1 - t; p.push([u * u * u * cx + 3 * u * u * t * cx + 3 * u * t * t * X + t * t * t * X, u * u * u * cy + 3 * u * u * t * (cy - 12) + 3 * u * t * t * (fy + 12) + t * t * t * fy]); }
-  const n = (fy - ny) * 2; for (let i = 1; i <= n; i++) { const y = fy - i / 2; p.push([X + Math.sin(y * .11 + x) * 1.3 * Math.sin(Math.PI * i / n), y]); }
-  return p;
-}
-function arc(a, b) {
-  const A = [a[0] * 2 + 1, a[1] * 4 + 2], B = [b[0] * 2 + 1, b[1] * 4 + 2], dx = B[0] - A[0], dy = B[1] - A[1], d = Math.hypot(dx, dy), k = (d * .12 + 8) / d;
-  let nx = -dy * k, ny = dx * k; if (ny < 0) { nx = -nx; ny = -ny; }
-  const C = [(A[0] + B[0]) / 2 + nx * 2, (A[1] + B[1]) / 2 + ny * 2], p = [], n = Math.ceil(d * 2);
-  for (let i = 0; i <= n; i++) { const t = i / n, u = 1 - t; p.push([u * u * A[0] + 2 * u * t * C[0] + t * t * B[0], u * u * A[1] + 2 * u * t * C[1] + t * t * B[1]]); }
-  return p;
-}
-const edges = [], text = [], T = (c, r, s, col, o = {}) => text.push({ c, r, s, col, ...o });
-order.forEach((id, i) => {
-  const s = S(id), [x, row] = at(id), o = P(s.owner), n = s.kids.length, X = x * 2 + 1;
-  edges.push({ kind: 'trunk', p: trunk(x, row), col: o.c, live: count(s, 'run') > 0 && o.on, seed: i * 53 });
-  const stem = []; for (let y = row * 4 - 1; y >= (row - 1 - n) * 4 + 2; y -= .5) stem.push([X, y]);
-  edges.push({ kind: 'twig', p: stem });
-  s.kids.forEach((k, j) => { const kr = row - 1 - n + j; edges.push({ kind: 'twig', p: [[X + 1, kr * 4 + 2], [X + 2, kr * 4 + 2]] });
-    T(x + 2, kr, G[k[1]][0], GC[k[1]], { spin: k[1] === 'run' }); T(x + 4, kr, k[0], k[1] === 'done' || k[1] === 'idle' ? K.dim : K.fg); });
-  (s.waits || []).forEach(w => edges.push({ kind: 'dep', p: arc(at(id), at(w.on)), met: w.met }));
-  T(x, row, '◉', o.c, { id }); T(x + 2, row, id, K.bright, { b: 1, id });
-  let c = x + 3 + id.length; if (s.risk === 'high') { T(c, row, '▲', K.red); c += 2; }
-  const q = L.needs.filter(n => n.stream === id).length; if (q) T(c, row, '●' + q, K.yellow);
-  T(x + 2, row + 1, `${s.repo} · @${s.owner}`, K.dim);
+// Geometry, in dots. Every branch leaves its parent upward and arrives at its child from below.
+function bez(ax, ay, bx, by) { const k = (ay - by) * .55, m = Math.ceil(Math.hypot(bx - ax, by - ay) * 2.2), p = [];
+  for (let i = 0; i <= m; i++) { const t = i / m, u = 1 - t; p.push([u * u * u * ax + 3 * u * u * t * ax + 3 * u * t * t * bx + t * t * t * bx, u * u * u * ay + 3 * u * u * t * (ay - k) + 3 * u * t * t * (by + k) + t * t * t * by]); } return p; }
+const look = (d, total, isLive) => d === total ? 'lit' : d === 0 && !isLive ? 'plan' : 'grow';
+const edges = [], cx = CORE[0] * 2 + 1, cy = CORE[1] * 4 + 1;
+items.forEach(it => {
+  const X = it.x * 2 + 1, from = it.parent ? [it.parent.x * 2 + 1, it.parent.row * 4 - 1] : [cx, cy - 6], col = P(it.owner).c, ls = leaves(it);
+  edges.push({ p: bez(from[0], from[1], X, it.row * 4 + 4), col, level: it.level, live: live(it), look: look(done(it), ls.length, live(it) || ls.some(t => t.state !== 'plan' && t.state !== 'done')) });
+  if (it.level === 2) it.tasks.forEach(t => edges.push({ p: bez(X, it.row * 4 - 1, t.col * 2 + 1, LEAF * 4 + 4), col, level: 3, live: t.state === 'run', look: t.state === 'done' ? 'lit' : t.state === 'plan' ? 'plan' : 'grow' }));
 });
-L.phases.forEach(p => { const s = p.toUpperCase() + ' ' + L.streams.filter(x => x.phase === p).length; T(COLS - 1 - s.length, ROW[p], s, K.dim); });
-T(CORE[0] - 7, 43, 'harbor', K.mag, { b: 1 }); T(CORE[0], 43, '· 4 leads', K.dim);
-T(1, 43, '⠒⠒ waits on  ▲ high risk  ● needs someone', K.dim);
-const occ = new Uint8Array(COLS * ROWS); text.forEach(t => { for (let i = 0; i < [...t.s].length; i++) occ[t.r * COLS + t.c + i] = 1; });
+allTasks.filter(t => t.waits).forEach(t => { const a = [t.col * 2 + 1, LEAF * 4 - 1], b = [task(t.waits).col * 2 + 1, LEAF * 4 - 1], d = Math.abs(b[0] - a[0]), h = Math.min(22, d * .18 + 5), m = Math.ceil(d * 2.4), p = [];
+  for (let i = 0; i <= m; i++) { const u = i / m; p.push([a[0] + (b[0] - a[0]) * u, a[1] - 4 * h * u * (1 - u)]); } edges.push({ p, dep: 1 }); });
 
-let mode = 'cells', sel = 'checkout-v2', last = -1;
+let text = [], occ, sel = items.find(i => i.name === 'tables'), mode = 'cells', last = -1;
+function build() {
+  text = []; const T = (c, r, s, col, o = {}) => text.push({ c, r, s, col, ...o });
+  items.forEach(it => {
+    const o = P(it.owner), ls = leaves(it), d = done(it), full = d === ls.length;
+    T(it.x, it.row, full ? '✓' : it.seat ? '◉' : '○', full ? K.green : it.seat ? o.c : K.dim);
+    T(it.x + 2, it.row, it.name, K.bright, { b: 1, on: it === sel });
+    let c = it.x + 2;
+    if (it.seat) { const g = TG[it.seat[1]]; T(c, it.row + 1, g[0], g[1], { spin: it.seat[1] === 'run' }); T(c + 2, it.row + 1, it.seat[0], g[1]); c += 3 + it.seat[0].length; }
+    if (it.level < 2) T(c, it.row + 1, it.seat ? `· ${d}/${ls.length}` : `@${it.owner} · ${d}/${ls.length}`, K.dim);
+    else if (!it.seat) T(c, it.row + 1, `${d}/${ls.length}${it.owner !== it.parent.owner ? ' @' + it.owner : ''}`, it.owner !== it.parent.owner ? o.c : K.dim);
+    if (it.level === 2) it.tasks.forEach((t, j) => { const g = TG[t.state]; T(t.col, LEAF, g[0], g[1], { spin: t.state === 'run' });
+      if (it === sel) { const c0 = Math.max(0, Math.min(COLS - 17, it.x - 5)), r = LEAF - 1 - it.tasks.length + j; T(c0, r, g[0], g[1], { spin: t.state === 'run' }); T(c0 + 2, r, t.name, t.state === 'plan' ? K.dim : K.fg); } });
+  });
+  [['TASKS', LEAF], ['STORIES', 14], ['FEATURES', 24], ['EPICS', 33]].forEach(l => T(0, l[1], l[0], K.dim));
+  T(CORE[0] - 7, 43, 'harbor', K.mag, { b: 1 }); T(CORE[0], 43, '· 4 leads', K.dim);
+  occ = new Uint8Array(COLS * ROWS); text.forEach(t => { for (let i = 0; i < [...t.s].length; i++) occ[t.r * COLS + t.c + i] = 1; });
+  last = -1;
+}
+
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches, SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 function draw(ms) {
   const t = mode === 'cells' ? Math.floor(ms / 83) * .083 : ms / 1000;   // a terminal repaints about 12 times a second
   if (t === last) return; last = t;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalAlpha = 1; ctx.fillStyle = K.bg; ctx.fillRect(0, 0, COLS * CW, ROWS * CH);
-  const cx = CORE[0] * 2 + 1, cy = CORE[1] * 4 + 1, pulse = e => (t * 45 + e.seed) % (e.p.length + 70);
+  const wave = (t * 60) % 400, pulse = e => wave - e.level * 90;   // one wave climbs from the root to the leaves
+  const seats = items.filter(i => i.seat && done(i) < leaves(i).length);
 
   if (mode === 'cells') {
     const cells = new Map();
     const plot = (x, y, col, hot) => { const dx = Math.round(x), dy = Math.round(y); if (dx < 0 || dy < 0 || dx >= COLS * 2 || dy >= ROWS * 4) return; const k = (dy >> 2) * COLS + (dx >> 1); if (occ[k]) return;
       let c = cells.get(k); if (!c) cells.set(k, c = { d: new Set(), col, hot }); c.d.add((dy & 3) * 2 + (dx & 1)); if (hot >= c.hot) { c.col = col; c.hot = hot; } };
     edges.forEach(e => {
-      if (e.kind === 'twig') e.p.forEach(q => plot(q[0], q[1], K.twig, 1));
-      else if (e.kind === 'dep') e.p.forEach((q, i) => { if (e.met || (((i - Math.floor(t * 12)) % 8) + 8) % 8 < 4) plot(q[0], q[1], e.met ? K.green : K.yellow, e.met ? 0 : 1); });
-      else { const pi = pulse(e); e.p.forEach((q, i) => { const hot = e.live && Math.abs(i - pi) < 12; plot(q[0], q[1], hot ? K.bright : e.col, hot ? 2 : e.live ? 1 : 0); }); }
+      if (e.dep) return e.p.forEach((q, i) => { if ((((i - Math.floor(t * 12)) % 8) + 8) % 8 < 4) plot(q[0], q[1], K.yellow, 1); });
+      const pi = pulse(e); e.p.forEach((q, i) => { if (e.look === 'plan' && i % 7 > 1) return; const hot = e.live && Math.abs(i - pi) < 10; plot(q[0], q[1], hot ? K.bright : e.col, hot ? 2 : e.look === 'lit' ? 1 : 0); });
     });
+    seats.forEach(it => { const col = TG[it.seat[1]][1], X = it.x * 2 + 1, Y = it.row * 4 + 1.5, turn = it.seat[1] === 'run' ? t * 3 : 0;
+      for (let a = 0; a < 6.28; a += .3) if (it.seat[1] !== 'run' || ((a - turn) % 6.28 + 6.28) % 6.28 > 1.6) plot(X + Math.cos(a) * 3.3, Y + Math.sin(a) * 3.3, col, 1); });
     const r = 5.4 + (still ? 0 : Math.sin(t * 2) * .9);
     for (let y = -9; y <= 9; y++) for (let x = -9; x <= 9; x++) { const d = Math.hypot(x, y); if (d <= r) plot(cx + x, cy + y, K.mag, 2); else if (d <= r + 3 && (x + y) % 2 === 0) plot(cx + x, cy + y, K.mag, 0); }
-    cells.forEach((c, k) => { const X = (k % COLS) * CW, Y = Math.floor(k / COLS) * CH; ctx.fillStyle = c.col; ctx.globalAlpha = [.5, .9, 1][c.hot];
+    cells.forEach((c, k) => { const X = (k % COLS) * CW, Y = Math.floor(k / COLS) * CH; ctx.fillStyle = c.col; ctx.globalAlpha = [.5, .95, 1][c.hot];
       c.d.forEach(b => { ctx.beginPath(); ctx.arc(X + 2 + (b & 1) * 4, Y + 2.1 + (b >> 1) * 4.25, 1.15, 0, 6.3); ctx.fill(); }); });
   } else {
     ctx.lineCap = ctx.lineJoin = 'round';
     edges.forEach(e => {
       ctx.beginPath(); e.p.forEach((q, i) => i ? ctx.lineTo(px(q[0]), py(q[1])) : ctx.moveTo(px(q[0]), py(q[1])));
-      ctx.setLineDash(e.kind === 'dep' && !e.met ? [6, 5] : []); ctx.lineDashOffset = -t * 14;
-      ctx.strokeStyle = e.kind === 'twig' ? K.twig : e.kind === 'dep' ? (e.met ? K.green : K.yellow) : e.col;
-      ctx.globalAlpha = e.kind === 'trunk' ? (e.live ? .85 : .45) : e.met ? .4 : .9; ctx.lineWidth = e.kind === 'trunk' ? 1.6 : 1.2; ctx.stroke();
-      if (e.kind === 'trunk' && e.live) { const q = e.p[Math.min(e.p.length - 1, Math.floor(pulse(e)))]; ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.shadowColor = e.col; ctx.shadowBlur = 10; ctx.fillStyle = K.bright; ctx.beginPath(); ctx.arc(px(q[0]), py(q[1]), 2.4, 0, 6.3); ctx.fill(); ctx.shadowBlur = 0; }
+      ctx.setLineDash(e.dep ? [6, 5] : e.look === 'plan' ? [1, 6] : []); ctx.lineDashOffset = e.dep ? -t * 14 : 0;
+      ctx.strokeStyle = e.dep ? K.yellow : e.col; ctx.globalAlpha = e.dep ? .9 : e.look === 'lit' ? 1 : .5; ctx.lineWidth = e.look === 'lit' ? 2.2 : 1.4; ctx.stroke();
+      const pi = Math.floor(pulse(e) || 0); if (!e.dep && e.live && pi >= 0 && pi < e.p.length) { const q = e.p[pi]; ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.shadowColor = e.col; ctx.shadowBlur = 10; ctx.fillStyle = K.bright; ctx.beginPath(); ctx.arc(px(q[0]), py(q[1]), 2.4, 0, 6.3); ctx.fill(); ctx.shadowBlur = 0; }
     });
-    ctx.setLineDash([]); ctx.globalAlpha = 1; const r = 20 + (still ? 0 : Math.sin(t * 2) * 3), gr = ctx.createRadialGradient(px(cx), py(cy), 2, px(cx), py(cy), r * 2);
+    ctx.setLineDash([]);
+    seats.forEach(it => { const col = TG[it.seat[1]][1], turn = it.seat[1] === 'run' ? t * 3 : 0; ctx.globalAlpha = .9; ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.shadowColor = col; ctx.shadowBlur = 8;
+      ctx.beginPath(); ctx.arc(px(it.x * 2 + 1) - 2, py(it.row * 4 + 1.5), 11, turn, turn + (it.seat[1] === 'run' ? 4.7 : 6.3)); ctx.stroke(); ctx.shadowBlur = 0; });
+    ctx.globalAlpha = 1; const r = 20 + (still ? 0 : Math.sin(t * 2) * 3), gr = ctx.createRadialGradient(px(cx), py(cy), 2, px(cx), py(cy), r * 2);
     gr.addColorStop(0, K.mag); gr.addColorStop(.45, K.mag); gr.addColorStop(.5, K.mag + '55'); gr.addColorStop(1, K.mag + '00'); ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(px(cx), py(cy), r * 2, 0, 6.3); ctx.fill();
   }
 
   ctx.globalAlpha = 1; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   text.forEach(e => {
     const ch = [...(e.spin && !still ? SPIN[Math.floor(t * 11) % 10] : e.s)];
-    ctx.fillStyle = K.bg; ctx.fillRect(e.c * CW - 1, e.r * CH + 1, ch.length * CW + 2, CH - 2);
-    if (e.id === sel) { ctx.fillStyle = K.sel; ctx.fillRect(e.c * CW - 2, e.r * CH, ch.length * CW + 4, CH); }
+    if (ch.length > 1 || e.on) { ctx.fillStyle = e.on ? K.sel : K.bg; ctx.fillRect(e.c * CW - (e.on ? 3 : 1), e.r * CH + (e.on ? 0 : 1), ch.length * CW + (e.on ? 6 : 2), CH - (e.on ? 0 : 2)); }
     ctx.font = `${e.b ? 700 : 400} 13.3px "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace`; ctx.fillStyle = e.col;
     ch.forEach((g, i) => ctx.fillText(g, (e.c + i) * CW + CW / 2, e.r * CH + CH / 2 + .5));
   });
 }
 function loop(ms) { draw(ms); if (!still) requestAnimationFrame(loop); }
-(document.fonts ? document.fonts.load('13.3px "JetBrains Mono"') : Promise.resolve()).then(() => loop(0), () => loop(0));
 
-function select(id) { sel = id; last = -1; $('#insp').innerHTML = inspect(id); if (still) draw(0); }
+// The inspector: one item, who sits on it, and what is under it.
+function inspectItem(it) {
+  const ls = leaves(it), d = done(it), o = P(it.owner), pad = (s, w) => s + ' '.repeat(Math.max(1, w - s.length)), path = []; for (let p = it.parent; p; p = p.parent) path.unshift(p.name);
+  const gl = s => `<span style="color:${TG[s][1]}"${s === 'run' ? ' class="spin"' : ''}>${TG[s][0]}</span>`, bar = (a, b, w) => '█'.repeat(Math.round(a / b * w)) + '<span class="td">' + '░'.repeat(w - Math.round(a / b * w)) + '</span>';
+  let h = `<span class="tw">${it.name}</span><span class="right td">${LEVEL[it.level]}</span>\n<span class="td">${path.length ? path.join(' ▸ ') : '◆ harbor'}</span>\n`;
+  h += `<span style="color:${o.c}">@${it.owner}</span><span class="td">${o.on ? '' : ' offline ' + o.seen}</span>  <span style="color:${o.c}">${bar(d, ls.length, 12)}</span> ${d}/${ls.length}\n\n<span class="td">SITTING HERE</span>\n`;
+  h += it.seat ? `  ${gl(it.seat[1])} ${it.seat[0]} <span class="td">${{ run: 'working', ask: 'asks you something', idle: 'idle' }[it.seat[1]]}</span>\n` : `  <span class="td">nobody: no session works at this level</span>\n`;
+  h += `\n<span class="td">${it.level === 2 ? 'TASKS' : LEVEL[it.level + 1].toUpperCase().replace('Y', 'IE') + 'S'}</span>\n`;
+  const what = t => ({ done: 'landed', run: 'a worker is on it', ask: 'its worker asks', wait: 'waits on ' + t.waits, plan: 'nobody yet' }[t.state]);
+  const kids = it.level === 2 ? it.tasks : it.kids;
+  kids.forEach((k, i) => { const br = `<span class="td">${i < kids.length - 1 ? '├' : '└'}</span> `;
+    h += it.level === 2 ? `${br}${gl(k.state)} ${pad(k.name, 14)}<span class="td">${what(k)}</span>\n`
+      : `${br}${pad(k.name, 12)}<span style="color:${P(k.owner).c}">${bar(done(k), leaves(k).length, 8)}</span> ${done(k)}/${leaves(k).length} ${k.seat ? gl(k.seat[1]) : ''}\n`; });
+  h += `\n<span class="td"><span class="tk">${it.seat ? 'enter' : 's'}</span> ${it.seat ? 'open' : 'seat'}  <span class="tk">n</span> add ${LEVEL[it.level + 1]}  <span class="tk">o</span> offer</span>`;
+  return `<pre>${h}</pre>`;
+}
+function select(it) { sel = it; build(); $('#insp').innerHTML = inspectItem(it); if (still) draw(0); }
 function setMode(m) { mode = m; last = -1; $('#m-cells').setAttribute('aria-pressed', m === 'cells'); $('#m-pixels').setAttribute('aria-pressed', m === 'pixels');
   $('#stat').textContent = m === 'cells' ? `${COLS} × ${ROWS} cells · 12 frames a second\nbranches are braille, 2 × 4 dots a cell` : `${COLS * CW} × ${ROWS * CH} px image under the text\n60 frames a second · text stays in cells`;
   if (still) draw(0); }
 $('#m-cells').onclick = () => setMode('cells'); $('#m-pixels').onclick = () => setMode('pixels'); setMode('cells'); select(sel);
+(document.fonts ? document.fonts.load('13.3px "JetBrains Mono"') : Promise.resolve()).then(() => loop(0), () => loop(0));
 cv.onclick = e => { const b = cv.getBoundingClientRect(), c = (e.clientX - b.left) / b.width * COLS, r = (e.clientY - b.top) / b.height * ROWS;
-  const hit = order.find(id => { const [x, row] = at(id), n = S(id).kids.length; return c >= x - 1 && c <= x + 23 && r >= row - 1 - n && r <= row + 2; }); if (hit) select(hit); };
+  const hit = items.find(it => c >= it.x - 1 && c <= it.x + 4 + it.name.length && r >= it.row - (it.level === 2 ? 5 : .5) && r <= it.row + 2); if (hit) select(hit); };
 document.addEventListener('keydown', e => {
-  if (e.key === 'g') setMode(mode === 'cells' ? 'pixels' : 'cells');
-  if (e.key === 'Tab' || e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); select(order[(order.indexOf(sel) + (e.key === 'ArrowLeft' ? order.length - 1 : 1)) % order.length]); }
+  if (e.key === 'g') return setMode(mode === 'cells' ? 'pixels' : 'cells');
+  const row = items.filter(i => i.level === sel.level), i = row.indexOf(sel);
+  const to = { ArrowRight: row[(i + 1) % row.length], Tab: items[(items.indexOf(sel) + 1) % items.length], ArrowLeft: row[(i + row.length - 1) % row.length], ArrowUp: sel.kids[0], ArrowDown: sel.parent }[e.key];
+  if (e.key.startsWith('Arrow') || e.key === 'Tab') e.preventDefault(); if (to) select(to);
 });
-
-const max = Math.max(...L.done14), B = ' ▁▂▃▄▅▆▇█';
-$('#hist').innerHTML = L.done14.map((v, i) => { const e = v ? Math.max(1, Math.round(v / max * 8)) : 0; return `<span class="${i === 13 ? 'tm' : 'tc'}">${B[e]}${B[e]}</span>`; }).join('') +
-  `\n<span class="td">finished today</span> <span class="tm">9</span>  <span class="td">running</span> <span class="tg">${total('run')}</span>  <span class="td">stuck</span> <span class="ty">${total('ask')}</span>`;
 </script>
 </body>
 </html>
