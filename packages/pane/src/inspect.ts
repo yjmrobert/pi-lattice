@@ -2,7 +2,7 @@
  * The inspector: everything about what the pane's cursor is on, shown in place of the chat
  * while the pane has the keyboard. Pure, like the pane itself. See ADR 0015.
  */
-import { isHeld, type NodeMeta } from "@pi-lattice/protocol";
+import { isHeld, isPlanned, type NodeMeta } from "@pi-lattice/protocol";
 import { ALL_KEYS, cursorItem, cursorNode } from "./keys.ts";
 import { draw, findNode, fit, flow, gone, type InboxItem, type Paint, type PaneRepo, type PaneView, PLAIN, paneInbox, type Seg, SPINNER, spread, wrap } from "./view.ts";
 
@@ -28,6 +28,7 @@ function statusLine(node: NodeMeta, repo: PaneRepo, view: PaneView, paint: Paint
 	if (node.status === "failed") return [["✗ ", paint.error], ["failed"], tail];
 	if (node.status === "exited") return [["✓ ", paint.ok], ["finished"], tail];
 	if (node.done) return [["✓ ", paint.ok], ["done: it sent its result"], tail];
+	if (isPlanned(node)) return [["○ ", paint.dim], ["planned: nobody is on it yet"], tail];
 	if (isHeld(node)) return [["○ ", paint.dim], ["not started: waiting on others"], tail];
 	return [[node.status === "idle" ? "● " : "○ ", paint.dim], [node.status === "idle" ? "idle" : "asleep"], tail];
 }
@@ -64,7 +65,7 @@ function facts(node: NodeMeta, repo: PaneRepo): Array<[label: string, value: str
 	rows.push(["directory", node.cwd]);
 	if (node.model) rows.push(["model", node.model]);
 	// What it waits on, with the ones that have finished marked: it starts when all are.
-	if (isHeld(node)) rows.push(["waits on", (node.waitsOn ?? []).map((id) => repo.state.nodes.find((other) => other.id === id)).flatMap((other) => (other ? `${other.name}${other.done ? " ✓" : ""}` : [])).join(" · ")]);
+	if ((node.waitsOn?.length ?? 0) > 0) rows.push(["waits on", (node.waitsOn ?? []).map((id) => repo.state.nodes.find((other) => other.id === id)).flatMap((other) => (other ? `${other.name}${other.done ? " ✓" : ""}` : [])).join(" · ")]);
 	if (node.usage) rows.push(["used", usageText(node.usage)]);
 	return rows;
 }

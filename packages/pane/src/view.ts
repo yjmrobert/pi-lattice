@@ -2,7 +2,7 @@
  * The pane's content: what is waiting on the person, then the sessions of each repository,
  * one line each. Pure: everything drawn comes from a {@link PaneView}. See ADR 0015.
  */
-import { type DialogInfo, type Envelope, isHeld, type NodeMeta, type NodeStatus, treeLines, type UiState, waitingFor } from "@pi-lattice/protocol";
+import { type DialogInfo, type Envelope, isHeld, isPlanned, type NodeMeta, type NodeStatus, treeLines, type UiState, waitingFor } from "@pi-lattice/protocol";
 
 /** How text is styled. The extension supplies Pi's theme; tests supply plain text. */
 export interface Paint {
@@ -270,7 +270,7 @@ function sessionRow(node: NodeMeta, prefix: string, repo: PaneRepo, view: PaneVi
 	const asked = state.sharing?.requests.some((request) => request.nodeId === node.id && request.role === "asker");
 	// A session that has not started says what it waits on, in place of its kind: one name, or how many.
 	const held = node.owner === state.owner ? waitingFor(state.nodes, node) : [];
-	const tag = sending ? `→ ${sending.to}…` : offered ? `→ ${offered.to}?` : held.length > 0 ? `waits on ${held.length === 1 ? (held[0] as NodeMeta).name : held.length}` : folded > 0 ? `+${folded} done` : node.owner === state.owner ? node.kind : `@${node.owner}${away ? " offline" : asked ? " asked" : ""}`;
+	const tag = sending ? `→ ${sending.to}…` : offered ? `→ ${offered.to}?` : held.length > 0 ? `waits on ${held.length === 1 ? (held[0] as NodeMeta).name : held.length}` : isPlanned(node) && node.owner === state.owner ? `planned ${node.kind}` : folded > 0 ? `+${folded} done` : node.owner === state.owner ? node.kind : `@${node.owner}${away ? " offline" : asked ? " asked" : ""}`;
 	const lead: Seg[] = [[here ? "▸" : " ", paint.accent], [` ${guides(prefix)}`, paint.dim], statusMark(node, (attention?.dialogs ?? 0) > 0, away, view.frame ?? 0, paint), [" "]];
 	const room = width - 1 - widthOf(lead);
 	const marksWidth = marks ? [...marks].length + 1 : 0;

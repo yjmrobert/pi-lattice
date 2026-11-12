@@ -1,5 +1,5 @@
 /** What a key press means while the pane has the keyboard. Pure: the extension carries the actions out. */
-import { isHeld } from "@pi-lattice/protocol";
+import { isHeld, isPlanned } from "@pi-lattice/protocol";
 import { findNode, gone, type InboxItem, itemKey, type PaneView, paneInbox, paneOrder } from "./view.ts";
 
 /** A key as the pane sees it: a name for the special ones, else the character typed. */
@@ -43,14 +43,14 @@ export const stopKey = (nodeId: string): string => `stop:${nodeId}`;
  * open here, it has not started because it waits on others; whether this person is in a network; and for a teammate's session, whether they
  * can be reached and whether it has already been asked for.
  */
-function cursorSession(view: PaneView): { id: string; repo: string; mine: boolean; working: boolean; here: boolean; held: boolean; network: boolean; reachable: boolean; asked: boolean; remote: boolean } | undefined {
+function cursorSession(view: PaneView): { id: string; repo: string; mine: boolean; working: boolean; here: boolean; held: boolean; planned: boolean; network: boolean; reachable: boolean; asked: boolean; remote: boolean } | undefined {
 	const id = cursorNode(view);
 	const found = id ? findNode(view, id) : undefined;
 	if (!found) return undefined;
 	const { node, repo } = found;
 	const sharing = repo.state.sharing;
 	return {
-		id: node.id, repo: repo.key, mine: node.owner === repo.state.owner, working: node.status === "running" || node.status === "starting", here: node.id === view.current, held: isHeld(node),
+		id: node.id, repo: repo.key, mine: node.owner === repo.state.owner, working: node.status === "running" || node.status === "starting", here: node.id === view.current, held: isHeld(node), planned: isPlanned(node),
 		network: sharing !== null, reachable: !gone(node, repo.state), asked: sharing?.requests.some((request) => request.role === "asker" && request.nodeId === node.id) ?? false,
 		remote: repo.remote !== undefined,
 	};
@@ -102,7 +102,7 @@ export function cursorKeys(view: PaneView): Array<readonly [key: string, does: s
 		if (!at?.remote) keys.push(["n", "new"]);
 		if (at?.mine) keys.push(["r", "rename"]);
 		if (at?.mine && at.working) keys.push(["s", view.confirm === stopKey(at.id) ? "again to stop" : "stop"]);
-		if (at?.mine && at.held) keys.push(["s", "start now"]);
+		if (at?.mine && at.held) keys.push(["s", at.planned ? "put a session on it" : "start now"]);
 		if (at?.mine && !at.here) keys.push(["d", "archive"]);
 		const hand = handKey(at);
 		if (hand) keys.push(hand);

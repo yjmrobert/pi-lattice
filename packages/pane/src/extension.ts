@@ -599,7 +599,8 @@ function perform(action: PaneAction): void {
 	} else if (action.do === "start") {
 		const client = shared.links.get(action.repo)?.client;
 		const name = nameOf(action.nodeId);
-		if (client) settle(client.ui("start", { nodeId: action.nodeId }).then(() => tell(`Started "${name}" without waiting for what it waits on.`)));
+		const planned = [...shared.links.values()].flatMap((link) => link.state?.nodes ?? []).find((node) => node.id === action.nodeId)?.planned === true;
+		if (client) settle(client.ui("start", { nodeId: action.nodeId }).then(() => tell(planned ? `Put a session on "${name}". It has its brief and is working in the background.` : `Started "${name}" without waiting for what it waits on.`)));
 	} else if (action.do === "archive") {
 		const client = shared.links.get(action.repo)?.client;
 		const name = nameOf(action.nodeId);

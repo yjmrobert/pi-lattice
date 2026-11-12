@@ -87,6 +87,20 @@ describe("renderPane", () => {
 		for (const line of renderPane(view({ focused: true }, s), 24)) expect([...line].length).toBeLessThanOrEqual(23);
 	});
 
+	it("shows planned work as planned, with its level, and offers to put a session on it", () => {
+		const nodes = [node("r", null, { name: "checkout", kind: "epic" }), node("f", "r", { name: "payments", kind: "feature", status: "dormant", planned: true }), node("s", "f", { name: "cards", kind: "story", status: "dormant", planned: true })];
+		expect(renderPane(view({}, state({ nodes })), 34).slice(1, 4)).toEqual([
+			"▸ ● checkout                epic ",
+			"  └ ○ payments   planned feature ",
+			"    └ ○ cards      planned story ",
+		]);
+		const on: PaneView = { repos: [repo(state({ nodes }))], current: "r", cursor: nodeKey("s"), focused: true };
+		expect(renderInspector(on, 70).join("\n")).toContain("planned: nobody is on it yet");
+		expect(cursorKeys(on)).toContainEqual(["s", "put a session on it"]);
+		expect(interpretKey(on, "s")).toEqual([{ do: "start", repo: "/shop/.lattice", nodeId: "s" }]);
+		expect(interpretKey(on, "enter")).toEqual([]);
+	});
+
 	it("says what a session that has not started waits on, in place of its kind", () => {
 		const nodes = [node("r", null, { name: "checkout", kind: "feature" }), node("a", "r", { name: "schema", status: "running" }), node("b", "r", { name: "seed", done: true }), node("c", "r", { name: "api", status: "dormant", waitsOn: ["a", "b"] }), node("d", "r", { name: "docs", status: "dormant", waitsOn: ["a", "c"] })];
 		expect(renderPane(view({}, state({ nodes })), 34).slice(1, 6)).toEqual([
