@@ -235,6 +235,46 @@ describe("the scheme", () => {
 	});
 });
 
+describe("hosts that hand sessions to each other", () => {
+	it("are told where each other is and who signs as whom, and given what lets them connect", async () => {
+		const yan = await member("yan");
+		const sam = await member("sam");
+		await yan.publish("laptop:shop", "shop", [], { scope: "shop-scope", addresses: ["10.0.0.5:4100", "192.168.1.5:4100"], key: "yan-key" });
+		await sam.publish("desk:shop", "shop", []);
+		await sam.refresh();
+		// A host that gives no address is not one to connect to.
+		expect(sam.state().hosts).toEqual([{ owner: "yan", host: "laptop:shop", repo: "shop", scope: "shop-scope", addresses: ["10.0.0.5:4100", "192.168.1.5:4100"] }]);
+		expect(sam.state().people).toEqual([{ name: "yan", key: "yan-key", online: true }, { name: "sam", online: true }]);
+		// The first key a person gives stays theirs.
+		expect(await refused(yan.publish("laptop:shop", "shop", [], { scope: "shop-scope", addresses: ["10.0.0.5:4100"], key: "another" }))).toContain("The server knows yan by another key.");
+		// Members get the same secret; nobody else gets any.
+		expect(await yan.team()).toEqual(await sam.team());
+		expect((await yan.team()).secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect((await fetch(`${address.split("#")[0]}team`)).status).toBe(401);
+	});
+
+	it("are handed what a teammate's host sends them, once, and only while it is fresh", async () => {
+		const yan = await member("yan");
+		const sam = await member("sam");
+		const got: Array<[string, unknown]> = [];
+		sam.start();
+		sam.listen("shop-scope", (from, body) => got.push([from, body]));
+		await yan.signal("sam", "shop-scope", { t: "req", op: "ask" });
+		await yan.signal("sam", "docs-scope", { for: "another host of sam's" });
+		await until(() => got.length === 1, "sam's host to be handed it");
+		expect(got).toEqual([["yan", { t: "req", op: "ask" }]]);
+		expect(server.relayed).toBe(2);
+		expect(await refused(yan.signal("kim", "shop-scope", {}))).toBe("Say who it is for, and what they are working on.");
+		// Nobody was listening for the other one: after a minute it is gone, not delivered late.
+		clock += 61_000;
+		const late: unknown[] = [];
+		sam.listen("docs-scope", (_from, body) => late.push(body));
+		await yan.signal("sam", "docs-scope", { fresh: true });
+		await until(() => late.length > 0, "the fresh one to arrive");
+		expect(late).toEqual([{ fresh: true }]);
+	});
+});
+
 describe("what people have running", () => {
 	it("is told to everyone, and forgotten when its host goes quiet", async () => {
 		const yan = await member("yan");

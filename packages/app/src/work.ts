@@ -8,7 +8,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rm
 import { join } from "node:path";
 import type { WorkPort } from "@pi-lattice/host";
 import type { WorkRequest, WorkResult, WorkSession, WorkState } from "@pi-lattice/protocol";
-import { joinServer, type ServerAccount, WorkClient } from "@pi-lattice/server";
+import { joinServer, type Peering, type ServerAccount, WorkClient } from "@pi-lattice/server";
 import { boardAddresses, ensureBoard, liveBoard, shareBoard } from "./board.ts";
 
 /** A server joined, and whether it is the board on this machine. */
@@ -61,6 +61,8 @@ export interface WorkOptions {
 	name: () => string;
 	/** How often what this host runs is said again, so the server does not forget it. */
 	beatMs?: number;
+	/** Told what a person must act on. */
+	warn?: (message: string) => void;
 	/** Starts `pi-lattice` with the arguments given, detached: how the board on this machine is started. Default: as this process was. */
 	spawnBoard?: (args: string[]) => void;
 }
@@ -74,6 +76,9 @@ export class Work implements WorkPort {
 	private beat: NodeJS.Timeout | undefined;
 	private readonly spawnBoard: (args: string[]) => void;
 	private reviving = 0;
+	private refused = "";
+	private peering: (Peering & { heard: (from: string, body: unknown) => void }) | undefined;
+	private teams = new Map<string, { name: string; secret: string }>();
 
 	constructor(options: WorkOptions) {
 		this.options = options;
@@ -110,6 +115,7 @@ export class Work implements WorkPort {
 			client.onChanged(() => this.changed());
 			client.start();
 			this.client = client;
+			if (this.peering) client.listen(this.peering.scope, (from, body) => this.peering?.heard(from, body));
 			this.beat = setInterval(() => this.send(), this.options.beatMs ?? 15_000);
 			this.beat.unref();
 		}
@@ -145,6 +151,40 @@ export class Work implements WorkPort {
 
 	state(): WorkState | null {
 		return this.client?.state() ?? null;
+	}
+
+	/** The server this host is on, and as whom. */
+	account(): { url: string; name: string } | undefined {
+		const account = this.client?.account;
+		return account ? { url: account.url, name: account.name } : undefined;
+	}
+
+	/** What lets the team's hosts connect to each other. Asked of the server once for each server joined. */
+	async team(): Promise<{ name: string; secret: string }> {
+		const client = this.must();
+		const known = this.teams.get(client.account.url);
+		if (known) return known;
+		const team = await client.team();
+		this.teams.set(client.account.url, team);
+		return team;
+	}
+
+	/**
+	 * Say that this host can be connected to, where, and with which key; and take what teammates
+	 * hand the server for it. Undefined takes that back. One at a time: a host works on one thing.
+	 */
+	setPeering(peering: (Peering & { heard: (from: string, body: unknown) => void }) | undefined): void {
+		const listen = peering && !this.peering && this.client;
+		this.peering = peering;
+		// The client's listening ends with the client, which is replaced when the server joined changes.
+		if (listen) listen.listen(peering.scope, (from, body) => this.peering?.heard(from, body));
+		this.send();
+	}
+
+	/** Hand the server something for a teammate's host that works on the same thing. */
+	async signal(to: string, body: unknown): Promise<void> {
+		if (!this.peering) throw new Error("This host is not sharing.");
+		await this.must().signal(to, this.peering.scope, body);
 	}
 
 	private must(): WorkClient {
@@ -189,7 +229,13 @@ export class Work implements WorkPort {
 
 	private send(): void {
 		// Not reaching the server is shown by the copy going stale; saying it again here would only repeat it.
-		void this.client?.publish(this.options.hostId, this.options.repo, this.sessions).catch(() => {});
+		const peering = this.peering ? { scope: this.peering.scope, addresses: this.peering.addresses, key: this.peering.key } : undefined;
+		void this.client?.publish(this.options.hostId, this.options.repo, this.sessions, peering).catch((error: unknown) => {
+			// A key the server refuses is the one thing here a person must act on.
+			const problem = error instanceof Error ? error.message : String(error);
+			if (problem.includes("another key") && problem !== this.refused) this.options.warn?.(problem);
+			this.refused = problem;
+		});
 	}
 
 	async server(action: string, args: string[]): Promise<string> {

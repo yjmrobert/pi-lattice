@@ -45,6 +45,23 @@ export interface HostPort {
 	off(event: "node", listener: (node: NodeMeta) => void): unknown;
 }
 
+/**
+ * Another way to a teammate's host for the same work than a connection to it: through
+ * something both can reach, such as their team's server. Offers, requests and their answers
+ * go this way when it is given, so they arrive whether or not the two machines can connect.
+ * Handing the session over itself still needs the connection.
+ */
+export interface Relay {
+	send(to: string, frame: unknown): Promise<void>;
+	/** Called once, with what handles each frame handed over and who it is from. */
+	listen(handler: (from: string, frame: unknown) => void): void;
+	/** Whether their host for the same work is there to be handed something. */
+	online(name: string): boolean;
+}
+
+/** What goes by the relay when there is one: everything two people say to each other about handing a session over. */
+const RELAYED: ReadonlySet<string> = new Set(["offered", "accept", "cancel", "ask", "unask", "declined"]);
+
 export interface CollabOptions {
 	host: HostPort;
 	identity: Identity;
@@ -75,6 +92,8 @@ export interface CollabOptions {
 	projectDir: string;
 	/** Host name or address other people should use to reach this host. Guessed when omitted. */
 	advertise?: string;
+	/** Carries offers and requests, in place of the connection. */
+	relay?: Relay;
 	/** How often to retry unreachable peers, in milliseconds. 0 disables the timer. */
 	redialMs?: number;
 	/** How long an offer stays open, in milliseconds. */
@@ -215,6 +234,8 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private readonly unanswered = new Map<string, string>(); // address -> why it did not lead to a teammate
 	private readonly strangers = new Map<string, string>(); // name -> a key other than the pinned one
 	private readonly addresses = new Map<string, string>(); // name -> `host:port` they were last heard at
+	private readonly told = new Map<string, string[]>(); // name -> every `host:port` they are said to be at
+	private readonly offeredTo = new Set<string>(); // offers the recipient's host has been handed, by handoff id
 	private readonly seedPeer = new Map<string, string>(); // seed -> who answered there
 	private readonly failures = new Map<string, { count: number; retryAt: number }>();
 	private readonly key: Buffer;
@@ -269,6 +290,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	/** Start listening, publish this host's nodes, and reach out to the rest of the network. */
 	async start(): Promise<void> {
 		this.bound = await this.options.transport.listen(this.answer);
+		this.options.relay?.listen((from, frame) => this.onRelayed(from, frame as Frame));
 		await this.openLobby();
 		this.host.setRemoteRouter((envelope, recipient) => this.queueOutbound(envelope, recipient));
 		this.host.on("node", this.onNode);
@@ -443,6 +465,34 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	}
 
 	/** A beacon, or a teammate, says where someone is. Worth trying at once. `same`: it is their host for this work. */
+	/** Where this host can be connected to, for telling teammates. */
+	listening(): string[] {
+		const port = this.port();
+		return this.hosts().map((host) => `${host}:${port}`);
+	}
+
+	/** Someone both sides trust says who a person is: the key they sign with. The first key heard for a name stays. */
+	learn(name: string, publicKey: string): void {
+		this.joined(name, publicKey);
+	}
+
+	/** Someone both sides trust says where a person's host is. `same`: it is their host for this work. */
+	heardAt(name: string, addresses: readonly string[], same: boolean): void {
+		const first = addresses[0];
+		if (name === this.identity.name || this.stopped || first === undefined) return;
+		if (!same) return this.heard(name, first, false);
+		if (this.told.get(name)?.join() !== addresses.join()) {
+			this.told.set(name, [...addresses]);
+			this.failures.delete(name);
+		}
+		if (!this.channels.has(name) && this.book.get(name)) void this.dial(name);
+	}
+
+	/** Whether their host for this work is there to be told something: by the relay when there is one, else by the connection. */
+	private there(name: string): boolean {
+		return this.options.relay ? this.options.relay.online(name) : this.channels.has(name);
+	}
+
 	private heard(name: string, address: string, same = true): void {
 		if (name === this.identity.name || this.stopped) return;
 		if (!same) {
@@ -495,6 +545,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		const out: string[] = [];
 		const heard = this.addresses.get(name);
 		if (heard) out.push(heard);
+		out.push(...(this.told.get(name) ?? []));
 		for (const host of this.book.get(name)?.hosts ?? []) out.push(`${host}:${this.wellKnownPort()}`);
 		return out.filter((address, index) => out.indexOf(address) === index);
 	}
@@ -688,9 +739,10 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 
 	/** Ask over a link: a person's name for their host on this work, or `name|scope` for one of their others. */
 	private request<T>(peer: string, op: string, params: unknown): Promise<T> {
-		const channel = this.link(peer);
-		if (!channel) return Promise.reject(new Error(`${personOf(peer)} is offline.`));
-		const entry = { channel };
+		const relay = this.options.relay && RELAYED.has(op) ? this.options.relay : undefined;
+		const channel = relay ? undefined : this.link(peer);
+		if (!relay && !channel) return Promise.reject(new Error(`${personOf(peer)} is offline.`));
+		const entry = { send: (frame: Frame): void => (relay ? void relay.send(peer, frame).catch(() => {}) : (channel as SecureChannel).send(frame)) };
 		const id = ++this.requestId;
 		return new Promise<T>((resolvePromise, reject) => {
 			const timer = setTimeout(() => {
@@ -699,19 +751,35 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			}, this.options.requestTimeoutMs ?? 60_000);
 			timer.unref();
 			this.waiting.set(id, { resolve: resolvePromise as (value: unknown) => void, reject, timer, peer });
-			entry.channel.send({ t: "req", id, op, p: params } satisfies Frame);
+			entry.send({ t: "req", id, op, p: params } satisfies Frame);
 		});
 	}
 
+	/** A frame handed over by the relay. Only what is said about handing over goes this way; who it is from is the relay's word. */
+	private onRelayed(from: string, frame: Frame): void {
+		const relay = this.options.relay;
+		if (!relay || this.stopped || typeof from !== "string") return;
+		if (frame?.t === "res") this.answered(from, frame);
+		else if (frame?.t === "req" && RELAYED.has(frame.op)) {
+			this.serve(from, frame.op, frame.p).then(
+				(r) => relay.send(from, { t: "res", id: frame.id, ok: true, r } satisfies Frame),
+				(error: unknown) => relay.send(from, { t: "res", id: frame.id, ok: false, e: error instanceof Error ? error.message : String(error) } satisfies Frame),
+			).catch(() => {});
+		}
+	}
+
+	private answered(peer: string, frame: Extract<Frame, { t: "res" }>): void {
+		const entry = this.waiting.get(frame.id);
+		if (!entry || entry.peer !== peer) return;
+		this.waiting.delete(frame.id);
+		clearTimeout(entry.timer);
+		if (frame.ok) entry.resolve(frame.r);
+		else entry.reject(new Error(frame.e));
+	}
+
 	private onFrame(peer: string, channel: SecureChannel, frame: Frame): void {
-		if (frame?.t === "res") {
-			const entry = this.waiting.get(frame.id);
-			if (!entry || entry.peer !== peer) return;
-			this.waiting.delete(frame.id);
-			clearTimeout(entry.timer);
-			if (frame.ok) entry.resolve(frame.r);
-			else entry.reject(new Error(frame.e));
-		} else if (frame?.t === "note") {
+		if (frame?.t === "res") this.answered(peer, frame);
+		else if (frame?.t === "note") {
 			if (frame.kind === "changed" && this.channels.has(peer)) this.debounce(`fetch:${peer}`, () => this.fetchTree(peer));
 			else if (frame.kind === "directory") this.debounce(`directory:${peer}`, () => this.fetchDirectory(peer));
 			else if (frame.kind === "session") this.heardSession(peer, frame.nodeId, frame.from, frame.messages);
@@ -749,6 +817,13 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 				// Offering was the owner's yes. Once the other person says yes too, the session goes.
 				if (op === "accept") this.debounce("settle", () => this.settle(), 0);
 				return answer;
+			}
+			case "offered": {
+				// The owner's own record of the session, with the offer in it: checked like any other.
+				const parsed = parseRecord(JSON.stringify(p.record));
+				if (parsed && this.fold(parsed).ownership.owner === peer && this.consider(parsed)) this.emit("changed");
+				this.debounce("settle", () => this.settle(), 0);
+				return {};
 			}
 			case "ask":
 				return this.asked(peer, p.nodeId);
@@ -1212,7 +1287,15 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			this.appendOwn(nodeId, this.identity.sign<LeaseEvent>({
 				type: "offer", id: newHandoffId(now), by: this.identity.name, to, expectedVersion: node.version, expiresAt: now + (this.options.offerTtlMs ?? 24 * 3600_000), now,
 			}));
+			this.debounce("settle", () => this.settle(), 0);
 		});
+	}
+
+	/** Hand the recipient's host the record with the offer in it, until it has it. */
+	private async tellOffer(handoff: HandoffView): Promise<void> {
+		if (!this.options.relay || this.offeredTo.has(handoff.handoffId) || !this.there(handoff.to)) return;
+		await this.request(handoff.to, "offered", { record: this.record(handoff.nodeId) });
+		this.offeredTo.add(handoff.handoffId);
 	}
 
 	/** By the recipient: accept. The owner records it, then releases the session. */
@@ -1220,7 +1303,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		return this.exclusive(async () => {
 			const handoff = this.openHandoff(nodeId);
 			if (handoff.role !== "recipient") throw new Error("Only the person it was offered to can accept.");
-			if (!this.channels.has(handoff.from)) throw new Error(`${handoff.from} is offline. A handoff needs both of you online.`);
+			if (!this.there(handoff.from)) throw new Error(`${handoff.from} is offline. A handoff needs both of you online.`);
 			const event = this.identity.sign<LeaseEvent>({ type: "accept", id: handoff.handoffId, by: this.identity.name, now: this.now() });
 			const { record } = await this.request<{ record: NodeRecord }>(handoff.from, "accept", { nodeId, event });
 			this.consider(record);
@@ -1234,10 +1317,12 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			const handoff = this.openHandoff(nodeId);
 			const event = this.identity.sign<LeaseEvent>({ type: "cancel", id: handoff.handoffId, by: this.identity.name, now: this.now() });
 			if (handoff.role === "owner") {
-				this.appendOwn(nodeId, event);
+				const record = this.appendOwn(nodeId, event);
+				// Without a connection the recipient would go on seeing an offer that is no longer open.
+				if (this.options.relay && this.there(handoff.to)) void this.request(handoff.to, "offered", { record }).catch(() => {});
 				return;
 			}
-			if (!this.channels.has(handoff.from)) throw new Error(`${handoff.from} is offline. Try again when they are back.`);
+			if (!this.there(handoff.from)) throw new Error(`${handoff.from} is offline. Try again when they are back.`);
 			const { record } = await this.request<{ record: NodeRecord }>(handoff.from, "cancel", { nodeId, event });
 			this.consider(record);
 			this.emit("changed");
@@ -1285,7 +1370,8 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		try {
 			for (const handoff of this.handoffs()) {
 				try {
-					if (handoff.role === "recipient" && handoff.state === "offered" && this.channels.has(handoff.from) && this.readAsk("asked", handoff.nodeId)) {
+					if (handoff.role === "owner" && handoff.state === "offered") await this.tellOffer(handoff);
+					else if (handoff.role === "recipient" && handoff.state === "offered" && this.there(handoff.from) && this.readAsk("asked", handoff.nodeId)) {
 						await this.accept(handoff.nodeId);
 					} else if (handoff.role === "owner" && handoff.state === "accepted" && this.channels.has(handoff.to) && !this.host.inUse?.(handoff.nodeId)) {
 						await this.confirm(handoff.nodeId);
@@ -1351,7 +1437,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		const node = this.host.node(nodeId);
 		if (!node) throw new Error(`No node ${nodeId} in this tree.`);
 		if (node.owner === this.identity.name) throw new Error(`"${node.name}" is already yours.`);
-		if (!this.channels.has(node.owner)) throw new Error(`${node.owner} is offline. Ask when they are back.`);
+		if (!this.there(node.owner)) throw new Error(`${node.owner} is offline. Ask when they are back.`);
 		// Recorded first: their approval may come back before the request returns.
 		writeFileSync(this.askPath("asked", nodeId), JSON.stringify({ nodeId, who: node.owner, at: this.now() } satisfies Ask));
 		try {
@@ -1369,7 +1455,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		const ask = this.readAsk("asked", nodeId);
 		this.forget("asked", nodeId);
 		this.emit("changed");
-		if (ask && this.channels.has(ask.who)) await this.request(ask.who, "unask", { nodeId }).catch(() => {});
+		if (ask && this.there(ask.who)) await this.request(ask.who, "unask", { nodeId }).catch(() => {});
 	}
 
 	/** By the owner: say yes to someone who asked. The session is theirs as soon as their host hears. */
@@ -1382,7 +1468,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	async decline(nodeId: string, from: string): Promise<void> {
 		this.forget("requests", nodeId, from);
 		this.emit("changed");
-		if (this.channels.has(from)) await this.request(from, "declined", { nodeId }).catch(() => {});
+		if (this.there(from)) await this.request(from, "declined", { nodeId }).catch(() => {});
 	}
 
 	/** A teammate asks for a session owned here. */

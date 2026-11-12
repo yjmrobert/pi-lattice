@@ -11,6 +11,7 @@ What it provides:
 - **Finding each other.** A port every member's host for one repository shares, beacons on the local network, and an exchange of who knows whom on every connection.
 - **A secure channel** between two hosts, over any byte stream. TCP is the shipped transport.
 - **Signed ownership logs** with one writer each, replayed through the lease state machine from `@pi-lattice/protocol`.
+- **A relay**, optional: something both hosts can reach, such as their team's server, that carries offers, requests and their answers in place of the connection. With `learn` and `heardAt`, a host on a server needs no join code and no beacons.
 - **`CollabSession`**: fetches a teammate's nodes while they are online, reads a teammate's conversation on demand, carries mail between owners, and moves a session: `offer` and `accept`, or `ask` and `approve`.
 - **What everyone has running.** Hosts for different repositories connect as guests, which may only look. `elsewhere()` lists teammates' trees in other repositories, and `follow(nodeId)` keeps a teammate's conversation up to date for as long as it is called.
 

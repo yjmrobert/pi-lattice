@@ -1,6 +1,6 @@
 # One server, and the work on it
 
-A plan to replace peer-to-peer sharing with one hosted service, and to track work on it as issues. Status: phases 1 to 6 are built ([0026](../decisions/0026-a-server-for-the-work.md)), and so is what reading Kanzo changed ([0027](../decisions/0027-what-kanzo-changed.md)): a board on a person's own machine, sessions taking the next ready issue, and review before done. Phases 7 and 8 are not: reading a teammate's conversation, mail between owners and handing a session over still go peer to peer. Of phase 6, moving an issue under another parent, changing its type, labels and fields are commands or agent tools, not keys in the canopy.
+A plan to replace peer-to-peer sharing with one hosted service, and to track work on it as issues. Status: phases 1 to 6 are built ([0026](../decisions/0026-a-server-for-the-work.md)), and so is what reading Kanzo changed ([0027](../decisions/0027-what-kanzo-changed.md)): a board on a person's own machine, sessions taking the next ready issue, and review before done. Phase 7 is built as it was redecided ([0028](../decisions/0028-the-server-introduces-the-machines-carry.md)): the server says who is where and carries offers and requests, and sessions still go straight between the two machines, which must both be on. Phase 8, removing the networks joined by a code, is not. Of phase 6, moving an issue under another parent, changing its type, labels and fields are commands or agent tools, not keys in the canopy.
 
 ## Why
 
@@ -72,7 +72,9 @@ The API, all JSON over HTTP, with a personal token:
 - `POST /issues`, `PATCH /issues/<number>`, `POST /issues/<number>/comments`, `GET /issues/<number>` (with comments and history).
 - `POST /next`: take the next ready issue, narrowed by repository, an issue it must be under, a type or a label.
 - `PUT /scheme`.
-- `PUT /sessions`: the sessions one host is running, which expire if the host stops saying so.
+- `PUT /sessions`: the sessions one host is running, which expire if the host stops saying so. A host that can be connected to adds its addresses, what it is working on, and its person's public key.
+- `GET /team`: the secret with which members' hosts prove to each other that they are members.
+- `POST /signals`, `GET /signals`: hand something to a teammate's host, and take what was handed to this one. Kept in memory for a minute, and gone once taken.
 
 Every write is checked and applied by the server in order. A write may name the revision it was based on; if the issue has changed since, it is refused and the client looks again. There is nothing to merge.
 
@@ -96,10 +98,10 @@ Every write is checked and applied by the server in order. A write may name the 
 5. **The canopy draws issues.** Levels from the scheme, sessions on their issues, teammates' sessions from the server, misplaced issues marked.
 6. **Working on issues from the canopy.** Add, edit, move, assign, comment, change state in place; edit the scheme.
 6a. **After Kanzo.** A board on one's own machine and sharing it; `work_next`, waiting, issues for people, review, a state to take from, a repository on an issue.
-7. **Sessions through the server.** Reading a teammate's conversation, mail between owners, and handing a session over, with the server holding what is in flight so both people need not be online.
-8. **Retire peer to peer.** Remove `collab`, networks and join codes once phase 7 covers what they do. Until then both exist, and a team can use either.
+7. **Sessions by way of the server.** As first planned, the server would have held a session in flight, so that the two people need not be online together; that meant conversations, with the files and command output in them, stored on the server. Decided otherwise: the transfer stays between the two machines and needs both on. The server does what a join code, the local-network beacons and the shared ports did: it is the membership, it tells each host where the others are and which key each person signs with, and it carries offers, requests and their answers. Reading a teammate's conversation and mail between owners stay on the direct connection.
+8. **Retire networks.** Remove networks joined by a code, the beacons, the lobby port and the exchange of who knows whom, once teams have moved to a server. The connection, the signed ownership logs and the transfer stay. Until then both exist: a host on a server uses the server, any other uses its network.
 
-Phases 7 and 8 are the pivot proper and the largest part. They are last because they replace something that works, and nothing before them depends on them.
+Phase 8 is last because it removes something that works, and nothing before it depends on it.
 
 ## Open
 

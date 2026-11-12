@@ -5,7 +5,15 @@
  */
 import type { Issue, IssueChange, IssueComment, IssueEvent, NextFilter, Scheme, WorkSession, WorkState } from "@pi-lattice/protocol";
 import { DEFAULT_SCHEME } from "@pi-lattice/protocol";
-import type { Changes } from "./http.ts";
+import type { Changes, Signal } from "./http.ts";
+
+/** What a host that can be connected to says of itself, along with what it runs. */
+export interface Peering {
+	scope: string;
+	addresses: string[];
+	/** The public key its person signs with. */
+	key: string;
+}
 
 /** Where a server is and who this person is on it. */
 export interface ServerAccount {
@@ -72,6 +80,7 @@ export class WorkClient {
 	private scheme: Scheme = DEFAULT_SCHEME;
 	private people: WorkState["people"] = [];
 	private sessions: WorkSession[] = [];
+	private hosts: WorkState["hosts"] = [];
 	private rev = 0;
 	private beat = 0;
 	private connected = false;
@@ -92,7 +101,7 @@ export class WorkClient {
 	state(): WorkState {
 		return {
 			url: this.account.url, me: this.account.name, connected: this.connected, ...(this.problem ? { problem: this.problem } : {}),
-			scheme: this.scheme, issues: [...this.issues.values()].sort((a, b) => a.number - b.number), people: this.people, sessions: this.sessions,
+			scheme: this.scheme, issues: [...this.issues.values()].sort((a, b) => a.number - b.number), people: this.people, sessions: this.sessions, hosts: this.hosts,
 		};
 	}
 
@@ -105,16 +114,17 @@ export class WorkClient {
 	}
 
 	private take(changes: Changes): void {
-		const before = JSON.stringify([this.rev, this.beat, this.connected, this.people, this.sessions]);
+		const before = JSON.stringify([this.rev, this.beat, this.connected, this.people, this.sessions, this.hosts]);
 		for (const issue of changes.issues) this.issues.set(issue.number, issue);
 		if (changes.scheme) this.scheme = changes.scheme;
 		this.people = changes.people;
 		this.sessions = changes.sessions;
+		this.hosts = changes.hosts ?? [];
 		this.rev = changes.rev;
 		this.beat = changes.beat;
 		this.connected = true;
 		this.problem = undefined;
-		if (changes.issues.length > 0 || changes.scheme || JSON.stringify([this.rev, this.beat, this.connected, this.people, this.sessions]) !== before) this.emit();
+		if (changes.issues.length > 0 || changes.scheme || JSON.stringify([this.rev, this.beat, this.connected, this.people, this.sessions, this.hosts]) !== before) this.emit();
 	}
 
 	private emit(): void {
@@ -210,7 +220,40 @@ export class WorkClient {
 	}
 
 	/** Say what this host runs. Repeated while it runs, because the server forgets a host that goes quiet. */
-	async publish(host: string, repo: string, sessions: Array<Omit<WorkSession, "host" | "owner" | "repo">>): Promise<void> {
-		await this.request("PUT", "/sessions", { host, repo, sessions });
+	async publish(host: string, repo: string, sessions: Array<Omit<WorkSession, "host" | "owner" | "repo">>, peering?: Peering): Promise<void> {
+		await this.request("PUT", "/sessions", { host, repo, sessions, ...peering });
+	}
+
+	/** What lets this team's hosts connect to each other directly. */
+	team(): Promise<{ name: string; secret: string }> {
+		return this.request("GET", "/team");
+	}
+
+	/** Hand the server something for a teammate's host that works on `scope`. It is kept a minute: they must be there. */
+	async signal(to: string, scope: string, body: unknown): Promise<void> {
+		await this.request("POST", "/signals", { to, scope, body });
+	}
+
+	/** Take what teammates hand over for this host, until `stop`. */
+	listen(scope: string, handler: (from: string, body: unknown) => void): void {
+		const stopping = this.stopping?.signal;
+		if (!stopping) throw new Error("Start the client first.");
+		void (async () => {
+			while (!stopping.aborted) {
+				try {
+					const { signals } = await this.request<{ signals: Signal[] }>("GET", `/signals?scope=${encodeURIComponent(scope)}&wait=${this.options.waitSeconds ?? 25}`, undefined, stopping);
+					for (const signal of signals) handler(signal.from, signal.body);
+				} catch {
+					if (stopping.aborted) return;
+					await new Promise<void>((resolve) => {
+						const timer = setTimeout(resolve, this.options.retryMs ?? 5000);
+						stopping.addEventListener("abort", () => {
+							clearTimeout(timer);
+							resolve();
+						});
+					});
+				}
+			}
+		})();
 	}
 }

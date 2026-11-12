@@ -28,6 +28,7 @@ const team = (scheme: Scheme = DEFAULT_SCHEME): WorkState => {
 		url: "https://lattice.example.com", me: "yan", connected: true, scheme, issues,
 		people: [{ name: "yan", online: true }, { name: "sam", online: true }, { name: "teo", online: false }],
 		sessions: [session("sam", "sam-form", 4, "working", { activity: "editing form.tsx" }), session("sam", "sam-review", 4, "idle", { role: "review" }), session("sam", "sam-story", 3, "asking"), session("teo", "teo-scratch", undefined, "idle")],
+		hosts: [],
 	};
 };
 /** yan's own sessions, as their host has them: one on the bug, one on no issue. */

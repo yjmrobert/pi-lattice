@@ -34,7 +34,8 @@ Then open `pi` in a project as you always do. A pane on the left lists the proje
 - `,` in the pane, or `/lattice config`, opens the settings: models, roles, limits and the pane itself, for this repository or for all of yours. `/lattice doctor` checks the setup.
 - Sessions are told how to talk to each other, and you can read and change all of it: `/lattice prompt` shows what a session has been told and the file each part comes from.
 - Work in several repositories shows in one pane. Opening a session from another repository moves this terminal there; `-` goes back.
-- `/lattice create` puts you and your teammates in one network, once: it gives you a line to send, each teammate pastes it into their Pi (`/lattice join <code>`), and from then on everyone's sessions show in everyone's pane, in every repository you share. The pane's first line says who is around. What teammates are running in repositories you do not have is listed too; a session under the cursor is kept up to date as it goes. `o` offers one of yours to a teammate; `t` asks for one of theirs, cloning the repository first if you do not have it. It is peer to peer, with no server.
+- On a server, teammates' sessions show in your pane with nothing more to set up: `o` offers one of yours to a teammate and `t` asks for one of theirs. The offer and the request go through the server; the session itself goes straight from one machine to the other, so both of you must be online and your machines must be able to reach each other. The server never sees a conversation.
+- Without a server, `/lattice create` puts you and your teammates in one network, once: it gives you a line to send, each teammate pastes it into their Pi (`/lattice join <code>`), and from then on everyone's sessions show in everyone's pane, in every repository you share. The pane's first line says who is around. What teammates are running in repositories you do not have is listed too; a session under the cursor is kept up to date as it goes. `o` offers one of yours to a teammate; `t` asks for one of theirs, cloning the repository first if you do not have it. It is peer to peer, with no server.
 
 See the [pane readme](packages/pane/README.md) for keys, and [a feature through the full lifecycle](examples/feature-lifecycle/README.md) for a walkthrough.
 
@@ -91,7 +92,7 @@ The workflow runs the whole suite on the tagged commit, builds the package and p
 
 ## Not done yet
 
-- **The move to a server is half done.** A team's work lives on its server ([ADR 0026](docs/decisions/0026-a-server-for-the-work.md)), but reading a teammate's conversation, mail between owners and handing a session over still go peer to peer. [The plan](docs/design/server-plan.md) has the rest.
+- **Two ways to find teammates.** On a server, the server says who is where ([ADR 0028](docs/decisions/0028-the-server-introduces-the-machines-carry.md)); without one, a network joined by a code does. The second is to be removed once nobody needs it. [The plan](docs/design/server-plan.md) has the rest.
 
 - **Publishing.** The package builds, and installs and runs from a tarball ([ADR 0025](docs/decisions/0025-one-published-package.md)), but it is not on npm yet. Until it is, install from a checkout.
 - **A run with a real model.** Every flow is tested against a scripted model, which checks the mechanics, not how well a model follows the role fragments. `npm run eval` is written for that and has not been run yet.

@@ -43,6 +43,7 @@ const MIGRATIONS: string[] = [
 	`ALTER TABLE issues ADD COLUMN human INTEGER NOT NULL DEFAULT 0;
 	ALTER TABLE issues ADD COLUMN waits TEXT NOT NULL DEFAULT '[]';
 	ALTER TABLE issues ADD COLUMN repo TEXT;`,
+	`ALTER TABLE members ADD COLUMN key TEXT;`,
 ];
 
 const TITLE_MAX = 200;
@@ -149,6 +150,32 @@ export class Tracker {
 	who(token: string | undefined): string | undefined {
 		if (!token) return undefined;
 		return (this.db.prepare("SELECT name FROM members WHERE token_hash = ?").get(hash(token)) as { name: string } | undefined)?.name;
+	}
+
+	/** The people, each with the public key they first gave. */
+	people(): Array<{ name: string; key?: string }> {
+		return (this.db.prepare("SELECT name, key FROM members ORDER BY joined_at, name").all() as Array<{ name: string; key: string | null }>).map((row) => ({ name: row.name, ...(row.key !== null ? { key: row.key } : {}) }));
+	}
+
+	/**
+	 * Record the key a person signs with. The first one given stays: a second, different one is
+	 * refused, so nobody who gets hold of a token can sign as its owner. True when it was news.
+	 */
+	setKey(who: string, key: string): boolean {
+		const held = (this.db.prepare("SELECT key FROM members WHERE name = ?").get(who) as { key: string | null } | undefined)?.key;
+		if (held === key) return false;
+		if (held) throw new WorkError(409, `The server knows ${who} by another key. If this is your second machine, copy the "identity" folder of your lattice home from the first, next to server.json.`);
+		this.db.prepare("UPDATE members SET key = ? WHERE name = ?").run(key, who);
+		return true;
+	}
+
+	/**
+	 * What lets two members' hosts open a connection to each other: a name and a secret only
+	 * members are given. The server never sees what goes over such a connection.
+	 */
+	team(): { name: string; secret: string } {
+		if (this.meta("team_secret") === undefined) this.setMeta("team_secret", randomBytes(32).toString("base64url"));
+		return { name: "team", secret: this.meta("team_secret") as string };
 	}
 
 	members(): string[] {

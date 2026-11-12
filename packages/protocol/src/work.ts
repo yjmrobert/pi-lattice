@@ -131,6 +131,17 @@ export interface WorkSession {
 	asks: number;
 }
 
+/** A host someone has running, and where another host may connect to it directly. */
+export interface WorkHost {
+	owner: string;
+	host: string;
+	repo: string;
+	/** What it is working on: hosts hand sessions over only when this is the same. */
+	scope: string;
+	/** `host:port`, one for each network it is on. */
+	addresses: string[];
+}
+
 /** A team's work as one host holds it: a copy of what the server has. */
 export interface WorkState {
 	url: string;
@@ -141,8 +152,11 @@ export interface WorkState {
 	problem?: string;
 	scheme: Scheme;
 	issues: Issue[];
-	people: Array<{ name: string; online: boolean }>;
+	/** `key`: the public key they sign with, as first told to the server. */
+	people: Array<{ name: string; online: boolean; key?: string }>;
 	sessions: WorkSession[];
+	/** The hosts that say they can be connected to. */
+	hosts: WorkHost[];
 }
 
 /** What a session, the pane or the canopy asks of the team's work. */

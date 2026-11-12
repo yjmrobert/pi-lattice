@@ -32,3 +32,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0025 | One published package, built | built; the publish itself not yet done |
 | 0026 | A server for the team's work | built: issues, the scheme, sessions on issues, the canopy, working on issues from it; sharing sessions is still peer to peer |
 | 0027 | What Kanzo changed | built: a board on your own machine and sharing it, `work_next`, waiting, issues for people, review before done |
+| 0028 | The server introduces; the machines carry | built: on a server, hosts find each other and pass offers and requests through it; sessions go directly between the two machines, both online |

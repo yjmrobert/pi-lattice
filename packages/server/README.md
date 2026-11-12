@@ -10,6 +10,7 @@ What it holds:
 - **The scheme.** Which types there are and which may sit under which, what the states are and what each means, what fields there are, and what a session does to the issue it is on. By default: epics, features, stories and tasks, with bugs anywhere. It is replaced whole; what exists is never rewritten to fit.
 - **Who is in the team**, by a name and a personal token, joined with the team's code.
 - **What everyone has running**, as each host says it; a host that goes quiet is forgotten.
+- **Where each host is, and each person's public key**, so hosts can connect to each other directly and hand sessions over. Offers and requests are passed through the server; it keeps them a minute, in memory. A session never passes through it.
 
 ```ts
 import { joinServer, WorkClient, WorkServer } from "@pi-lattice/server";

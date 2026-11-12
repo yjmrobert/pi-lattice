@@ -8,7 +8,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { Issue, IssueChange, Scheme, WorkSession } from "@pi-lattice/protocol";
+import type { Issue, IssueChange, Scheme, WorkHost, WorkSession, WorkState } from "@pi-lattice/protocol";
 import { Tracker, WorkError } from "./tracker.ts";
 
 export interface ServerOptions {
@@ -35,12 +35,21 @@ export interface Changes {
 	issues: Issue[];
 	/** Present when it changed, or when the client has nothing. */
 	scheme?: Scheme;
-	people: Array<{ name: string; online: boolean }>;
+	people: WorkState["people"];
 	sessions: WorkSession[];
+	hosts: WorkHost[];
+}
+
+/** Something one host hands the server for another: an offer, a request, an answer. Kept until asked for, and not for long. */
+export interface Signal {
+	from: string;
+	body: unknown;
 }
 
 const BODY_MAX = 1024 * 1024;
 const SESSIONS_MAX = 500;
+const SIGNALS_MAX = 200;
+const SIGNAL_TTL_MS = 60_000;
 
 interface Waiter {
 	done: () => void;
@@ -53,13 +62,18 @@ export class WorkServer {
 	private readonly ttl: number;
 	private server: Server | undefined;
 	/** What each host last said it runs, by owner and host id. */
-	private readonly hosts = new Map<string, { owner: string; at: number; sessions: WorkSession[] }>();
+	private readonly hosts = new Map<string, { owner: string; at: number; sessions: WorkSession[]; peer?: WorkHost }>();
+	/** What is waiting to be handed over, by recipient and scope, and who is waiting for it. */
+	private readonly signals = new Map<string, Array<Signal & { at: number }>>();
+	private readonly listening = new Map<string, Set<Waiter>>();
 	private readonly seen = new Map<string, number>();
 	private online = new Set<string>();
 	private beat = 1;
 	private readonly waiters = new Set<Waiter>();
 	private sweep: NodeJS.Timeout | undefined;
 	private heard: number;
+	/** How many things hosts have handed over for each other since this started. */
+	relayed = 0;
 
 	constructor(options: ServerOptions) {
 		this.options = options;
@@ -86,12 +100,12 @@ export class WorkServer {
 	/** How long it has been since anyone who has joined asked anything. */
 	get quietMs(): number {
 		// Someone waiting for news is here, however long ago they asked.
-		return this.waiters.size > 0 ? 0 : this.now() - this.heard;
+		return this.waiters.size + this.listening.size > 0 ? 0 : this.now() - this.heard;
 	}
 
 	async stop(): Promise<void> {
 		if (this.sweep) clearInterval(this.sweep);
-		for (const waiter of [...this.waiters]) waiter.done();
+		for (const waiter of [...this.waiters, ...[...this.listening.values()].flatMap((set) => [...set])]) waiter.done();
 		const server = this.server;
 		this.server = undefined;
 		if (server) {
@@ -140,8 +154,9 @@ export class WorkServer {
 			beat: this.beat,
 			issues: tracker.issuesAfter(after),
 			...(after === 0 || tracker.schemeRev > after ? { scheme: tracker.scheme } : {}),
-			people: tracker.members().map((name) => ({ name, online: this.online.has(name) })),
+			people: tracker.people().map((person) => ({ ...person, online: this.online.has(person.name) })),
 			sessions: [...this.hosts.values()].flatMap((host) => host.sessions),
+			hosts: [...this.hosts.values()].flatMap((host) => (host.peer ? [host.peer] : [])),
 		};
 	}
 
@@ -158,10 +173,15 @@ export class WorkServer {
 			...(typeof entry.activity === "string" && entry.activity ? { activity: entry.activity.slice(0, 300) } : {}),
 			asks: Number.isInteger(entry.asks) ? (entry.asks as number) : 0,
 		}));
+		// A host that can be connected to says where, what it is working on, and the key its person signs with.
+		const addresses = Array.isArray(body.addresses) ? (body.addresses as unknown[]).filter((entry): entry is string => typeof entry === "string" && entry.length <= 100).slice(0, 8) : [];
+		const peer: WorkHost | undefined = addresses.length > 0 ? { owner: who, host, repo, scope: text(body.scope, 200), addresses } : undefined;
+		const keyed = typeof body.key === "string" && body.key.length <= 500 ? this.tracker.setKey(who, body.key) : false;
 		const key = `${who}\n${host}`;
-		const before = JSON.stringify(this.hosts.get(key)?.sessions ?? []);
-		this.hosts.set(key, { owner: who, at: this.now(), sessions });
-		if (JSON.stringify(sessions) !== before) {
+		const held = this.hosts.get(key);
+		const before = JSON.stringify([held?.sessions ?? [], held?.peer]);
+		this.hosts.set(key, { owner: who, at: this.now(), sessions, ...(peer ? { peer } : {}) });
+		if (keyed || JSON.stringify([sessions, peer]) !== before) {
 			this.beat++;
 			this.wake();
 		}
@@ -218,6 +238,27 @@ export class WorkServer {
 				}
 				case "PUT /scheme":
 					return send(200, { scheme: this.tracker.setScheme(who, body) });
+				case "GET /team":
+					return send(200, this.tracker.team());
+				case "POST /signals": {
+					const to = typeof body.to === "string" ? this.tracker.members().find((name) => name === body.to) : undefined;
+					if (!to || typeof body.scope !== "string") throw new WorkError(400, "Say who it is for, and what they are working on.");
+					const slot = `${to}\n${body.scope}`;
+					const queue = (this.signals.get(slot) ?? []).filter((signal) => signal.at >= this.now() - SIGNAL_TTL_MS).slice(-SIGNALS_MAX + 1);
+					queue.push({ from: who, body: body.body, at: this.now() });
+					this.relayed++;
+					this.signals.set(slot, queue);
+					for (const waiter of [...(this.listening.get(slot) ?? [])]) waiter.done();
+					return send(200, {});
+				}
+				case "GET /signals": {
+					const slot = `${who}\n${url.searchParams.get("scope") ?? ""}`;
+					const wait = Math.min(Number(url.searchParams.get("wait") ?? 0) * 1000 || 0, this.options.maxWaitMs ?? 30_000);
+					if (wait > 0 && !this.signals.has(slot)) await this.waitFor(wait, request, slot);
+					const queue = (this.signals.get(slot) ?? []).filter((signal) => signal.at >= this.now() - SIGNAL_TTL_MS);
+					this.signals.delete(slot);
+					return send(200, { signals: queue.map(({ from, body: sent }) => ({ from, body: sent })) });
+				}
 				case "PUT /sessions":
 					this.putSessions(who, body);
 					return send(200, {});
@@ -237,17 +278,21 @@ export class WorkServer {
 		return issue;
 	}
 
-	private waitFor(ms: number, request: IncomingMessage): Promise<void> {
+	/** Wait for news: of the work, or, given a slot, of something handed over for it. */
+	private waitFor(ms: number, request: IncomingMessage, slot?: string): Promise<void> {
 		return new Promise((resolve) => {
+			const set = slot === undefined ? this.waiters : (this.listening.get(slot) ?? new Set<Waiter>());
+			if (slot !== undefined) this.listening.set(slot, set);
 			const waiter: Waiter = {
 				done: () => {
 					clearTimeout(timer);
-					this.waiters.delete(waiter);
+					set.delete(waiter);
+					if (slot !== undefined && set.size === 0) this.listening.delete(slot);
 					resolve();
 				},
 			};
 			const timer = setTimeout(waiter.done, ms);
-			this.waiters.add(waiter);
+			set.add(waiter);
 			request.once("close", waiter.done);
 		});
 	}
