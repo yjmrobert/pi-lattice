@@ -5,7 +5,7 @@
  */
 import { connect, type Socket } from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { assignmentFromEnv, childrenOf, emitEvent, formatTree, type HostAssignment, HostClient, onEvent, PROTOCOL_VERSION, sameAssignment, WORKSPACE_MODES, type WorkspaceMode } from "@pi-lattice/protocol";
+import { assignmentFromEnv, childrenOf, emitEvent, formatTree, type HostAssignment, HostClient, isHeld, onEvent, PROTOCOL_VERSION, sameAssignment, WORKSPACE_MODES, type WorkspaceMode, waitingFor } from "@pi-lattice/protocol";
 import { Type } from "typebox";
 
 const GRAPH_ENTRY = "lattice:graph";
@@ -101,6 +101,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		promptGuidelines: [
 			"Use spawn_session to delegate a piece of work that can be done and checked independently; write a brief that stands on its own, because the child sees none of this conversation.",
 			'When calling spawn_session for a child that will edit code while other sessions are also editing, set workspace to "worktree" so it gets its own git worktree and branch.',
+			"When a child needs the finished work of other children, spawn it now with waits_on naming them instead of waiting to spawn it: it starts by itself once each of them has sent its result.",
 		],
 		parameters: Type.Object({
 			name: Type.String({ description: "Short name for the child, shown in the tree" }),
@@ -109,6 +110,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 			fragments: Type.Optional(Type.Array(Type.String(), { description: "Role fragments to apply to the child, in order" })),
 			workspace: Type.Optional(Type.String({ description: 'Where the child works: "shared" (this directory, the default) or "worktree" (its own git worktree and branch)' })),
 			model: Type.Optional(Type.String({ description: "Model for the child, for example a cheaper one for routine work. Leave out to use the default" })),
+			waits_on: Type.Optional(Type.Array(Type.String(), { description: "Sessions in this tree, by id or name, whose result the child needs first. It starts when each has sent its result" })),
 		}),
 		async execute(_toolCallId, params) {
 			const workspace = params.workspace ?? "shared";
@@ -121,11 +123,23 @@ export default function graphExtension(pi: ExtensionAPI): void {
 					...(params.kind !== undefined ? { kind: params.kind } : {}),
 					...(params.fragments !== undefined ? { fragments: params.fragments } : {}),
 					...(params.model !== undefined ? { model: params.model } : {}),
+					...(params.waits_on !== undefined ? { waitsOn: params.waits_on } : {}),
 				},
 			});
+			const made = `Spawned "${node.name}" as ${node.id} (kind ${node.kind}${node.fragments.length > 0 ? `, roles ${node.fragments.join(" + ")}` : ""}).`;
+			if (isHeld(node)) {
+				// Not started yet: say what it waits on, and that nothing more is needed for it to start.
+				const { nodes } = await host().request("list", {});
+				const names = waitingFor(nodes, node).map((other) => `"${other.name}" (${other.id})`).join(", ");
+				const text = [
+					`${made} It has not started: it waits on ${names}.`,
+					`It is given its brief and starts by itself when ${waitingFor(nodes, node).length === 1 ? "that session has" : "each of those has"} sent its result${node.workspace === "worktree" ? ", in its own worktree made then" : ""}. Do not start it yourself; its report will arrive as a message. A message sent to ${node.id} starts it at once, without waiting.`,
+				].join("\n");
+				return { content: [{ type: "text", text }], details: { node } };
+			}
 			const where = node.branch ? `its own worktree on branch ${node.branch} (${node.cwd})` : "this working directory";
 			const text = [
-				`Spawned "${node.name}" as ${node.id} (kind ${node.kind}${node.fragments.length > 0 ? `, roles ${node.fragments.join(" + ")}` : ""}). It works in ${where}.`,
+				`${made} It works in ${where}.`,
 				`It has its brief and has started. Its report will arrive as a message; do not poll. To reach it, send_message to ${node.id}.`,
 			].join("\n");
 			return { content: [{ type: "text", text }], details: { node } };
