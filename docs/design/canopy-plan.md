@@ -19,13 +19,25 @@ A work item is a node. A session is whoever sits on it. The tree already separat
 
 - **Levels are a setting, not an enum.** `canopy.levels`, default `epic feature story task`. A node's level is where its `kind` falls in the list. Kinds stay free-form strings.
 - **An item can be planned.** A node created with no session and no brief delivered. Today the only node like this is one that waits on others ([0021](../decisions/0021-waiting-on-other-sessions.md)); planning generalises it. `s` seats a session on it, through the form the pane already has.
-- **One seat per item.** At most one session sits on a node, as today. A coordinator sits on an epic, a planner on a feature, a worker on a task. A session does not move between items: to put an agent on another item, seat one there.
+- **One seat per item.** At most one session sits on a node, as today. A coordinator sits on an epic, a planner on a feature, a worker on a task. The seat is where an agent belongs and what it answers for; it does not change.
+- **An agent also has a focus: the item it is attending to now.** A coordinator seated on an epic spends a while on one story, then another. The host learns this the way it learns status and activity today: it is not reported by the agent, it is read from what the agent does. The host already sees each tool call a background session starts. When that call is a lattice one (`spawn_session`, `plan_item`, `send_message`) its target is the focus; a message arriving from below sets it too. A session open in a terminal reports it from that terminal, as it reports usage. A focus carries its time and fades: after a few minutes without a touch the agent is simply at its seat. A worker's focus is its own task.
 - **Helpers are buds.** A child whose kind is not in the ladder (`verify`, `review`, `grilling`) is not a level. It is drawn as a bud on the item it serves, with its own agent.
 - **Done is recorded, progress is derived.** `done` on a node already means it reported its result. An item's progress is the share of its leaves that are done. Where the two disagree (an epic reported done with tasks still open) the canopy shows the mismatch; it does not hide either.
 - **Owner is per node**, as now. The owner's host runs the node's session ([leases](../leases.md)). So an agent's owner is the owner of the item it sits on: one fact, shown once.
 - **Items come from agents first.** `graph` gains `plan_item` beside `spawn_session`; the coordinator role is told to lay out the work before starting it. People add items with `n`. Importing from a tracker is left out; it would sit behind an interface the canopy defines.
 
 What a tree from before this looks like: a root session of kind `feature` with `task` children maps onto the ladder as it is. A root whose kind is not in the ladder is treated as the top level.
+
+## The shape: grown, not ruled
+
+Height still means level: an epic is below its features, a feature below its stories, tasks are at the tips. But the levels are bands, not lines, and the tree is allowed to look like one.
+
+- **A band, not a row.** An item sits somewhere within its level's band. A subtree with more under it reaches higher and spreads wider; a planned story with two tasks stays low and small. A child is always above its parent.
+- **Branches lean and sway.** A branch leaves its parent at an angle that depends on how many siblings it has, and bends on the way. Thickness follows how much work is above it: an epic's branch is heavier than a story's.
+- **Leaves cluster.** Tasks fan round the end of their story at slightly different heights, not in a line.
+- **It does not shuffle.** Every offset is computed from the item's id, so the same tree draws the same way each time, and adding an item moves its neighbours as little as possible. A tree that rearranged itself on every change could not be learnt.
+- **Text stays level.** Labels are horizontal and in cells whatever the branch does, and never overlap: the layout reserves each label's cells before it bends anything.
+- **`canopy.shape`: `grown`, `ruled`.** `ruled` puts every level on one row, as the mockup does, for those who prefer it.
 
 ## Where it lives
 
@@ -58,6 +70,7 @@ The mockup breaks the first rule: `@sam` is amber and so is "asks". The palette 
 - A branch is drawn in the colour of the owner of the item it leads to. Where ownership changes along a path (a story owned by `@teo` under an epic owned by `@yan`), the colour changes at that node and the label carries the name, so it is never colour alone.
 - An agent is a ring in its owner's colour with a chip under the item: `⠹ planner`. The chip is the session's role, or its name when it has no role. A task leaf with an agent shows its state glyph in the owner's colour.
 - An item with an owner and no agent is a hollow node in the owner's colour: owned, nobody working. This is the state the pane cannot show today.
+- An agent whose focus is not its seat is tied to it: a thin line in its owner's colour from the ring to the item it is attending to, with a small copy of its marker at the far end. The seat says whose agent it is and what it answers for; the tether says where it is working this minute. The tether thins as the focus ages.
 - The node open in your terminal is marked `▸`, as in the pane.
 
 **The people bar** (top line). Each person: colour, name, presence, and three counts: agents working, agents asking, items owned.
@@ -90,7 +103,8 @@ Every animation is the picture of one event. Nothing moves when nothing happened
 | An agent is working | its ring turns | while it works |
 | A message between two sessions | a pulse runs along the branches from sender to receiver, in the sender's owner's colour. A brief goes up, a result comes down | about a second |
 | A task lands | the leaf flashes, then its branch lights from the leaf down to its parent. If that completes the parent, the light carries on down | 600 ms a segment |
-| Something starts needing someone | the node blinks amber, once a second, until answered | until answered |
+| An agent's focus moves | its tether swings from the old item to the new one, and the small marker travels along it | 400 ms |
+| Something starts needing someone | one amber ripple spreads from the node and the person's count in the people bar flashes. Then the node blinks amber, once a second | the ripple once; the blink until answered |
 | An item is planned or spawned | its branch grows from the parent; neighbours slide aside | 400 ms |
 | A waiting session starts | its wait arc drains into it and is gone | 500 ms |
 | A handoff is offered | the branch alternates the two people's colours | until decided |
@@ -98,11 +112,12 @@ Every animation is the picture of one event. Nothing moves when nothing happened
 | A person goes away | their branches fade to half strength | 400 ms |
 | A session fails | nothing moves. The node becomes a red `✗` and stays | — |
 
-- **Where events come from.** The host already says "changed"; the canopy compares the new state with the last and derives landing, planning, starting, handoff and presence from the difference. Messages are the one thing a difference cannot show, so `UiState` gains `traffic`: the envelopes of the last few seconds, as from, to, intent and time. No content.
+- **Where events come from.** The host already says "changed"; the canopy compares the new state with the last and derives landing, planning, starting, handoff, presence and a moved focus from the difference. Messages are the one thing a difference cannot show, so `UiState` gains `traffic`: the envelopes of the last few seconds, as from, to, intent and time. No content.
 - **Opening the canopy plays nothing.** It draws the present. Only what changes while it is open animates, so a first look is not a firework.
 - **Many at once.** Events on the same branch queue; more than a handful of pulses a second on one branch merge into one.
 - **Budget.** Twelve frames a second, and only changed cells are written. With nothing animating the canopy writes nothing.
-- **`canopy.motion`: `full`, `calm`, `off`.** `calm` keeps the rings and the amber blink and makes everything else a single-frame change. `off` is fully static: state is still told by glyph. `NO_COLOR` and a dumb terminal imply `off`.
+- **Attention off screen.** When what needs someone is outside the view, the edge of the screen nearest to it carries an amber arrow with a count, blinking in step. `tab` goes there.
+- **`canopy.motion`: `full`, `calm`, `off`.** `calm` keeps the rings and the amber blink, drops the ripple, and makes everything else a single-frame change. `off` is fully static: state is still told by glyph. `NO_COLOR` and a dumb terminal imply `off`.
 
 ## Interaction
 
@@ -116,6 +131,9 @@ Every animation is the picture of one event. Nothing moves when nothing happened
 | `n` | add an item below |
 | `y` `n` `a` `x` | answer what the selected item asks, in place |
 | `o` `t` | offer it, ask for it |
+| `shift` + arrows | pan the view. `home` centres on the root |
+| `F` | follow: the view stays on the selected agent, and moves with its focus. Any pan stops it |
+| `m` | the map: the whole tree small in a corner, with the view as a frame |
 | `z` | zoom: the selected item becomes the root. `z` again, or `esc`, goes back |
 | `f` | fold or unfold the selected item |
 | `1`–`9`, `0` | spotlight a person, clear |
@@ -129,12 +147,15 @@ The keys the pane already has keep their meaning. `n` is both "no" and "add": as
 
 **Size**
 
-- **The tree is wider than the terminal.** Lanes are given out to leaves first. When they do not fit: task names go (glyphs only), then tasks become counts (`✓12 ⠹2 ○5`), then stories furthest from the selection fold into their feature, then features into their epic. What is folded says how much it holds. The selection and anything needing someone are never folded.
-- **Zoom is the other way out.** `z` on an epic gives it the whole screen.
-- **Taller than the terminal** does not happen with four levels. With more levels in the ladder, the lowest are folded.
-- **Narrower than 100 columns**, or shorter than 30 rows: the canopy does not open; it says how much room it needs and the pane stays. No cramped version.
-- **Names** are cut to their lane with `…`; the inspector has the full name.
-- **Resize** lays out again and draws once, without animation.
+- **The tree is as big as it needs to be; the screen is a window on it.** Every item gets the room its label needs, and the canopy is laid out at that size whatever the terminal. The view pans over it, up and down as well as sideways.
+- **The camera follows the selection.** Moving to an item outside the view glides the view to it (one step in `calm`). It moves only as far as needed to bring the item and its parent in, so small moves do not swing the whole screen. `F` follows an agent instead, including when its focus moves.
+- **Where you are.** A one-line trail at the top names the path from the root to the selection. `m` shows the map. Branches that leave the view end in a mark at the edge saying what is beyond and how much.
+- **Opening** shows the whole tree when it fits. When it does not, it opens on the node open in your terminal with its epic in view.
+- **Folding is a choice, not a rescue.** `f` folds an item to one node with counts. Nothing folds by itself.
+- **Many tasks under one story** (more than fit a fan): counts by state (`✓12 ⠹2 ○5`); selecting the story lists them.
+- **The floor is 60 columns by 20 rows**, below which a label and its branch cannot both be read. There the canopy says so and the pane stays.
+- **Names** longer than 24 characters are cut with `…`; the inspector has the full name.
+- **Resize** keeps the selection in view and draws once, without animation.
 
 **Shape of the tree**
 
@@ -174,23 +195,28 @@ Each phase ends with its tests green, a decision record, and a push.
 
 **0. Find out (spike, `spikes/canopy/`).** To verify, against real Pi: that an extension can take the whole screen and get every key; how often it may redraw; whether an image can be put under text (the pixel renderer depends on it); which glyphs are one column wide in kitty, ghostty, wezterm, iTerm2, the VS Code terminal and tmux. Ends with ADR 0022 stating what is possible.
 
-**1. The model.** `protocol`: `canopy.levels`, a planned node, `traffic` in the state. `host`: create without starting, seat later, record traffic. `graph`: `plan_item`. `roles`: the coordinator lays out the work. `pane`: planned items shown dim, `s` seats. Tested through a host and real Pi processes, as the waiting sessions were.
+**1. The model.** `protocol`: `canopy.levels`, a planned node, `traffic` and each agent's `focus` in the state. `host`: create without starting, seat later, record traffic, read focus from lattice tool calls. `graph`: `plan_item`. `roles`: the coordinator lays out the work. `pane`: planned items shown dim, `s` seats. Tested through a host and real Pi processes, as the waiting sessions were.
 
-**2. A still canopy.** `layout` and `paint` with braille and box branches, the text grid, selection, the inspector, the keys, opening from the pane. Layout is tested as text: a tree in, a grid of characters out, compared with a stored file. The mockup's tree is the first of them.
+**2. A still canopy.** `layout` (grown and ruled) and `paint` with braille and box branches, the camera following the selection, the text grid, selection, the inspector, the keys, opening from the pane. Layout is tested as text: a tree in, a grid of characters out, compared with a stored file. The mockup's tree is the first of them.
 
-**3. People and agents.** The palette, rings and chips, the people bar, spotlight, the roster, the letter for people past eight.
+**3. People and agents.** The palette, rings and chips, tethers to the focus, the people bar, spotlight, the roster, the letter for people past eight.
 
-**4. Motion.** Animations from state differences, traffic pulses, the queue, `canopy.motion`. Tested by feeding two states and reading the frames between.
+**4. Motion.** Animations from state differences, traffic pulses, the ripple and blink, attention at the edges, the queue, `canopy.motion`. Tested by feeding two states and reading the frames between.
 
-**5. Scale.** Folding, counts, zoom, find, the minimum size.
+**5. Scale.** Panning, follow, the map, the trail, folding, counts, zoom, find, the floor.
 
 **6. The network.** Teammates' trees, away and age, offer and ask from the canopy, the handoff animations. Tested with two isolated hosts.
 
 **7. Pixels.** Only if phase 0 says an image can sit under text. Same layout, another painter.
 
-## Decided here, to confirm
+## Decided
 
-- **A session does not move between items.** One seat, fixed. The alternative, an agent that says which item it is on from moment to moment, needs agents to report it and would make "who is on what" a guess.
-- **Height is the level of the work**, not its phase. When something lands is the timeline's question.
-- **Amber is reserved** for "needs someone" and no person gets it.
-- **No canopy below 100 columns.** The pane is the small view.
+- **A seat and a focus.** The seat is fixed and says whose agent it is. The focus is where it is working now, read by the host from what the agent does, never asked of the agent, and it fades when stale.
+- **Height is the level of the work**, as bands. The tree is grown, not ruled, and draws the same way every time.
+- **Amber is reserved** for "needs someone" and no person gets it. It arrives with a ripple, then blinks, and shows at the edge of the screen when out of view.
+- **The canopy is a window on a tree of any size.** It pans both ways and the camera follows the selection, or an agent.
+
+## Open
+
+- **How long a focus lasts** before the agent is drawn back at its seat. Five minutes is a guess; it needs a day of real use.
+- **Whether a focus should be settable by the agent as well**, with a tool, for work the host cannot see a target in (reading, thinking). Left out until the observed one proves too coarse.
