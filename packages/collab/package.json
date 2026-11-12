@@ -1,6 +1,7 @@
 {
   "name": "@pi-lattice/collab",
   "version": "0.1.0",
+  "private": true,
   "description": "Shared session trees for pi-lattice: a network of teammates, peer to peer, with signed ownership handoff, cross-owner mail and session transfer.",
   "type": "module",
   "keywords": [

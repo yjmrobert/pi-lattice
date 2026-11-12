@@ -1,6 +1,7 @@
 {
   "name": "@pi-lattice/graph",
   "version": "0.1.0",
+  "private": true,
   "description": "Session tree for Pi: spawn child sessions through a lattice host and see where a session sits in the tree.",
   "type": "module",
   "keywords": [
@@ -21,9 +22,6 @@
   "dependencies": {
     "@pi-lattice/protocol": "0.1.0"
   },
-  "bundledDependencies": [
-    "@pi-lattice/protocol"
-  ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"

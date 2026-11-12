@@ -13,7 +13,7 @@
 
 A package with a `pi.extensions` manifest loaded with `pi -e <dir>`; its extension imported the workspace-linked `@pi-lattice/protocol` TypeScript source and `typebox`; an event it emitted on `pi.events` was received by a separately loaded extension.
 
-**Not yet verified**
+**Not yet verified** (settled in [0025](0025-one-published-package.md): bundled dependencies do not work from workspaces, and one built package is published instead)
 
 Published tarballs. Pi's docs say other Pi packages used as dependencies must be included in the published tarball, so `protocol` will need `bundledDependencies` in each dependant. Verify with `npm pack` + `pi install` before the first publish.
 

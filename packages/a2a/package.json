@@ -1,6 +1,7 @@
 {
   "name": "@pi-lattice/a2a",
   "version": "0.1.0",
+  "private": true,
   "description": "Agent-to-agent messaging between Pi sessions: send_message tool, inbox with approval, file and host transports.",
   "type": "module",
   "keywords": [
@@ -25,9 +26,6 @@
   "dependencies": {
     "@pi-lattice/protocol": "0.1.0"
   },
-  "bundledDependencies": [
-    "@pi-lattice/protocol"
-  ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",

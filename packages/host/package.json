@@ -1,6 +1,7 @@
 {
   "name": "@pi-lattice/host",
   "version": "0.1.0",
+  "private": true,
   "description": "The pi-lattice host library: owns a session tree, runs sessions headless, brokers their messages, and hands a session to a person's own Pi.",
   "type": "module",
   "keywords": [

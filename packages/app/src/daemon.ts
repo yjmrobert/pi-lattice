@@ -341,17 +341,19 @@ class Sharing implements SharingPort {
 
 /**
  * The extensions every headless session needs to take part in the tree. When this package
- * runs from the repository checkout that Pi has installed, that checkout is passed whole so
- * Pi recognises it as the package it already loaded and does not load it twice.
+ * runs from the repository checkout or the published package that Pi has installed, that is
+ * passed whole so Pi recognises it as the package it already loaded and does not load it twice.
  */
 export function sessionExtensionPaths(): string[] {
 	const here = dirname(fileURLToPath(import.meta.url));
-	const repo = resolve(here, "..", "..", "..");
-	try {
-		const manifest = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { pi?: { extensions?: string[] } };
-		if (manifest.pi?.extensions?.some((entry) => entry.includes("launcher"))) return [repo];
-	} catch {
-		// Not running from a checkout.
+	// The checkout is three directories up from this file; the published package, built, is one up.
+	for (const root of [resolve(here, "..", "..", ".."), resolve(here, "..")]) {
+		try {
+			const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { pi?: { extensions?: string[] } };
+			if (manifest.pi?.extensions?.some((entry) => entry.includes("launcher"))) return [root];
+		} catch {
+			// Not running from there.
+		}
 	}
 	const require = createRequire(import.meta.url);
 	return ["@pi-lattice/a2a", "@pi-lattice/roles", "@pi-lattice/graph"].map((name) => dirname(require.resolve(`${name}/package.json`)));

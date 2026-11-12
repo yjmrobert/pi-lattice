@@ -29,3 +29,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0022 | The canopy: what Pi lets an extension do | found out; 0024 is built on it |
 | 0023 | Planned work, and what a session is working on | accepted |
 | 0024 | The canopy | first part built |
+| 0025 | One published package, built | built; the publish itself not yet done |

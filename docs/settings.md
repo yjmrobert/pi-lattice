@@ -109,6 +109,8 @@ These say where things are kept and how Pi is started. They are not on the setti
 | `LATTICE_NODE_NAME` | The name a session without a host announces itself by. |
 | `LATTICE_FRAGMENTS` | Roles for a plain session, separated by commas, when no host gives it any. |
 | `LATTICE_PI_BIN` | The `pi` command the host starts background sessions with. Default: `pi` on your PATH. |
+| `LATTICE_PI_PACKAGE` | The directory of Pi's own package (`@earendil-works/pi-coding-agent`), which the host loads to read a session that is not running. Default: the Pi whose pane started the host, else the one `pi` on your PATH belongs to. |
+| `LATTICE_PI_STARTED` | Set by the pane's launcher for the host it starts: the file its Pi ran from, so the host can find that Pi's package. Not something to set yourself. |
 | `LATTICE_PI_COMMAND` | The same as a JSON array, when the command needs arguments of its own, for example `["node", "/path/to/cli.js"]`. |
 | `LATTICE_PI_ARGS` | Extra arguments for every background session, as a JSON array. |
 | `LATTICE_EXTENSION_PATHS` | The extensions background sessions load, as a JSON array of paths. Default: the messaging, roles and tree extensions of this installation. |

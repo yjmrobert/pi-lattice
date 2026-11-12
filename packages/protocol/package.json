@@ -1,9 +1,16 @@
 {
   "name": "@pi-lattice/protocol",
   "version": "0.1.0",
+  "private": true,
   "description": "Shared envelope schema, event contracts and state machines for pi-lattice. No Pi dependency.",
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "files": ["src"],
-  "peerDependencies": { "typebox": "*" }
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "peerDependencies": {
+    "typebox": "*"
+  }
 }

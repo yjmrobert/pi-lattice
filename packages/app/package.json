@@ -1,6 +1,7 @@
 {
   "name": "pi-lattice",
   "version": "0.1.0",
+  "private": true,
   "description": "pi-lattice, assembled: the Pi package that bundles the lattice extensions, and the background host they talk to.",
   "type": "module",
   "keywords": [
@@ -44,16 +45,6 @@
     "@pi-lattice/protocol": "0.1.0",
     "@pi-lattice/roles": "0.1.0"
   },
-  "bundledDependencies": [
-    "@pi-lattice/a2a",
-    "@pi-lattice/canopy",
-    "@pi-lattice/collab",
-    "@pi-lattice/graph",
-    "@pi-lattice/host",
-    "@pi-lattice/pane",
-    "@pi-lattice/protocol",
-    "@pi-lattice/roles"
-  ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",

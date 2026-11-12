@@ -4,11 +4,13 @@ Agent-to-agent messaging, session trees, composable roles and shared ownership f
 
 ## Use it
 
-Install the bundle into Pi once:
+Install it into Pi once:
 
 ```bash
-pi install /path/to/pi-lattice
+pi install npm:pi-lattice
 ```
+
+From a checkout of this repository, `pi install /path/to/pi-lattice` does the same from source.
 
 Then open `pi` in a project as you always do. A pane on the left lists the project's sessions:
 
@@ -68,6 +70,8 @@ npm run check          # typecheck and tests
 npm run dev            # open Pi on this checkout, in a scratch repository under .dev/ (-- --faux for the scripted model)
 npm run eval           # one delegation with a real model, checked for how the sessions talked (spends tokens)
 npm run docs           # rewrite docs/settings.md from the settings table
+npm run build          # build the package that is published into dist/pi-lattice
+npm run release        # check, build and publish it (needs `npm login`)
 npm run spike:phase0   # re-run the Phase 0 verification against real Pi processes
 ```
 
@@ -75,7 +79,7 @@ Requires Node 22.19 or newer and git. Tests and spikes run real Pi processes aga
 
 ## Not done yet
 
-- **Publishing.** Nothing is on npm, so the bundle is installed from a checkout. The host and `protocol` need a build step first ([ADR 0001](docs/decisions/0001-packaging-and-scope.md)), and the `@pi-lattice` scope has not been claimed.
+- **Publishing.** The package builds, and installs and runs from a tarball ([ADR 0025](docs/decisions/0025-one-published-package.md)), but it is not on npm yet. Until it is, install from a checkout.
 - **A run with a real model.** Every flow is tested against a scripted model, which checks the mechanics, not how well a model follows the role fragments. `npm run eval` is written for that and has not been run yet.
 - **Two real machines.** Sharing is tested with two isolated hosts on one machine ([manual script](docs/two-machine-handoff.md)).
 - **Sharing across arbitrary networks.** The two machines must reach each other directly (LAN, VPN, SSH tunnel). Hole-punching is not built ([ADR 0012](docs/decisions/0012-peer-to-peer-collab.md)).

@@ -56,7 +56,7 @@ import {
 	WORKSPACE_MODES,
 	waitingFor,
 } from "@pi-lattice/protocol";
-import { buildSessionContext, parseSessionEntries } from "@earendil-works/pi-coding-agent";
+import { piLibrary } from "./pi-library.ts";
 import { type ExitInfo, PiProcess, type RpcRecord } from "./pi-process.ts";
 import { type Connection, type Hello, SocketServer } from "./socket-server.ts";
 import { type JournalRecord, SqliteStore, type Store } from "./store.ts";
@@ -1281,8 +1281,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 		const file = this.must(id).sessionFile;
 		if (!file || !existsSync(file)) return [];
+		const { buildSessionContext, parseSessionEntries } = await piLibrary();
 		const entries = parseSessionEntries(readFileSync(file, "utf8")).filter((entry) => entry.type !== "session");
-		return buildSessionContext(entries as Parameters<typeof buildSessionContext>[0]).messages as RpcRecord[];
+		return buildSessionContext(entries as never).messages as RpcRecord[];
 	}
 
 	/** Answer a dialog a node is blocked on. Nothing answers dialogs automatically. */

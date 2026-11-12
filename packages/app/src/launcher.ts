@@ -5,7 +5,7 @@
  * how to start one but nothing about the pane. They meet on the `lattice:host:launch` event.
  */
 import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -20,9 +20,15 @@ export default function launcherExtension(pi: ExtensionAPI): void {
 		request.claimed = true;
 		mkdirSync(request.stateDir, { recursive: true });
 		const log = openSync(join(request.stateDir, "daemon.err"), "a");
-		const cli = join(dirname(fileURLToPath(import.meta.url)), "cli.ts");
+		// From source the host is beside this file; in the published package it is built into `host/`.
+		const here = dirname(fileURLToPath(import.meta.url));
+		const built = join(here, "..", "host", "cli.js");
+		const cli = existsSync(built) ? built : join(here, "cli.ts");
+		// The host reads session files with Pi's library, and has no copy of its own: tell it which Pi this is.
+		const started = process.argv[1];
 		const child = spawn(process.execPath, [cli, "daemon", "--state", request.stateDir, "--cwd", request.cwd], {
 			cwd: request.cwd,
+			env: { ...process.env, ...(started ? { LATTICE_PI_STARTED: started } : {}) },
 			detached: true,
 			stdio: ["ignore", log, log],
 		});
