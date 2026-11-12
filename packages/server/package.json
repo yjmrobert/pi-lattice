@@ -1,0 +1,26 @@
+{
+  "name": "@pi-lattice/server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The pi-lattice server: one always-on place for a team's work. Issues with types, states and fields a team defines, over HTTP, in one SQLite file; and the client a host talks to it with.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "multi-agent",
+    "issues"
+  ],
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "dependencies": {
+    "@pi-lattice/protocol": "0.1.0"
+  }
+}
