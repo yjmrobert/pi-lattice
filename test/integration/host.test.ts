@@ -434,6 +434,88 @@ describe("sessions that wait on others", () => {
 	});
 });
 
+describe("planned work", () => {
+	const userMessages = async (h: LatticeHost, id: string): Promise<string> => {
+		const { messages } = await h.rpc<{ messages: Array<{ role: string; content: unknown }> }>(id, { type: "get_messages" });
+		return messages.filter((m) => m.role !== "assistant").map((m) => (typeof m.content === "string" ? m.content : (m.content as Array<{ text?: string }>).map((p) => p.text ?? "").join(""))).join("\n");
+	};
+	const result = (text: string) => `!tool send_message ${JSON.stringify({ to: "parent", text, intent: "result" })}`;
+	const planTool = (args: Record<string, unknown>) => `!tool plan_item ${JSON.stringify(args)}`;
+
+	it("puts an item in the tree with nobody on it, and starts it only when someone does", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const story = await h.spawnChild(root.id, { name: "cards", kind: "story", brief: result("cards done"), planned: true });
+		expect(story).toMatchObject({ status: "dormant", planned: true, sessionFile: null, kind: "story" });
+		expect(formatTree(h.nodes())).toContain(`cards  [story]  ${story.id}  dormant  roles=protocol+reporting+worker  planned`);
+		await settled(h, root.id);
+		expect(h.isRunning(story.id)).toBe(false);
+		// It cannot be opened: there is nothing in it yet.
+		await expect(h.attachForeground(story.id, "t1")).rejects.toThrow("is planned and nobody is on it yet");
+
+		await h.startHeld(story.id);
+		await eventually(() => h.node(story.id)?.done === true, "the item to run and report once started");
+		expect(h.node(story.id)?.planned).toBeUndefined();
+		await eventually(async () => (await assistantTexts(h, root.id)).includes("cards done"), "its result to reach the root");
+	});
+
+	it("lays out items under items, and sends a report past the ones nobody is on", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const feature = await h.spawnChild(root.id, { name: "payments", kind: "feature", brief: "take payments", planned: true });
+		const story = await h.spawnChild(root.id, { name: "cards", kind: "story", brief: "save cards", planned: true, under: "payments" });
+		expect(story.parentId).toBe(feature.id);
+		// A task that starts at once, two planned items down from the session that made it.
+		const task = await h.spawnChild(root.id, { name: "vault", kind: "task", brief: result("vault done"), under: story.id });
+		expect(task.parentId).toBe(story.id);
+		await eventually(() => h.node(task.id)?.done === true, "the task to report");
+		await eventually(async () => (await assistantTexts(h, root.id)).includes("vault done"), "the report to reach the session above the planned items");
+		expect(await userMessages(h, task.id)).toContain('"root"');
+		// Nobody was put on the items in between by the report passing them.
+		expect(h.node(story.id)).toMatchObject({ planned: true, status: "dormant" });
+		expect(h.node(feature.id)).toMatchObject({ planned: true, status: "dormant" });
+		expect(h.isRunning(story.id)).toBe(false);
+	});
+
+	it("only puts an item under something below the session asking", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const kid = await h.spawnChild(root.id, { name: "kid", brief: "wait for instructions" });
+		await h.spawnChild(root.id, { name: "other", brief: "x", planned: true });
+		await expect(h.spawnChild(kid.id, { name: "task", brief: "x", planned: true, under: "other" })).rejects.toThrow('there is no item "other" below this session');
+		await expect(h.spawnChild(kid.id, { name: "task", brief: "x", planned: true, under: root.id })).rejects.toThrow("below this session");
+	});
+
+	it("does not count planned items as sessions, and still bounds them", async () => {
+		const h = await startHost({ limits: { maxNodes: 2, maxChildren: 50 } });
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		for (let i = 0; i < 5; i++) await h.spawnChild(root.id, { name: `item-${i}`, brief: "x", planned: true });
+		expect(h.nodes().filter((node) => node.planned)).toHaveLength(5);
+		await h.spawnChild(root.id, { name: "real", brief: "wait for instructions" });
+		// The tree now runs as many sessions as it may: a planned item cannot be started.
+		await expect(h.startHeld(h.nodes().find((node) => node.name === "item-0")?.id ?? "")).rejects.toThrow("the tree already has 2 sessions, the limit");
+		for (let i = 5; i < 20; i++) await h.spawnChild(root.id, { name: `item-${i}`, brief: "x", planned: true });
+		await expect(h.spawnChild(root.id, { name: "one-too-many", brief: "x", planned: true })).rejects.toThrow("already has 20 planned items");
+	});
+
+	it("lets a model plan work and then start an item by writing to it", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		await h.prompt(root.id, planTool({ name: "cards", kind: "story", brief: result("cards done") }));
+		const story = await child(h, root.id, "cards");
+		await eventually(async () => (await assistantTexts(h, root.id)).includes(`Planned "cards" as ${story.id} (kind story) under "root". Nobody is on it and nothing has started.`), "the tool to say it is planned");
+		await settled(h, root.id);
+		await h.prompt(root.id, planTool({ name: "vault", kind: "task", brief: "store the card", under: "cards" }));
+		expect((await child(h, story.id, "vault")).planned).toBe(true);
+		expect(h.isRunning(story.id)).toBe(false);
+
+		await settled(h, root.id);
+		await h.prompt(root.id, sendTool(story.id, "go ahead"));
+		await eventually(() => h.node(story.id)?.done === true, "the item to start on a message and report");
+		await eventually(async () => (await userMessages(h, story.id)).includes("go ahead"), "the message that started it to follow its brief");
+	});
+});
+
 describe("host workspaces", () => {
 	it("gives a worktree child its own branch and directory", async () => {
 		const git = (...args: string[]) => execFileSync("git", args, { cwd: sandbox.work, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();

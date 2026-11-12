@@ -111,6 +111,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 			workspace: Type.Optional(Type.String({ description: 'Where the child works: "shared" (this directory, the default) or "worktree" (its own git worktree and branch)' })),
 			model: Type.Optional(Type.String({ description: "Model for the child, for example a cheaper one for routine work. Leave out to use the default" })),
 			waits_on: Type.Optional(Type.Array(Type.String(), { description: "Sessions in this tree, by id or name, whose result the child needs first. It starts when each has sent its result" })),
+			under: Type.Optional(Type.String({ description: "An item below this session, by id or name, to put the child under instead of directly under this session. Its report still comes to the nearest session above it" })),
 		}),
 		async execute(_toolCallId, params) {
 			const workspace = params.workspace ?? "shared";
@@ -124,6 +125,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 					...(params.fragments !== undefined ? { fragments: params.fragments } : {}),
 					...(params.model !== undefined ? { model: params.model } : {}),
 					...(params.waits_on !== undefined ? { waitsOn: params.waits_on } : {}),
+					...(params.under !== undefined ? { under: params.under } : {}),
 				},
 			});
 			const made = `Spawned "${node.name}" as ${node.id} (kind ${node.kind}${node.fragments.length > 0 ? `, roles ${node.fragments.join(" + ")}` : ""}).`;
@@ -141,6 +143,45 @@ export default function graphExtension(pi: ExtensionAPI): void {
 			const text = [
 				`${made} It works in ${where}.`,
 				`It has its brief and has started. Its report will arrive as a message; do not poll. To reach it, send_message to ${node.id}.`,
+			].join("\n");
+			return { content: [{ type: "text", text }], details: { node } };
+		},
+	});
+
+	pi.registerTool({
+		name: "plan_item",
+		label: "Plan item",
+		description:
+			"Put a piece of planned work in the tree without starting anything: an epic, a feature, a story or a task with nobody on it yet. It costs nothing until it is started. The user sees the plan and can put a session on any item.",
+		promptSnippet: "Add a planned item to the tree, with nobody on it yet",
+		promptGuidelines: [
+			"Use plan_item to lay out work before starting it: the larger pieces first, then what each breaks into, with under naming the item each belongs to.",
+			"Give each planned item a kind that says its level, for example epic, feature, story or task, and a brief that would let someone start on it cold.",
+			"A planned item starts when you send_message to its id, or when the user seats a session on it. Plan first, then start only what can be worked on now.",
+		],
+		parameters: Type.Object({
+			name: Type.String({ description: "Short name for the item, shown in the tree" }),
+			brief: Type.String({ description: "What the item is: goal, context, constraints, and what done means. Whoever starts on it is given this" }),
+			kind: Type.Optional(Type.String({ description: "The level of the work, for example epic, feature, story or task" })),
+			under: Type.Optional(Type.String({ description: "The item it belongs to, by id or name: one below this session. Leave out to put it directly under this session" })),
+			waits_on: Type.Optional(Type.Array(Type.String(), { description: "Sessions in this tree, by id or name, whose result it needs first" })),
+		}),
+		async execute(_toolCallId, params) {
+			const { node } = await host().request("spawn", {
+				spec: {
+					name: params.name,
+					brief: params.brief,
+					planned: true,
+					...(params.kind !== undefined ? { kind: params.kind } : {}),
+					...(params.under !== undefined ? { under: params.under } : {}),
+					...(params.waits_on !== undefined ? { waitsOn: params.waits_on } : {}),
+				},
+			});
+			const { nodes } = await host().request("list", {});
+			const parent = nodes.find((other) => other.id === node.parentId);
+			const text = [
+				`Planned "${node.name}" as ${node.id} (kind ${node.kind})${parent ? ` under "${parent.name}"` : ""}. Nobody is on it and nothing has started.`,
+				`To start it, send_message to ${node.id}: it is given its brief first and your message after. The user can also put a session on it from the tree.`,
 			].join("\n");
 			return { content: [{ type: "text", text }], details: { node } };
 		},

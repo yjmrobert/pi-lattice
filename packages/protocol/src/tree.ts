@@ -37,8 +37,26 @@ export function waitingFor(nodes: readonly NodeMeta[], node: Pick<NodeMeta, "wai
 	return (node.waitsOn ?? []).flatMap((id) => nodes.filter((candidate) => candidate.id === id && !candidate.done));
 }
 
-/** Whether a node has yet to be given its brief because it waits on others. */
-export const isHeld = (node: Pick<NodeMeta, "waitsOn">): boolean => (node.waitsOn?.length ?? 0) > 0;
+/** Whether a node is planned work that nobody has been put on yet. */
+export const isPlanned = (node: Pick<NodeMeta, "planned">): boolean => node.planned === true;
+
+/** Whether a node has yet to be given its brief: because it waits on others, or because it is only planned. */
+export const isHeld = (node: Pick<NodeMeta, "waitsOn" | "planned">): boolean => (node.waitsOn?.length ?? 0) > 0 || isPlanned(node);
+
+/**
+ * The session a node answers to: its nearest ancestor that has one. Planned items above it are
+ * passed over, because there is nobody there to read a report.
+ */
+export function reportsTo(nodes: readonly NodeMeta[], node: Pick<NodeMeta, "parentId">): NodeMeta | undefined {
+	const byId = new Map(nodes.map((candidate) => [candidate.id, candidate]));
+	const seen = new Set<string>();
+	let above = node.parentId ? byId.get(node.parentId) : undefined;
+	while (above && isPlanned(above) && above.parentId && !seen.has(above.id)) {
+		seen.add(above.id);
+		above = byId.get(above.parentId);
+	}
+	return above;
+}
 
 /** A node's ancestors, nearest first. Stops at a missing parent or a cycle. */
 export function ancestorsOf(nodes: readonly NodeMeta[], id: string): NodeMeta[] {
@@ -85,7 +103,8 @@ export function formatTree(nodes: readonly NodeMeta[], options: { self?: string 
 			const parts = [`${prefix}${node.name}`, `[${node.kind}]`, node.id, node.status];
 			if (node.fragments.length > 0) parts.push(`roles=${node.fragments.join("+")}`);
 			if (node.branch) parts.push(`branch=${node.branch}`);
-			if (isHeld(node)) parts.push(`waits-on=${(node.waitsOn ?? []).map((id) => nodes.find((other) => other.id === id)?.name ?? id).join("+")}`);
+			if (isPlanned(node)) parts.push("planned");
+			if ((node.waitsOn?.length ?? 0) > 0) parts.push(`waits-on=${(node.waitsOn ?? []).map((id) => nodes.find((other) => other.id === id)?.name ?? id).join("+")}`);
 			if (node.id === options.self) parts.push("(you)");
 			return parts.join("  ");
 		})

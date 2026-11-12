@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ancestorsOf, childrenOf, depthOf, formatTree, isHeld, type NodeMeta, treeOf, waitingFor } from "../src/index.ts";
+import { ancestorsOf, childrenOf, depthOf, formatTree, isHeld, isPlanned, type NodeMeta, reportsTo, treeOf, waitingFor } from "../src/index.ts";
 
 const node = (id: string, parentId: string | null, over: Partial<NodeMeta> = {}): NodeMeta => ({
 	id, parentId, rootId: "r", kind: "task", name: id, brief: "", fragments: [], owner: "yan", version: 1, status: "idle",
@@ -39,6 +39,21 @@ describe("tree helpers", () => {
 		expect(isHeld(node("d", "r"))).toBe(false);
 		// The tree names them, or gives the id of one it does not know.
 		expect(formatTree(all)).toContain("c  [task]  c  idle  waits-on=a+b+gone");
+	});
+
+	it("knows planned work, and who a node answers to past the items nobody is on", () => {
+		const feature = node("f", "r", { planned: true });
+		const story = node("s", "f", { planned: true });
+		const task = node("t", "s");
+		const all = [...nodes, feature, story, task];
+		expect(isPlanned(story)).toBe(true);
+		expect(isHeld(story)).toBe(true);
+		expect(isPlanned(task)).toBe(false);
+		// The task answers to the root: the two items above it have no session.
+		expect(reportsTo(all, task)?.id).toBe("r");
+		expect(reportsTo(all, node("x", "a"))?.id).toBe("a");
+		expect(reportsTo(all, node("root", null))).toBeUndefined();
+		expect(formatTree(all)).toContain("s  [task]  s  idle  planned");
 	});
 
 	it("walks a tree parents first", () => {

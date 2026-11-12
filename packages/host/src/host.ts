@@ -21,6 +21,7 @@ import {
 	type HostAssignment,
 	type InboundState,
 	isHeld,
+	isPlanned,
 	isRelativeAddress,
 	latticeHome,
 	type Limits,
@@ -29,6 +30,7 @@ import {
 	parseSettings,
 	repoConfigPath,
 	renderTemplate,
+	reportsTo,
 	resolveSettings,
 	rolesFor,
 	SETTINGS,
@@ -150,6 +152,8 @@ interface Runtime {
 }
 
 const RECENT_LINES = 12;
+/** How many planned items a tree may hold for each session it may run. Planned work costs nothing to keep, but a plan is still bounded. */
+const PLANNED_PER_SESSION = 10;
 
 /** What a session is started with: the tree's settings, then anything chosen for the session itself. */
 export function sessionLaunch(node: Pick<NodeMeta, "model">, settings: Settings): { args: string[]; env: Record<string, string> } {
@@ -445,11 +449,13 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	}
 
 	/** Create a child under a node, start it and hand it its brief. Enforces the tree limits. */
-	async spawnChild(parentId: string, spec: SpawnSpec): Promise<NodeMeta> {
+	async spawnChild(askerId: string, spec: SpawnSpec): Promise<NodeMeta> {
+		const all = this.store.listNodes();
+		const parentId = this.resolveUnder(all, askerId, spec.under);
 		const parent = this.store.getNode(parentId);
 		if (!parent) throw new Error(`No node ${parentId} in this tree.`);
 		if (parent.owner !== this.owner) throw new Error(`"${parent.name}" is owned by ${parent.owner}. Children can only be added under sessions you own.`);
-		const all = this.store.listNodes();
+		const planned = spec.planned === true;
 		if (typeof spec.name !== "string" || spec.name.trim() === "") throw new Error("A child session needs a name.");
 		if (typeof spec.brief !== "string" || spec.brief.trim() === "") throw new Error("A child session needs a brief.");
 		if (depthOf(all, parentId) + 1 > this.limits.maxDepth) {
@@ -458,7 +464,12 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (childrenOf(all, parentId).length >= this.limits.maxChildren) {
 			throw new Error(`Not spawned: this session already has ${this.limits.maxChildren} children, the limit. Reuse an existing child or ask the user to raise the limit.`);
 		}
-		if (treeOf(all, parent.rootId).length >= this.limits.maxNodes) {
+		// Planned work has no session, so it does not count against the number of sessions. It is still bounded.
+		const tree = treeOf(all, parent.rootId);
+		if (planned && tree.filter(isPlanned).length >= this.limits.maxNodes * PLANNED_PER_SESSION) {
+			throw new Error(`Not planned: the tree already has ${this.limits.maxNodes * PLANNED_PER_SESSION} planned items, the limit. Start or archive some first.`);
+		}
+		if (!planned && tree.filter((node) => !isPlanned(node)).length >= this.limits.maxNodes) {
 			throw new Error(`Not spawned: the tree already has ${this.limits.maxNodes} sessions, the limit. Ask the user before growing it further.`);
 		}
 		const workspace = spec.workspace ?? "shared";
@@ -468,7 +479,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const fragments = rolesFor(this.settings(), "child", chosen);
 		const model = typeof spec.model === "string" && spec.model.trim() !== "" ? spec.model.trim() : undefined;
 		const waitsOn = this.resolveWaitsOn(all, parent, spec.waitsOn);
-		const held = waitsOn.some((other) => !other.done);
+		const held = planned || waitsOn.some((other) => !other.done);
 
 		const id = newNodeId();
 		const name = clean(spec.name, id);
@@ -487,7 +498,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const node = this.insert({
 			id, parentId, rootId: parent.rootId, kind: (spec.kind ?? "task").trim() || "task", name, brief: spec.brief, fragments, cwd, workspace, branch,
 			...(model ? { model } : {}),
-			...(held ? { waitsOn: waitsOn.map((other) => other.id) } : {}),
+			...(waitsOn.some((other) => !other.done) ? { waitsOn: waitsOn.map((other) => other.id) } : {}),
+			...(planned ? { planned: true } : {}),
 		});
 		if (held) return node;
 		try {
@@ -501,13 +513,29 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 
 	/** Start a child and hand it its brief. `waited` names the sessions it was kept back for, when they have all finished. */
 	private async giveBrief(node: NodeMeta, waited: string[] = []): Promise<void> {
-		const parent = node.parentId ? this.store.getNode(node.parentId) : undefined;
+		const parent = reportsTo(this.store.listNodes(), node);
 		// It owes its parent an answer from the moment it has the brief.
 		this.owing.set(node.id, { reminded: false });
 		await this.ensureRunning(node.id);
 		await this.prompt(node.id, this.template("brief", {
 			"parent.name": parent?.name ?? "", "parent.id": parent?.id ?? "", name: node.name, kind: node.kind, branch: node.branch, waited: waited.map((name) => `"${name}"`).join(", "), brief: node.brief,
 		}));
+	}
+
+	/**
+	 * Where a new item goes: under the session asking, or under the item it names, which must be
+	 * the asker or something below it.
+	 */
+	private resolveUnder(all: NodeMeta[], askerId: string, under: unknown): string {
+		if (under === undefined || under === null || under === "") return askerId;
+		if (typeof under !== "string") throw new Error("Not created: under is the id or the name of an item below this session.");
+		const wanted = under.trim();
+		const below = all.filter((node) => !node.archived && (node.id === askerId || ancestorsOf(all, node.id).some((above) => above.id === askerId)));
+		const named = below.filter((node) => node.name.toLowerCase() === wanted.toLowerCase());
+		const found = below.find((node) => node.id === wanted) ?? (named.length === 1 ? named[0] : undefined);
+		if (found) return found.id;
+		if (named.length > 1) throw new Error(`Not created: ${named.length} items below this session are named "${wanted}" (${named.map((node) => node.id).join(", ")}). Say which by id.`);
+		throw new Error(`Not created: there is no item "${wanted}" below this session to put it under. Use list_sessions to see the tree.`);
 	}
 
 	// --- sessions that wait on others ------------------------------------------
@@ -545,7 +573,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (this.stopped) return;
 		const all = this.store.listNodes();
 		for (const node of all) {
-			if (!isHeld(node) || node.archived || node.owner !== this.owner || waitingFor(all, node).length > 0) continue;
+			// Planned work is started by someone, never by the host.
+			if (!isHeld(node) || isPlanned(node) || node.archived || node.owner !== this.owner || waitingFor(all, node).length > 0) continue;
 			this.release(node.id).catch(() => {
 				// Said by release; the next freed slot retries.
 			});
@@ -565,13 +594,16 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			const all = this.store.listNodes();
 			const waited = early && waitingFor(all, node).length > 0 ? [] : (node.waitsOn ?? []).flatMap((other) => all.find((candidate) => candidate.id === other)?.name ?? []);
 			try {
+				if (isPlanned(node) && treeOf(all, node.rootId).filter((other) => !isPlanned(other)).length >= this.limits.maxNodes) {
+					throw new Error(`the tree already has ${this.limits.maxNodes} sessions, the limit`);
+				}
 				if (node.workspace === "worktree" && !node.branch) {
 					const from = (node.parentId ? this.store.getNode(node.parentId)?.cwd : undefined) ?? node.cwd;
 					const worktree = createWorktree(from, node.id, node.name);
 					node = this.update(id, { cwd: worktree.cwd, branch: worktree.branch });
 				}
 				await this.giveBrief(node, waited);
-				this.update(id, { waitsOn: [] });
+				this.update(id, { waitsOn: [], planned: false });
 				this.releaseComplaints.delete(id);
 			} catch (error) {
 				this.owing.delete(id);
@@ -594,7 +626,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	async startHeld(id: string): Promise<void> {
 		const node = this.must(id);
 		if (node.owner !== this.owner) throw new Error(`"${node.name}" is owned by ${node.owner}. Only they can start it.`);
-		if (!isHeld(node)) throw new Error(`"${node.name}" is not waiting on anything.`);
+		if (!isHeld(node)) throw new Error(`"${node.name}" has already started: it is not waiting on anything.`);
 		await this.release(id, true);
 	}
 
@@ -604,7 +636,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		return node && isHeld(node) ? this.release(id, true) : this.ensureRunning(id);
 	}
 
-	private insert(fields: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "cwd" | "workspace" | "branch"> & Pick<Partial<NodeMeta>, "model">): NodeMeta {
+	private insert(fields: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "cwd" | "workspace" | "branch"> & Pick<Partial<NodeMeta>, "model" | "waitsOn" | "planned">): NodeMeta {
 		const now = new Date().toISOString();
 		const node: NodeMeta = {
 			...fields, owner: this.owner, version: 1, status: "dormant", sessionId: null, sessionFile: null, createdAt: now, updatedAt: now, repo: repoName(fields.cwd),
@@ -831,11 +863,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (!toggleSetting(this.settings(), "reports.remind")) return;
 		// It may be waiting itself: on a person, on mail not yet delivered, or on its own children.
 		if (runtime.dialogs.size > 0 || this.store.unacked(id).length > 0) return;
-		const waitingOn = childrenOf(this.store.listNodes(), id).some((kid) => this.owing.has(kid.id) || isHeld(kid) || kid.status === "running" || kid.status === "starting" || kid.status === "blocked");
+		const waitingOn = childrenOf(this.store.listNodes(), id).some((kid) => this.owing.has(kid.id) || (isHeld(kid) && !isPlanned(kid)) || kid.status === "running" || kid.status === "starting" || kid.status === "blocked");
 		if (waitingOn) return;
 		if (!owed.reminded) {
 			owed.reminded = true;
-			const parent = this.store.getNode(node.parentId);
+			const parent = reportsTo(this.store.listNodes(), node);
 			this.prompt(id, this.template("reminder", { "parent.name": parent?.name ?? node.parentId })).catch(() => {
 				// It could not be reminded; its parent hears about it at the next turn end or exit.
 			});
@@ -906,6 +938,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	async attachForeground(id: string, clientId: string): Promise<{ node: NodeMeta; sessionFile: string; assignment: HostAssignment; wasWorking: boolean }> {
 		let node = this.must(id);
 		if (node.owner !== this.owner) throw new Error(`"${node.name}" is owned by ${node.owner} and runs on their machine.`);
+		if (isPlanned(node)) throw new Error(`"${node.name}" is planned and nobody is on it yet. To put a session on it, press s on it in the pane or run /lattice start.`);
 		if (isHeld(node)) {
 			const names = waitingFor(this.store.listNodes(), node).map((other) => `"${other.name}"`).join(", ");
 			throw new Error(`"${node.name}" has not started: it waits on ${names || "sessions that have finished, and starts in a moment"}. To start it now, press s on it in the pane or run /lattice start.`);
@@ -1343,8 +1376,10 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		let recipients: string[];
 		if (isRelativeAddress(envelope.to)) {
 			if (envelope.to === "parent") {
-				if (!sender.parentId) throw new Error("This session is the root of its tree and has no parent. Report to the user instead.");
-				recipients = [sender.parentId];
+				// Planned items above it have nobody on them: the report goes to the nearest session above.
+				const above = reportsTo(this.store.listNodes(), sender);
+				if (!above) throw new Error("This session is the root of its tree and has no parent. Report to the user instead.");
+				recipients = [above.id];
 			} else if (envelope.to === "root") {
 				if (sender.rootId === sender.id) throw new Error("This session is the root of its tree.");
 				recipients = [sender.rootId];
@@ -1383,7 +1418,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 
 	/** Keep track of who owes whom an answer, and which sessions have finished what they were given. */
 	private noteReport(sender: NodeMeta, envelope: Envelope, recipients: string[]): void {
-		if (sender.parentId && recipients.includes(sender.parentId) && envelope.intent !== "stopped") {
+		const all = this.store.listNodes();
+		const above = reportsTo(all, sender);
+		if (above && recipients.includes(above.id) && envelope.intent !== "stopped") {
 			// Anything a child says to its parent is an answer of a kind; a result is the end of the work.
 			this.owing.delete(sender.id);
 			if (envelope.intent === "result" && !sender.done) {
@@ -1393,7 +1430,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 		for (const id of recipients) {
 			const recipient = this.store.getNode(id);
-			if (recipient?.parentId !== sender.id || recipient.owner !== this.owner) continue;
+			if (!recipient || reportsTo(all, recipient)?.id !== sender.id || recipient.owner !== this.owner) continue;
 			// More work from its parent: it owes an answer again.
 			this.owing.set(id, { reminded: false });
 			if (recipient.done) this.update(id, { done: false });

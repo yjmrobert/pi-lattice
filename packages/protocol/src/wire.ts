@@ -24,6 +24,16 @@ export interface SpawnSpec {
 	 * starts. It is created at once and given its brief when the last of them has.
 	 */
 	waitsOn?: string[];
+	/**
+	 * Planned work: the item is put in the tree with nobody on it. It starts when a person seats
+	 * a session on it, or when a message is sent to it.
+	 */
+	planned?: boolean;
+	/**
+	 * The item to put it under, by id or by name, when that is not the session asking: one of
+	 * the items below that session. This is how a tree of planned work is laid out by one session.
+	 */
+	under?: string;
 }
 
 export interface RequestMap {

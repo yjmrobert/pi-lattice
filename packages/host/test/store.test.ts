@@ -33,6 +33,15 @@ describe("SqliteStore nodes", () => {
 		expect(store.getNode(n.id)).toEqual(updated);
 	});
 
+	it("keeps that a node is planned, and nothing once it has started", () => {
+		const n = node({ planned: true });
+		store.insertNode(n);
+		expect(store.getNode(n.id)?.planned).toBe(true);
+		expect(store.updateNode(n.id, { status: "idle" }).planned).toBe(true);
+		expect(store.updateNode(n.id, { planned: false })).not.toHaveProperty("planned");
+		expect(store.getNode(n.id)).not.toHaveProperty("planned");
+	});
+
 	it("keeps what a node waits on, and nothing once it waits on nothing", () => {
 		const n = node({ waitsOn: ["nd_a", "nd_b"] });
 		store.insertNode(n);

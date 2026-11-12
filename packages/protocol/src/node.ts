@@ -41,6 +41,11 @@ export interface NodeMeta {
 	 * its brief: the host starts it when each of them has sent its result. Removed once it starts.
 	 */
 	waitsOn?: string[];
+	/**
+	 * It is planned work: an item in the tree with nobody on it. It has no session and has not
+	 * been given its brief, and nothing starts it but a person or a message sent to it. Removed once it starts.
+	 */
+	planned?: boolean;
 	/** What its agent has used so far. */
 	usage?: { tokens: number; cost: number };
 	createdAt: string;
