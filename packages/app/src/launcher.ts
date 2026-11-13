@@ -26,7 +26,8 @@ export default function launcherExtension(pi: ExtensionAPI): void {
 		const cli = existsSync(built) ? built : join(here, "cli.ts");
 		// The host reads session files with Pi's library, and has no copy of its own: tell it which Pi this is.
 		const started = process.argv[1];
-		const child = spawn(process.execPath, [cli, "daemon", "--state", request.stateDir, "--cwd", request.cwd], {
+		// Node 22 says on every start that its SQLite is experimental; kept out of daemon.err, which is read for what went wrong.
+		const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", cli, "daemon", "--state", request.stateDir, "--cwd", request.cwd], {
 			cwd: request.cwd,
 			env: { ...process.env, ...(started ? { LATTICE_PI_STARTED: started } : {}) },
 			detached: true,
