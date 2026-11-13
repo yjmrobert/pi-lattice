@@ -16,6 +16,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The environment npm is told to trust. If the trusted publisher on npm names one, a job
+    # without it is refused; if it names none, this does no harm.
+    environment: npm-pi-lattice
     permissions:
       contents: read
       # Lets npm verify that this workflow in this repository is the publisher, with no stored
