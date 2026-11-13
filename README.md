@@ -91,7 +91,6 @@ The workflow runs the whole suite on the tagged commit, builds the package and p
 
 ## Not done yet
 
-- **Publishing.** The package builds, and installs and runs from a tarball ([ADR 0025](docs/decisions/0025-one-published-package.md)), but it is not on npm yet. Until it is, install from a checkout.
 - **A run with a real model.** Every flow is tested against a scripted model, which checks the mechanics, not how well a model follows the role fragments. `npm run eval` is written for that and has not been run yet.
 - **Two real machines.** Sharing is tested with two isolated hosts on one machine ([manual script](docs/two-machine-handoff.md)).
 - **Sharing across arbitrary networks.** The two machines must reach each other directly (LAN, VPN, SSH tunnel). Hole-punching is not built ([ADR 0012](docs/decisions/0012-peer-to-peer-collab.md)).
