@@ -80,6 +80,7 @@ export const SETTINGS: readonly Setting[] = [
 
 	{ key: "canopy.levels", section: "Canopy", label: "Levels", help: "The levels of work, largest first. An item's level is where its kind is in this list; a kind that is not in it is drawn beside the item it belongs to.", kind: "list", default: ["epic", "feature", "story", "task"], applies: AT_ONCE },
 	{ key: "canopy.shape", section: "Canopy", label: "Shape", help: "Grown: each item sits a little above or below its level, so the tree looks like one. Ruled: every level on one row.", kind: "choice", choices: ["grown", "ruled"], default: "grown", applies: "Applies the next time the canopy is opened." },
+	{ key: "canopy.order", section: "Canopy", label: "Order", help: "Dependency: what must come first is on the left, and at the bottom of a story's tasks; what waits on something comes after it. Filed: everything in the order it was filed. `o` in the canopy switches.", kind: "choice", choices: ["dependency", "filed"], default: "dependency", applies: "Applies the next time the canopy is opened." },
 	{ key: "canopy.motion", section: "Canopy", label: "Motion", help: "Full: a message moves along the branches, a finished task lights its branch, a question spreads a ring. Calm: only working agents and what needs someone move. Off: nothing moves.", kind: "choice", choices: ["full", "calm", "off"], default: "full", applies: "Applies the next time the canopy is opened." },
 ];
 

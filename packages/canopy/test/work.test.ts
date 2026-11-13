@@ -73,6 +73,20 @@ describe("the canopy of a team with a server", () => {
 		expect(w.people.find((person) => person.name === "sam")).toMatchObject({ working: 1, asking: 1 });
 	});
 
+	it("keeps an issue after what it waited on, once that is finished", () => {
+		const work = team();
+		// Pay by card (#2) waits on Refunds (#7), which was filed after it and is finished.
+		(work.issues[1] as Issue).waitsOn = [7];
+		(work.issues[6] as Issue).state = "done";
+		const w = build(work);
+		expect(w.items.get("#2")?.waitsOn).toEqual([]);
+		expect(w.flow.before.get("#2")?.map((item) => item.name)).toEqual(["Refunds"]);
+		expect(w.flow.held.has("#2")).toBe(false);
+		expect(w.flow.ordered.get("#1")?.map((item) => item.name)).toEqual(["Refunds", "Pay by card"]);
+		// Sessions on no issue stay at the foot.
+		expect(w.flow.ordered.get(w.root.id)?.map((item) => item.name)).toEqual(["Checkout", "Search", "scratch", "teo-scratch"]);
+	});
+
 	it("follows the team's own scheme: other types, other levels", () => {
 		const scheme: Scheme = {
 			types: [{ name: "goal", level: 0, under: [], top: true }, { name: "chore", level: 1, under: ["goal"], top: true }],

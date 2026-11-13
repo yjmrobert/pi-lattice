@@ -1,13 +1,13 @@
  ◆ lattice.example.com  1 @yan ⠋1 3   2 @sam ⠋1 ●1 4   3 ○@teo away 2
- lattice.example.com ▸ Checkout ▸ Pay by card ▸ Enter a card ▸ Card form  task #4
+ lattice.example.com ▸ Checkout ▸ Pay by card ▸ Enter a card ▸ Card form  task #4                                         first to last · 3 can start
                                                                                                               │ Card form                        task
                                                                                                               │ #4  doing  unassigned
                                                                                                               │
                                                                                                               │ SITTING HERE
                                                                                                               │ ⠋ implementation  working
-                          ⢠⠤⠋ Card form                                                                       │   sam's, in shop
-                          ⢸⠤✓ Validate number                                                                 │   editing form.tsx
-                          ⢸⠤○ Error states                                                                    │
+                          ⢠⠤○ Error states                                                                    │   sam's, in shop
+                          ⢸⠤⠋ Card form                                                                       │   editing form.tsx
+                          ⢸⠤✓ Validate number                                                                 │
                          ⢀⢼⢄                                                                                  │ UNDER IT
                          ⡇◉ Enter a card ●1                                                                   │ └ · sam-review      review, idle
                          ⠈⢺⠊● implementation · 1/3                                                            │

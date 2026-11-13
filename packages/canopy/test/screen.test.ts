@@ -14,7 +14,7 @@ describe("the screen", () => {
 		const lines = renderPlain(w, initial(w, "tables"), W, H);
 		expect(lines).toHaveLength(H);
 		expect(lines[0]).toBe(" ◆ harbor  1 @yan ⠋4 ●2 19   2 @mira ⠋4 10   3 @sam ⠋4 ●1 17   4 ○@teo away ●1 4");
-		expect(lines[1]).toBe(" harbor ▸ pricing-migration ▸ new-tables ▸ tables  story");
+		expect(lines[1]).toMatch(/^ harbor ▸ pricing-migration ▸ new-tables ▸ tables  story +first to last · 7 can start · ⧗4 held$/);
 		expect(lines.at(-1)).toContain("tab  next that needs someone");
 		await expect(`${lines.join("\n")}\n`).toMatchFileSnapshot("./snapshots/screen.txt");
 	});
@@ -47,17 +47,18 @@ describe("moving", () => {
 		expect(press(w, at, "down", "down").selected).toBe("pricing-migration");
 		// The root is not something to select.
 		expect(press(w, at, "down", "down", "down").selected).toBe("pricing-migration");
-		expect(press(w, at, "up").selected).toBe("verify-copy");
-		expect(press(w, at, "up", "up", "up").selected).toBe("schema");
+		// A frond is read upward: what comes first is nearest the item.
+		expect(press(w, at, "up").selected).toBe("schema");
+		expect(press(w, at, "up", "up", "up").selected).toBe("verify-copy");
 		expect(press(w, at, "up", "down").selected).toBe("tables");
 	});
 
 	it("goes across to what is beside an item", () => {
 		const w = harbor();
-		const at = initial(w, "new-tables");
-		expect(press(w, at, "right").selected).toBe("invoices");
-		expect(press(w, at, "left").selected).toBe("cart");
-		expect(press(w, at, "l", "h").selected).toBe("new-tables");
+		const at = initial(w, "payments");
+		expect(press(w, at, "right").selected).toBe("cart");
+		expect(press(w, at, "left").selected).toBe("invoices");
+		expect(press(w, at, "l", "h").selected).toBe("payments");
 	});
 
 	it("jumps to the next thing that needs someone", () => {
@@ -100,7 +101,7 @@ describe("moving", () => {
 	it("says at the edge how many things that need someone are out of view", () => {
 		const w = harbor();
 		const text = screen(w, press(w, initial(w, "tables")));
-		expect(text).toMatch(/◀2/);
+		expect(text).toMatch(/1▶/);
 	});
 });
 

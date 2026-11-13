@@ -55,7 +55,7 @@ export default function (pi: ExtensionAPI) {
 		let { world, current } = look();
 		const chosen = settings();
 		const motion: Motion = chosen["canopy.motion"] === "off" || process.env.NO_COLOR ? "off" : chosen["canopy.motion"] === "calm" ? "calm" : "full";
-		let state: CanopyState = initial(world, on ?? current, (chosen["canopy.shape"] === "ruled" ? "ruled" : "grown") satisfies Shape);
+		let state: CanopyState = initial(world, on ?? current, (chosen["canopy.shape"] === "ruled" ? "ruled" : "grown") satisfies Shape, chosen["canopy.order"] === "filed" ? "filed" : "dependency");
 		// Opening plays nothing: only what changes while the canopy is open moves.
 		let moving: Animation[] = [];
 		let frames = 0;

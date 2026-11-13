@@ -7,6 +7,7 @@ import type { Animation } from "./animate.ts";
 import { Grid, type Style } from "./grid.ts";
 import { cut, type Layout, layout, type Place, type Shape } from "./layout.ts";
 import { type Item, pathTo, ROOT_ID, walk, type World } from "./model.ts";
+import { canStart, inOrder, type Order } from "./order.ts";
 import { BEAT, paint, spin } from "./paint.ts";
 import { COLOR, colorOf, letterOf } from "./palette.ts";
 
@@ -23,6 +24,8 @@ export interface CanopyState {
 	side: Side;
 	letters: boolean;
 	shape: Shape;
+	/** What must come first on the left, or everything as it was filed. */
+	order: Order;
 	/** A line being typed at the foot: the title of a new issue, or a comment. */
 	typing?: { what: "add" | "comment"; label: string; text: string; number: number | undefined };
 }
@@ -48,7 +51,7 @@ const SIDE_WIDTH = 40;
 const HEADER = 2;
 const FOOTER = 1;
 
-export const initial = (world: World, current?: string, shape: Shape = "grown"): CanopyState => ({
+export const initial = (world: World, current?: string, shape: Shape = "grown", order: Order = "dependency"): CanopyState => ({
 	selected: current && world.items.has(current) ? current : world.root.children[0]?.id,
 	camera: { col: 0, row: 0 },
 	framed: false,
@@ -57,6 +60,7 @@ export const initial = (world: World, current?: string, shape: Shape = "grown"):
 	side: "inspector",
 	letters: false,
 	shape,
+	order,
 });
 
 const sideWidth = (state: CanopyState, width: number): number => (state.side !== "none" && width >= 100 ? SIDE_WIDTH : 0);
@@ -86,7 +90,13 @@ export function frame(state: CanopyState, plan: Layout, width: number, height: n
 	return { ...state, camera: { col, row }, framed: true };
 }
 
-export const planOf = (world: World, state: CanopyState): Layout => layout(world, { shape: state.shape, folded: state.folded });
+export const planOf = (world: World, state: CanopyState): Layout => layout(world, { shape: state.shape, folded: state.folded, order: state.order });
+
+/** What nobody is on and nothing holds, among the tips, and what is held there. */
+const tipsOf = (world: World): { free: Item[]; held: Item[] } => {
+	const tips = [...world.items.values()].filter((item) => item.level >= 0 && item.children.length === 0 && item.parent?.children.includes(item));
+	return { free: tips.filter((item) => canStart(world.flow, item)), held: tips.filter((item) => world.flow.held.has(item.id)) };
+};
 
 // --- keys ----------------------------------------------------------------------
 
@@ -173,6 +183,17 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 		const asking = walk(world.root).filter((other) => other.asks > 0 || other.agent?.state === "asking").filter((other) => plan.places.has(other.id));
 		const at = asking.findIndex((other) => other.id === state.selected);
 		return asking.length > 0 ? go(asking[(at + 1) % asking.length]?.id) : keep(state, [{ do: "say", text: "Nothing needs anyone." }]);
+	}
+	if (key === ".") {
+		// The next thing that is there to be taken, in the order the tree is drawn.
+		const read = (from: Item): Item[] => [from, ...inOrder(world.flow, from, state.order).flatMap(read)];
+		const free = read(world.root).filter((other) => canStart(world.flow, other) && plan.places.has(other.id));
+		const at = free.findIndex((other) => other.id === state.selected);
+		return free.length > 0 ? go(free[(at + 1) % free.length]?.id) : keep(state, [{ do: "say", text: "Nothing is there to be taken: everything is started, finished or held." }]);
+	}
+	if (key === "o") {
+		const next: CanopyState = { ...state, order: state.order === "dependency" ? "filed" : "dependency" };
+		return keep(frame(next, planOf(world, next), width, height));
 	}
 	if (key === "a") return keep(frame({ ...state, side: state.side === "inspector" ? "roster" : state.side === "roster" ? "none" : "inspector" }, plan, width, height));
 	if (key === "i") return keep({ ...state, letters: !state.letters });
@@ -266,7 +287,13 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 		const final = index === path.length - 1;
 		at = run(grid, at, 1, [[cut(step.name), final ? { fg: COLOR.bright, bold: true } : DIM], [final ? "" : " ▸ ", DIM]]);
 	});
-	if (item && item.level >= 0) run(grid, at, 1, [[`  ${kindOf(world, item)}${item.issue ? ` #${item.issue.number}` : ""}`, DIM]]);
+	if (item && item.level >= 0) at = run(grid, at, 1, [[`  ${kindOf(world, item)}${item.issue ? ` #${item.issue.number}` : ""}`, DIM]]);
+	// At the right: how the tree is ordered, and how much of it can go ahead.
+	const tips = tipsOf(world);
+	const flow: Array<[string, Style]> = [[state.order === "dependency" ? "first to last" : "as filed", { fg: COLOR.text }], [" · ", DIM], [`${tips.free.length}`, { fg: COLOR.bright }], [" can start", DIM]];
+	if (tips.held.length > 0) flow.push([" · ", DIM], [`⧗${tips.held.length}`, { fg: COLOR.wait }], [" held", DIM]);
+	const long = flow.reduce((sum, [text]) => sum + [...text].length, 0);
+	if (at + 3 + long <= width - 1) run(grid, width - 1 - long, 1, flow);
 	return grid;
 }
 
@@ -286,7 +313,7 @@ function footer(world: World, state: CanopyState, width: number): Grid {
 	} else if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
 	else if (item && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
 	if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
-	keys.push(["1-9", "one person"], ["a", "panel"], ["shift+←→", "pan"], ["esc", "back"]);
+	keys.push([".", "next to start"], ["o", state.order === "dependency" ? "as filed" : "first to last"], ["1-9", "one person"], ["a", "panel"], ["shift+←→", "pan"], ["esc", "back"]);
 	let at = 1;
 	for (const [key, does] of keys) {
 		if (at + key.length + does.length + 4 > width) break;
@@ -352,10 +379,20 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 		line([["WAITS ON", DIM]]);
 		for (const other of waits) line([[`  ${glyphOf(other, tick)} `, glyphStyle(world, other)], [cut(other.name, inner - 6)], [other.done ? " ✓" : "", DIM]]);
 	}
-	const under = [...item.children, ...item.buds];
+	const behind = world.flow.behind.get(item.id) ?? [];
+	if (behind.length > 0) {
+		row++;
+		line([["WAITING BEHIND IT", DIM]]);
+		for (const other of behind) {
+			const name = cut(other.name, 16);
+			const where = other.parent === item.parent ? "beside it" : other.parent && other.parent.level >= 0 ? `in ${other.parent.name}` : "";
+			line([["  ⧗ ", { fg: COLOR.wait }], [name.padEnd(17)], [cut(where, Math.max(1, inner - 21)), DIM]]);
+		}
+	}
+	const under = [...inOrder(world.flow, item, state.order), ...item.buds];
 	if (under.length > 0) {
 		row++;
-		line([[state.folded.has(item.id) ? "UNDER IT (folded)" : "UNDER IT", DIM]]);
+		line([[state.folded.has(item.id) ? "UNDER IT (folded)" : state.order === "dependency" && item.children.length > 1 ? "UNDER IT, FIRST TO LAST" : "UNDER IT", DIM]]);
 		under.forEach((child, index) => {
 			if (row >= height - 1) return;
 			const branch = index === under.length - 1 ? "└" : "├";
@@ -364,8 +401,11 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 				const [full, rest] = bar(child.landed, child.leaves, 8);
 				line([[`${branch} `, { fg: COLOR.faint }], [`${glyphOf(child, tick)} `, glyphStyle(world, child)], [name.padEnd(16)], [full, { fg: colorOf(world, child.owner) }], [rest, { fg: COLOR.faint }], [` ${child.landed}/${child.leaves}`, DIM]]);
 			} else {
-				const what = child.failed ? "failed" : child.done ? "landed" : child.agent ? `${child.agent.role}, ${stateWord[child.agent.state]}` : "nobody yet";
-				line([[`${branch} `, { fg: COLOR.faint }], [`${glyphOf(child, tick)} `, glyphStyle(world, child)], [name.padEnd(16), child.done || child.planned ? DIM : undefined], [cut(what, inner - 21), DIM]]);
+				// Held with nobody on it: what it comes after is what there is to say about it.
+				const held = world.flow.held.has(child.id) && !child.agent;
+				const holder = (world.flow.before.get(child.id) ?? []).find((other) => !other.done);
+				const what = child.failed ? "failed" : child.done ? "landed" : child.agent ? `${child.agent.role}, ${stateWord[child.agent.state]}` : held ? (holder ? `after ${holder.name}` : "held") : "can start";
+				line([[`${branch} `, { fg: COLOR.faint }], held ? ["⧗ ", { fg: COLOR.wait }] : [`${glyphOf(child, tick)} `, glyphStyle(world, child)], [name.padEnd(16), child.done || held ? DIM : undefined], [cut(what, inner - 21), DIM]]);
 			}
 		});
 	}
