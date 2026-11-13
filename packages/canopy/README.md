@@ -28,6 +28,9 @@ When you have joined your team's server (`/lattice server <address>`), the tree 
 - **A ring is an agent.** `◉` with a ring round it means a session sits on the item; under the name is what it is there to do. The ring turns while it works. `○` means nobody is on it.
 - **Amber needs someone.** A question, an approval. It is the only thing that blinks, and no person is given it. An arrow at the edge of the screen counts what needs someone out of view; `tab` goes to the next.
 - **A bright branch has landed.** Dim while it grows, dotted while it is only planned.
+- **Left to right is first to last.** What must come first is on the left, at every level, and at the bottom of a story's tasks, nearest the stem. An item that waits on another comes after it, and so does everything it is under. Where nothing says, what is finished comes first, then what has started, then what has not, then what is held. `o` puts everything back as it was filed.
+- **`›` between two items** means the second waits on the first; it dims once the first is finished. A wait that reaches into another branch is a dashed arc.
+- **Dim with `⧗` is held.** Something it waits on is unfinished, or what it is under is held. `⧗2` after a name counts what waits on that item. What nobody is on and nothing holds is there to be taken: `.` goes to the next, and the top of the screen counts both.
 - **A thin dotted line ties an agent to what it is working on**, when that is not the item it sits on.
 - **What moves is something that happened.** A light running along the branches is a message, from the sender to the receiver. A branch lighting downward is a task that landed. A ring spreading in amber is a question that just arrived; a ring closing in on an item is a session put on it. A colour spreading along a branch is an item that changed hands. With nothing happening the screen is still. `canopy.motion` turns it down (`calm`) or off.
 
@@ -38,6 +41,8 @@ When you have joined your team's server (`/lattice server <address>`), the tree 
 | `←` `→` | across, to what is beside |
 | `↑` `↓` | up into what is under an item, down to what it belongs to |
 | `tab` | the next thing that needs someone |
+| `.` | the next thing that is there to be taken: nobody on it, nothing holding it |
+| `o` | first to last, or as filed |
 | `enter` | open the session on the item in this terminal; unfold a folded item |
 | `s` | put a session on a planned item |
 | `f` | fold an item to one node, or unfold it |
@@ -54,6 +59,7 @@ When you have joined your team's server (`/lattice server <address>`), the tree 
 | File | What |
 |---|---|
 | `model.ts` | The work, from the state a host gives: items on levels, owners, the agent on each, progress. |
+| `order.ts` | What comes first: the order under each item, what waits on what, what is held. |
 | `layout.ts` | Where everything goes, at whatever size the labels need. |
 | `grid.ts` | Cells with braille dots under them. |
 | `paint.ts` | A layout drawn into a grid. |
@@ -63,4 +69,4 @@ When you have joined your team's server (`/lattice server <address>`), the tree 
 
 Everything but `extension.ts` is a function of its input and is tested as text. The package depends on `protocol` alone; it asks the pane what there is to draw over the event bus (`lattice:trees:query`) and hands anything that changes a session to `/lattice`.
 
-Levels are the setting `canopy.levels`. See [the plan](../../docs/design/canopy-plan.md) for what is not built yet, and [0022](../../docs/decisions/0022-canopy-in-pi.md), [0023](../../docs/decisions/0023-planned-work.md) and [0024](../../docs/decisions/0024-the-canopy.md) for why it is the way it is.
+Levels are the setting `canopy.levels`; the order the canopy opens in is `canopy.order`. See [the plan](../../docs/design/canopy-plan.md) for what is not built yet, and [0022](../../docs/decisions/0022-canopy-in-pi.md), [0023](../../docs/decisions/0023-planned-work.md), [0024](../../docs/decisions/0024-the-canopy.md) and [0030](../../docs/decisions/0030-the-canopy-in-order.md) for why it is the way it is.

@@ -34,3 +34,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0027 | What Kanzo changed | built: a board on your own machine and sharing it, `work_next`, waiting, issues for people, review before done |
 | 0028 | The server introduces; the machines carry | built: on a server, hosts find each other and pass offers and requests through it; sessions go directly between the two machines, both online |
 | 0029 | Networks joined by a code are gone | built: sessions are shared with the people on your server; join codes, beacons and the shared ports are removed |
+| 0030 | The canopy in order | built: what must come first is on the left; held work is dim; `o` puts it back as filed |
