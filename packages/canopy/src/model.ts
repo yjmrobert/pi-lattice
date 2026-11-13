@@ -3,6 +3,7 @@
  * sitting on it. Built from the same state the pane reads. No Pi, no terminal.
  */
 import { type Issue, isPlanned, misfit, type NodeMeta, roleOf, type Scheme, stateKind, type UiState, type WorkState, waitingOn } from "@pi-lattice/protocol";
+import { type Flow, flowOf } from "./order.ts";
 
 /** One host's tree, or what a teammate has in a repository that is not on this machine. */
 export interface TreeSource {
@@ -83,6 +84,8 @@ export interface World {
 	levels: string[];
 	me: string;
 	traffic: Array<{ from: string; to: string; intent: string; at: number }>;
+	/** What comes first: the order of the items under each, what waits on what, and what is held. */
+	flow: Flow;
 	/** The team's scheme, when the canopy is drawn from a server: what may be added where, and what the states are. */
 	scheme?: Scheme;
 	/** Why nothing on the server can be changed right now. */
@@ -191,7 +194,7 @@ function finish(root: Item, items: Map<string, Item>, names: string[], online: R
 		if (item.asks > 0 || item.agent?.state === "asking") runner.asking++;
 	}
 	const traffic = sources.flatMap((source) => source.state.traffic ?? []);
-	return { root, items, people, levels: [...levels], me, traffic };
+	return { root, items, people, levels: [...levels], me, traffic, flow: flowOf(root, items) };
 }
 
 /** A session as the canopy seats it: one of this person's, with everything the host knows, or a teammate's as the server tells it. */
