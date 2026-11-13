@@ -1,40 +1,40 @@
 
-                                                                   ⣀⡀⡠⠠⠄⠤⠄⠒⠐⠂⠒⠂⠒⠐⠂⠒ ⠒⠠⠄⠤ ⣀⢀⡀
-                                                           ⣀⢠⠄⠔⠂⠊⠈⠁                         ⠉ ⠒⠐⠄⢤ ⡀
-                                                      ⣀⠠⠆⠚⠁⠁                                       ⠉⠘⠂⠤ ⣀
-                                                 ⣀⠠⠆⠊⠁                                                   ⠈⠂⠤ ⡀
-                                             ⢀⡄⠒⠂⠁                                                           ⠉⢰⠦✓ schema                              ⢠⠤✓ csv
-                                           ⢠⠤⧗ rates                                                          ⢸⠤⠋ copy                                ⢸⠤● pdf ●1
-                                           ⢸⠤○ display                                                        ⢸⠤⧗ verify-copy     ⢠⠤⠋ writer          ⢸⠤✓ fixtures        ⢠⠤⠋ provider          ⠰
-  ⢠⠤✓ card-vault      ⢠⠤● stripe-listen ●1 ⢸                   ⢠⠤✓ endpoint        ⢠⠤✓ local-store           ⢀⢼⢄                  ⢸⠤○ reader          ⢸                   ⢸⠤✓ claims          ⢠⠤⠋ store
-  ⢸⠤✓ card-form       ⢸⠤⠋ retry-queue      ○ tax-lines         ⢸⠤✓ cache           ⢸⠤○ sync-engine           ⡇◉ tables            ⢸⠤○ flag            ○ export            ⢸⠤○ logout          ⢸⠤✓ failover
-  ⢸⠤⠋ 3ds-flow        ⢸⠤○ signatures       ⠘ planned · 0/2     ⢸⠤✓ docs            ⢸⠤● conflicts ●1          ⠈⢺⠊· planner · 1/3   ⢸⠤○ cutover         ⢸ planned · 2/3     ⢸                   ⢸⠤⧗ load-test
-  ⢸⠤⧗ e2e            ⢀⢼⢄                   ⢈                   ⢸                   ⢸                          ⢸                   ⢸                   ⢸ ╰ ⠋ review        ○ oidc              ⢸
-  ⢸                  ⡇◉ webhooks ●1        ⢨                   ✓ totals-api        ○ offline                  ⢸                   ○ dual-write        ⢸                   ⢸ planned · 1/3     ○ sessions
-  ○ cards            ⠈⢺⠊● reviewer · 0/3   ⠆                   ⢸ planned · 3/3     ⢸ planned · 1/3 · @teo     ⠈⢧⡀                 ⢸ planned · 0/4     ⢸                   ⢸                   ⢸ planned · 1/3
-  ⢸ planned · 2/4     ⢸                  ⠤⠉                    ⢸                   ⢸                            ⠙⠢⣄⡀              ⢸                   ⢸                   ⢸                   ⢸
-  ⢸                   ⢸              ⡀⠤ ⠁                      ⢸                   ⢸                               ⠉⠓⠦⣀          ⢀⡼                   ⢸                    ⠳⣄                 ⣸
-  ⢸⡀                  ⢸          ⠄ ⠂⠈                          ⠈⢧⡀                ⣠⠏                                  ⠈⠳⡄ ⢀⣀⣠⠤⠴⠒⠚⠉                    ⢸                      ⠉⠒⠦⣄⡀        ⢀⣀⠤⠚⠁
-   ⠙⠲⢤⣀⡀              ⠘⡆    ⡀⠐ ⠉                                 ⠙⠢⣄⡀          ⣀⡤⠚⠁                                     ⢹⠞⠉                           ⢸                          ⠈⠑⢦⡀⢀⡠⠔⠒⠉⠁
-       ⠈⠉⠑⠒⠒⠤⠤⢄⣀⣀      ⣇ ⡠⠘                                         ⠉⠓⠦⣀   ⢀⡠⠖⠋⠁                                        ○ new-tables                  ⢸                            ⢀⢵⢏
-                 ⠉⠉⠒⠲⢤⣀⢸⡐                                              ⠈⠳⡄⡴⠋                                            ⢸ planned · 1/7               ⢸                            ⡇◉ sign-on
-                      ⢈⢿⢄                                                ⢹⠁                                             ⢸                             ○ invoices                   ⠈⢺⠊⠋ planner · 2/6
-                      ⡇◉ payments                                        ○ cart                                         ⢸                             ⢸ planned · 2/3               ⢸
-                      ⠈⢺⠊⠋ planner · 2/9                                 ⢸ planned · 4/6                                 ⠳⣄                           ⢸                             ⢸
-                       ⢸                                                 ⢸                                                ⠈⠙⠲⠤⣀⡀                      ⡸                             ⢸
-                       ⠸⡀                                                ⡸                                                     ⠈⠉⠒⠢⢤⣀           ⢀⣀⡠⠤⠒⠋                              ⡜
-                        ⠉⠓⠦⢄⣀⡀                                      ⣀⣀⠤⠖⠋⠁                                                          ⠈⠙⢦⡀ ⣀⡠⠤⠒⠒⠉⠉⠁                                  ⢠⠇
-                             ⠈⠉⠙⠒⠒⠢⠤⠤⠤⣀⣀⣀               ⢀⣀⣀⡠⠤⠤⠤⠒⠒⠚⠉⠉                                                                  ⢀⢵⢎⠁                                         ⡼
-                                        ⠈⠉⠉⠒⠒⠤⣄⡀  ⣀⡤⠔⠒⠊⠉⠉                                                                             ⡇◉ pricing-migration                        ⢀⠇
-                                               ⢉⢧⢏⠁                                                                                   ⠈⢺⡏⠋ coordinator · 3/10 · @sam              ⢸
-                                               ⡇◉ checkout-v2                                                                          ⢸⡇                                        ⢀⢼⢄
-                                               ⠈⢺⡏⠋ coordinator · 6/15 · @yan                                                          ⣸⡇                                        ⡇◉ sso-rollout
-                                                ⢸⡇                                                                                  ⢀⣠⡶⠛                                         ⠈⢺⡏⠋ coordinator · 2/6 · @mira
-                                                ⠸⢧⣄⣀⡀                                                                         ⣀⣀⡤⠴⠖⠚⠉⠁                                            ⢸⡇
-                                                   ⠈⠉⠉⠙⠓⠒⠒⠒⠲⠦⠤⠤⠤⠤⠤⠤⣄⣀⣀⣀⣀⣀⣀⣀⣀⡀                                         ⣀⣠⡤⠴⠒⠚⠉⠉⠁                                             ⢀⣀⣀⣀⣠⡤⠼⠇
-                                                                            ⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠙⠒⠒⠒⠒⠒⠒⠒⠒⠲⠤⠤⠤⠤⠤⠤⢤⣄⣀⣀⣀⣀⡀     ⣀⣴⠞⠋⠁        ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠶⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠛⠉⠉⠉⠉⠉⠉⠉⠁
-                                                                                                           ⠈⠉⠉⠙⢓⢶⢶⣿⢴⠖⠒⠒⠚⠋⠉⠉⠉⠉⠉⠉⠉
-                                                                                                              ⢔⢵⣷⣿⣷⣷⢕⠄
-                                                                                                              ⢕⢿⣿⣿⣿⣿⢗⠅
-                                                                                                              ⠑⢝⢟⢿⢟⢟⠕⠁
-                                                                                                         harbor · 4 people
+                                    ⢀⡀⣀⡀⣠⠠⠄⠤⠄⠤⠠⠂⠒⠂⠒⠐⠂⠒⠂⠒⠐⠂⠒⠂⠒⠐⠂⠢⠄⠤⠠⠄⠤⠄⣀⢀⡀⣀
+                         ⣀⢀⡄⠤⠄⠒⠐⠂⠉⠁⠉                                      ⠁⠉⠈⠁⠒⠂⠢⠠⠄⣀⡀⣀
+                ⢀⡀⡠⠄⠔⠐⠂⠉⠁                                                            ⠈⠈⠁⠒⠂⠤⠠⡀⣀
+          ⣀⠠⠄⠒⠂⠉                                                                             ⠈⠁⠙⠐⠆⠤⡀⣀
+  ⢠⠤⧗⡠verify-copy                         ⢠⠤● pdf ●1                                                ⠈⠈⠃⠢⠄⣀
+  ⢸⠤⠋ copy ⧗2                             ⢸⠤✓ fixtures                                                 ⢠⠤⧗ rates
+  ⢸⠤✓ schema          ⢠⠤○ cutover         ⢸⠤✓ csv                                                      ⢸⠤○ display                                                        ⢠⠤○ logout
+ ⢀⢼⢄                  ⢸⠤○ flag            ⢸                   ⢠⠤⧗ e2e             ⢠⠤○ signatures       ⢸                   ⢠⠤✓ docs            ⢠⠤○ sync-engine            ⢸⠤⠋ provider        ⢠⠤⧗ load-test
+ ⡇◉ tables            ⢸⠤○ reader          ○ export            ⢸⠤⠋ 3ds-flow ⧗1     ⢸⠤⠋ retry-queue      ○ tax-lines         ⢸⠤✓ cache           ⢸⠤● conflicts ●1           ⢸⠤✓ claims          ⢸⠤⠋ store ⧗1
+ ⠈⢺⠊· planner · 1/3   ⢸⠤⠋ writer          ⢸ planned · 2/3     ⢸⠤✓ card-form       ⢸⠤● stripe-listen ●1 ⠘ planned · 0/2     ⢸⠤✓ endpoint        ⢸⠤✓ local-store            ⢸                   ⢸⠤✓ failover
+  ⢸                   ⢸                   ⢸ ╰ ⠋ review        ⢸⠤✓ card-vault     ⢀⢼⢄                   ⢈                   ⢸                   ⢸                          ○ oidc              ⢸
+  ⢸                   ○ dual-write        ⢸                   ⢸                  ⡇◉ webhooks ●1        ⢨                   ✓ totals-api        ○ offline                  ⢸ planned · 1/3     ○ sessions
+  ⠈⢧⡀                 ⢸ planned · 0/4     ⢸                   ○ cards            ⠈⢺⠊● reviewer · 0/3   ⠆                   ⢸ planned · 3/3     ⢸ planned · 1/3 · @teo     ⢸                   ⢸ planned · 1/3
+    ⠙⠢⣄⡀              ⢸                   ⢸                   ⢸ planned · 2/4     ⢸                  ⠤⠉                    ⢸                   ⢸                          ⢸                   ⢸
+       ⠉⠓⠦⣀          ⢀⡼                   ⢸                   ⢸                   ⢸              ⡀⠤ ⠁                      ⢸                   ⢸                           ⠳⣄                 ⣸
+          ⠈⠳⡄ ⢀⣀⣠⠤⠴⠒⠚⠉                    ⢸                   ⢸⡀                  ⢸          ⠄ ⠂⠈                          ⠈⢧⡀                ⣠⠏                             ⠉⠒⠦⣄⡀        ⢀⣀⠤⠚⠁
+            ⢹⠞⠉                           ⢸                    ⠙⠲⢤⣀⡀              ⠘⡆    ⡀⠐ ⠉                                 ⠙⠢⣄⡀          ⣀⡤⠚⠁                                  ⠈⠑⢦⡀⢀⡠⠔⠒⠉⠁
+            ○ new-tables                  ⢸                        ⠈⠉⠑⠒⠒⠤⠤⢄⣀⣀      ⣇ ⡠⠘                                         ⠉⠓⠦⣀   ⢀⡠⠖⠋⠁                                       ⢀⢵⢏
+            ⢸ planned · 1/7               ⢸                                  ⠉⠉⠒⠲⢤⣀⢸⡐                                              ⠈⠳⡄⡴⠋                                           ⡇◉ sign-on
+            ⢸                             ○ invoices                              ⢈⢿⢄                                                ⢹⠁                                            ⠈⢺⠊⠋ planner · 2/6
+            ⢸                             ⢸ planned · 2/3                         ⡇◉ payments                                        ○ cart                                         ⢸
+             ⠳⣄                           ⢸                                       ⠈⢺⠊⠋ planner · 2/9                                 ⢸ planned · 4/6                                ⢸
+              ⠈⠙⠲⠤⣀⡀                      ⡸                                        ⢸                                                 ⢸                                              ⢸
+                   ⠈⠉⠒⠢⢤⣀           ⢀⣀⡠⠤⠒⠋                                         ⠸⡀                                                ⡸                                              ⡜
+                        ⠈⠙⢦⡀ ⣀⡠⠤⠒⠒⠉⠉⠁                                               ⠉⠓⠦⢄⣀⡀                                      ⣀⣀⠤⠖⠋⠁                                             ⢠⠇
+                          ⢀⢵⢎⠁                                                           ⠈⠉⠙⠒⠒⠢⠤⠤⠤⣀⣀⣀               ⢀⣀⣀⡠⠤⠤⠤⠒⠒⠚⠉⠉                                                   ⡼
+                          ⡇◉ pricing-migration                                                      ⠈⠉⠉⠒⠒⠤⣄⡀  ⣀⡤⠔⠒⠊⠉⠉                                                             ⢀⠇
+                          ⠈⢺⡏⠋ coordinator · 3/10 · @sam                                                   ⢉⢧⢏⠁                                                                   ⢸
+                           ⢸⡇                                                                              ⡇◉ checkout-v2                                                        ⢀⢼⢄
+                           ⠸⣧⡀                                                                             ⠈⢺⡏⠋ coordinator · 6/15 · @yan                                        ⡇◉ sso-rollout
+                             ⠉⠛⠒⠶⠤⢤⣄⣀⣀⣀                                                                     ⢸⡇                                                                   ⠈⢺⡏⠋ coordinator · 2/6 · @mira
+                                      ⠉⠉⠉⠉⠙⠒⠒⠒⠒⠒⠦⠤⠤⠤⠤⠤⢤⣀⣀⣀⣀⣀⣀⣀⡀                                             ⢸⡇                                                                    ⢸⡇
+                                                              ⠉⠉⠉⠉⠉⠉⠉⠙⠒⠒⠒⠒⠒⠒⠒⠦⠤⠤⠤⠤⠤⢤⣀⣀⣀⣀⣀⡀                ⢀⣤⠟⠁                                                             ⢀⣀⣀⣀⣀⣠⡤⠼⠇
+                                                                                         ⠉⠉⠉⠉⠛⠒⠒⠲⠦⠤⣤⣀⣀  ⣠⠶⠋            ⢀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⡤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠴⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠋⠉⠉⠉⠉⠉⠉⠉⠉⠁
+                                                                                                     ⢉⢝⢾⣯⢴⠖⠒⠒⠒⠚⠋⠉⠉⠉⠉⠉⠉⠉⠉
+                                                                                                    ⢔⢵⣷⣿⣷⣷⢕⠄
+                                                                                                    ⢕⢿⣿⣿⣿⣿⢗⠅
+                                                                                                    ⠑⢝⢟⢿⢟⢟⠕⠁
+                                                                                               harbor · 4 people

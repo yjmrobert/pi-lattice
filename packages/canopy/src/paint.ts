@@ -82,11 +82,14 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		});
 	}
 
-	// What waits on what: a dashed arc between the two, in no person's colour.
+	// What waits on what: a dashed arc between the two, in no person's colour. In order, two that are
+	// side by side, or on one frond, need none: the one that waits is the one after.
 	for (const place of plan.places.values()) {
 		for (const id of place.item.waitsOn) {
 			const other = plan.places.get(id);
 			if (!other || other.item.done) continue;
+			if (plan.follows.get(place.item.id) === other.item) continue;
+			if (plan.order === "dependency" && place.leaf && other.leaf && place.item.parent === other.item.parent) continue;
 			const [ax, ay, bx, by] = [place.col * 2 + 1, place.row * 4 - 1, other.col * 2 + 1, other.row * 4 - 1];
 			const reach = Math.hypot(bx - ax, by - ay);
 			const lift = Math.min(18, reach * 0.2 + 4);
@@ -162,6 +165,12 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 	grid.text(rootPlace.col - Math.floor(rootLabel.length / 2), rootPlace.row + 2, world.root.name, { fg: COLOR.root, bold: true });
 	grid.text(rootPlace.col - Math.floor(rootLabel.length / 2) + world.root.name.length, rootPlace.row + 2, rootLabel.slice(world.root.name.length), { fg: COLOR.dim });
 
+	// Between two side by side, the second of which waits on the first. It dims once the first is finished.
+	for (const [id, on] of plan.follows) {
+		const place = plan.places.get(id);
+		if (place) grid.text(place.col - 2, place.row, "›", on.done ? { fg: grey(place.item, COLOR.dim) } : { fg: grey(place.item, COLOR.wait), bold: true });
+	}
+
 	for (const place of plan.places.values()) {
 		const item = place.item;
 		if (item.level < 0) continue;
@@ -172,17 +181,29 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		const asking = item.asks > 0 || item.agent?.state === "asking";
 		const amber: Style = { fg: grey(item, COLOR.attention), level: blink || frame === 0 ? 1 : 0.45, bold: true };
 		const name = cut(item.name);
-		const nameStyle: Style = { fg: place.leaf && (item.done || item.planned) ? grey(item, COLOR.dim) : grey(item, place.leaf ? COLOR.text : COLOR.bright), bold: !place.leaf, ...(selected ? { bg: COLOR.select, fg: COLOR.bright } : {}) };
-
-		if (place.leaf) {
-			const glyph = item.failed ? "✗" : item.done ? "✓" : item.agent ? agentGlyph(item.agent, frame) : "○";
-			grid.text(col, row, glyph, item.failed ? { fg: COLOR.failed } : asking ? amber : { fg: item.planned ? grey(item, COLOR.dim) : color, level: strength(item, 1) });
-			grid.text(col + 2, row, name, nameStyle);
-			let at = col + 3 + [...name].length;
+		// Held with nobody on it: it is dim until what holds it is finished. What nobody is on and nothing holds reads like work.
+		const held = world.flow.held.has(item.id) && !item.agent && !landed;
+		const behind = world.flow.behind.get(item.id)?.length ?? 0;
+		const nameStyle: Style = { fg: held || (place.leaf && item.done) ? grey(item, COLOR.dim) : grey(item, place.leaf ? COLOR.text : COLOR.bright), bold: !place.leaf && !held, ...(selected ? { bg: COLOR.select, fg: COLOR.bright } : {}) };
+		/** After the name: how many things need someone here, and how many wait on this. */
+		const marks = (from: number): number => {
+			let at = from;
 			if (item.asks > 0) {
 				grid.text(at, row, `●${item.asks}`, amber);
 				at += 2 + String(item.asks).length;
 			}
+			if (behind > 0) {
+				grid.text(at, row, `⧗${behind}`, { fg: grey(item, COLOR.wait) });
+				at += 2 + String(behind).length;
+			}
+			return at;
+		};
+
+		if (place.leaf) {
+			const glyph = item.failed ? "✗" : item.done ? "✓" : item.agent ? agentGlyph(item.agent, frame) : held ? "⧗" : "○";
+			grid.text(col, row, glyph, item.failed ? { fg: COLOR.failed } : asking ? amber : held ? { fg: grey(item, COLOR.wait) } : { fg: item.planned ? grey(item, COLOR.dim) : color, level: strength(item, 1) });
+			grid.text(col + 2, row, name, nameStyle);
+			const at = marks(col + 3 + [...name].length);
 			if (item.owner !== "" && item.parent && item.parent.owner !== item.owner) grid.text(at, row, `@${item.owner}`, { fg: color, level: strength(item, 1) });
 			else if (options.letters) grid.text(at, row, letterOf(world, item.owner), { fg: color });
 			continue;
@@ -201,11 +222,7 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		}
 		grid.text(col, row, item.failed ? "✗" : landed ? "✓" : item.agent ? "◉" : "○", { fg: item.failed ? COLOR.failed : item.agent || landed ? color : grey(item, COLOR.dim), level: strength(item, 1) });
 		grid.text(col + 2, row, name, nameStyle);
-		let at = col + 3 + [...name].length;
-		if (item.asks > 0) {
-			grid.text(at, row, `●${item.asks}`, amber);
-			at += 2 + String(item.asks).length;
-		}
+		let at = marks(col + 3 + [...name].length);
 		if (options.folded?.has(item.id)) grid.text(at, row, `+${under(item)}`, { fg: grey(item, COLOR.dim) });
 
 		// Under the name: who sits here, how far along it is, and whose it is.
