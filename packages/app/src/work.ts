@@ -246,7 +246,7 @@ export class Work implements WorkPort {
 		if (action === "start") {
 			const before = readAccount(this.options.home);
 			if (before && !before.board) throw new Error(`You are on ${before.url}. Leave it first with /lattice server leave: a machine is on one server at a time.`);
-			const account = await this.onBoard(args[0] ?? this.options.name());
+			const account = await this.onBoard(args[0]?.replace(/^@/, "") ?? this.options.name());
 			this.sync();
 			await this.client?.refresh().catch(() => {});
 			const count = this.state()?.issues.length ?? 0;
@@ -263,7 +263,7 @@ export class Work implements WorkPort {
 				: `The board is shared. On another machine, teammates join with${addresses.length > 1 ? " the line for the network they are on" : ""}:\n\n${addresses.map((address) => `  /lattice server ${address}`).join("\n")}\n\nAnyone with that address can read and change everything on it. It speaks plain HTTP: share it only on a network you trust, such as a VPN. It is reachable while this machine is on; stop sharing with /lattice server share off.`;
 		}
 		if (action === "join") {
-			const [address, name] = args;
+			const [address, name] = [args[0], args[1]?.replace(/^@/, "")];
 			if (!address) throw new Error("Give the server's address: /lattice server https://lattice.example.com/#code");
 			const before = readAccount(this.options.home);
 			if ((await liveBoard(this.options.home))?.shared) throw new Error("This machine shares its own board. Stop sharing first with /lattice server share off, so teammates are not left on a board nobody looks at.");

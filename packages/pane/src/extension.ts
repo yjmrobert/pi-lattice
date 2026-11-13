@@ -1193,12 +1193,12 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	const introduce = async (ctx: ExtensionCommandContext, given?: string): Promise<boolean> => {
 		const state = homeLink()?.state;
 		if (!state) return false;
-		let name = given;
+		let name = given?.replace(/^@/, "");
 		if (!name) {
 			if (state.named || state.sharing) return true;
 			const typed = await ctx.ui.input(`The name your teammates will see you as. Enter keeps "${state.owner}".`, state.owner);
 			if (typed === undefined) return false;
-			name = typed.trim() || state.owner;
+			name = typed.trim().replace(/^@/, "") || state.owner;
 		}
 		try {
 			await homeLink()?.client.ui("sharing", { action: "name", args: [name] });
@@ -1291,7 +1291,8 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	/** Offer one of this person's sessions to a teammate. It is theirs as soon as they accept. */
 	const offer = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
 		await refresh();
-		const [first = "", to = ""] = arg.split(/\s+/).filter(Boolean);
+		const [first = "", given = ""] = arg.split(/\s+/).filter(Boolean);
+		const to = given.replace(/^@/, "");
 		const node = named(ctx, first);
 		const link = node ? linkOf(node.id) : undefined;
 		if (!node || !link) return;

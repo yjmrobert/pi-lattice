@@ -144,7 +144,7 @@ describe("a team, through the background host and its server", () => {
 		await eventually(() => sharing(yan)?.handoffs.some((h) => h.nodeId === kid.id && h.role === "recipient" && h.state === "offered"), "the offer to reach yan");
 		await run(sam, "cancel", kid.id);
 		await eventually(() => !sharing(yan)?.handoffs.some((h) => h.nodeId === kid.id && h.state === "offered"), "yan to see the offer withdrawn");
-		await run(sam, "offer", kid.id, "yan");
+		await run(sam, "offer", kid.id, "@yan"); // written the way people write each other
 		await eventually(() => sharing(yan)?.handoffs.some((h) => h.nodeId === kid.id && h.state === "offered"), "the second offer to reach yan");
 		await run(yan, "accept", kid.id);
 		await eventually(() => yan.daemon.host.node(kid.id)?.owner === "yan" && sam.daemon.host.node(kid.id)?.owner === "yan", "the session to be yan's again");
@@ -191,7 +191,7 @@ describe("a team, through the background host and its server", () => {
 		await expect(run(me, "name", "not a name")).rejects.toThrow(/cannot be used as a name/);
 
 		// The name is kept for every repository; this host uses it from its next start, and shares nothing until then.
-		expect(await run(me, "name", "robin")).toContain("next start");
+		expect(await run(me, "name", "@robin")).toContain("You go by robin");
 		expect(sharing(me)).toBeNull();
 		await joinAndSave(box.home, address, "robin");
 		// Renamed with nobody at it, the host stops by itself; the next terminal starts it under the new name.

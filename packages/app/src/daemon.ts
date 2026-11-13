@@ -270,7 +270,9 @@ class Sharing implements SharingPort {
 	}
 
 	async run(action: string, args: string[]): Promise<string> {
-		const [first = "", second = ""] = args;
+		// People write each other as @yan; the name is yan.
+		const bare = (name: string): string => name.replace(/^@/, "");
+		const [first = "", second = ""] = action === "name" ? args.map(bare) : action === "offer" ? [args[0], bare(args[1] ?? "")] : args;
 		if (action === "name") {
 			if (first === "") return this.host.owner;
 			const given = givenName(this.options);
