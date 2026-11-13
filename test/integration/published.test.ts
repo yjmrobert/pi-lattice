@@ -23,8 +23,9 @@ beforeAll(() => {
 	execFileSync(process.execPath, [join(repoRoot, "scripts/pack.mjs"), built], { stdio: "pipe" });
 	execFileSync("npm", ["pack", "--pack-destination", work], { cwd: built, stdio: "pipe" });
 	const tarball = join(work, readdirSync(work).find((name) => name.endsWith(".tgz")) as string);
-	// What Pi does with an npm source: install it, and leave what Pi provides out.
-	execFileSync("npm", ["install", "--prefix", join(work, "site"), "--omit=peer", "--offline", "--no-audit", "--no-fund", tarball], { stdio: "pipe" });
+	// What Pi does with an npm source: install it, and not look at what Pi provides at all. Leaving
+	// the peers out is not enough: npm would still ask the registry about them, and there is no network here.
+	execFileSync("npm", ["install", "--prefix", join(work, "site"), "--legacy-peer-deps", "--offline", "--no-audit", "--no-fund", tarball], { stdio: "pipe" });
 	installed = join(work, "site", "node_modules", "pi-lattice");
 }, 120_000);
 afterAll(() => rmSync(work, { recursive: true, force: true }));
