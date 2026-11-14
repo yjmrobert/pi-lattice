@@ -21,7 +21,7 @@ import { networkInterfaces } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { type Envelope, isId, type LeaseEvent, newHandoffId, type NodeMeta, validateEnvelope } from "@pi-lattice/protocol";
 import { type ChannelOptions, openChannel, type SecureChannel } from "./channel.ts";
-import { fingerprint, type Identity, type Signed } from "./identity.ts";
+import { fingerprint, type Identity, type Signed, verifySigned } from "./identity.ts";
 import { appendEvent, type Folded, foldRecord, type KeyLookup, type NodeRecord, parseRecord, type SharedMeta, toSharedMeta } from "./ledger.ts";
 import { type Network, networkKey } from "./network.ts";
 import type { PeerBook } from "./peers.ts";
@@ -180,6 +180,18 @@ interface Ask {
 	who: string;
 	at: number;
 }
+/**
+ * What a person says about asking for a session: that they ask, that they no longer do, or
+ * that the answer is no. Signed, so that whatever carries it between two hosts cannot say it
+ * for them.
+ */
+interface Word {
+	say: "ask" | "unask" | "declined";
+	nodeId: string;
+	/** Who it is said to. */
+	to: string;
+	at: number;
+}
 interface Transfer {
 	nodeId: string;
 	to: string;
@@ -238,6 +250,8 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private readonly failures = new Map<string, { count: number; retryAt: number }>();
 	private readonly key: Buffer;
 	private settling = false;
+	private readonly heardWords = new Map<string, number>(); // `person|node` -> when the newest thing they said about asking for it was signed
+	private wordAt = 0;
 	private readonly flushing = new Set<string>();
 	private readonly flushAgain = new Set<string>();
 	/** Channels to members working on something else, by `name|scope`. They carry reading, never handing over. */
@@ -683,13 +697,17 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		});
 	}
 
-	/** A frame handed over by the relay. Only what is said about handing over goes this way; who it is from is the relay's word. */
+	/**
+	 * A frame handed over by the relay. Only what is said about handing over goes this way. Who
+	 * it is from is the relay's word, which is not taken for it: each such request carries its
+	 * author's signature, as an event in an ownership log or as a signed word (see `said`).
+	 */
 	private onRelayed(from: string, frame: Frame): void {
 		const relay = this.options.relay;
 		if (!relay || this.stopped || typeof from !== "string") return;
 		if (frame?.t === "res") this.answered(from, frame);
 		else if (frame?.t === "req" && RELAYED.has(frame.op)) {
-			this.serve(from, frame.op, frame.p).then(
+			this.serve(from, frame.op, frame.p, true).then(
 				(r) => relay.send(from, { t: "res", id: frame.id, ok: true, r } satisfies Frame),
 				(error: unknown) => relay.send(from, { t: "res", id: frame.id, ok: false, e: error instanceof Error ? error.message : String(error) } satisfies Frame),
 			).catch(() => {});
@@ -719,7 +737,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		}
 	}
 
-	private async serve(link: string, op: string, params: unknown): Promise<unknown> {
+	private async serve(link: string, op: string, params: unknown, relayed = false): Promise<unknown> {
 		const p = (params ?? {}) as Record<string, unknown>;
 		const peer = personOf(link);
 		if (link !== peer && !GUEST_OPS.has(op)) throw new Error("That needs both of you to be working in the same repository.");
@@ -752,10 +770,13 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 				return {};
 			}
 			case "ask":
+				this.said(peer, "ask", p.nodeId, p.word, relayed);
 				return this.asked(peer, p.nodeId);
 			case "unask":
+				this.said(peer, "unask", p.nodeId, p.word, relayed);
 				return this.dropRequest(p.nodeId, peer);
 			case "declined":
+				this.said(peer, "declined", p.nodeId, p.word, relayed);
 				return this.wasDeclined(peer, p.nodeId);
 			case "transfer":
 				return this.exclusive(() => this.receiveTransfer(peer, p as unknown as Transfer));
@@ -1443,7 +1464,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		// Recorded first: their approval may come back before the request returns.
 		writeFileSync(this.askPath("asked", nodeId), JSON.stringify({ nodeId, who: node.owner, at: this.now() } satisfies Ask));
 		try {
-			await this.request(node.owner, "ask", { nodeId });
+			await this.request(node.owner, "ask", { nodeId, word: this.word("ask", nodeId, node.owner) });
 		} catch (error) {
 			this.forget("asked", nodeId);
 			throw error;
@@ -1457,7 +1478,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		const ask = this.readAsk("asked", nodeId);
 		this.forget("asked", nodeId);
 		this.emit("changed");
-		if (ask && this.there(ask.who)) await this.request(ask.who, "unask", { nodeId }).catch(() => {});
+		if (ask && this.there(ask.who)) await this.request(ask.who, "unask", { nodeId, word: this.word("unask", nodeId, ask.who) }).catch(() => {});
 	}
 
 	/** By the owner: say yes to someone who asked. The session is theirs as soon as their host hears. */
@@ -1470,7 +1491,37 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	async decline(nodeId: string, from: string): Promise<void> {
 		this.forget("requests", nodeId, from);
 		this.emit("changed");
-		if (this.there(from)) await this.request(from, "declined", { nodeId }).catch(() => {});
+		if (this.there(from)) await this.request(from, "declined", { nodeId, word: this.word("declined", nodeId, from) }).catch(() => {});
+	}
+
+	private word(say: Word["say"], nodeId: string, to: string): Signed<Word> {
+		// Never the same moment twice, so that what was said last is always the newest.
+		this.wordAt = Math.max(this.now(), this.wordAt + 1);
+		return this.identity.sign<Word>({ say, nodeId, to, at: this.wordAt });
+	}
+
+	/**
+	 * Check that `peer` really said this about asking for a session. On a connection to their
+	 * host, the connection already proves who is speaking. Carried by something else, such as
+	 * the team's server, only their signature does: it must be theirs, say exactly this, to this
+	 * person, recently, and be newer than the last thing they said about that session, so that
+	 * an old request cannot be played back after it was withdrawn.
+	 */
+	private said(peer: string, say: Word["say"], nodeId: unknown, word: unknown, relayed: boolean): void {
+		const signed = word as Partial<Signed<Word>> | undefined;
+		const body = signed?.body;
+		if (!body || typeof signed.sig !== "string") {
+			if (relayed) throw new Error("That is not signed by the person it is from.");
+			return;
+		}
+		const key = this.book.keyOf(peer);
+		const window = this.options.offerTtlMs ?? 24 * 3600_000;
+		if (signed.by !== peer || !key || !verifySigned(signed as Signed<Word>, key) || body.say !== say || body.nodeId !== nodeId || body.to !== this.identity.name || typeof body.at !== "number" || Math.abs(this.now() - body.at) > window) {
+			throw new Error("That is not signed by the person it is from.");
+		}
+		const about = `${peer}|${body.nodeId}`;
+		if (body.at <= (this.heardWords.get(about) ?? Number.NEGATIVE_INFINITY)) throw new Error("That was said before something newer about the same session.");
+		this.heardWords.set(about, body.at);
 	}
 
 	/** A teammate asks for a session owned here. */

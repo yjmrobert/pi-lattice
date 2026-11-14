@@ -64,6 +64,7 @@ If the connection drops during the release, the release still stands. The packag
 - **Forged ownership.** Ownership is recomputed from a log of signed events. An event not signed by the person it names, or one the state machine would not allow, is ignored along with everything after it.
 - **Contradicting histories.** A host accepts a log only if it extends the one it already holds. A log that disagrees is refused and reported.
 - **Strangers.** Only someone who holds the team's secret can connect at all, and they have to prove it on every connection. The server gives the secret to those who joined it.
+- **Words put in someone's mouth.** Asking for a session, withdrawing that and declining go through the server, signed by whoever says them. The server cannot say them for anyone, and cannot play back a request that was withdrawn.
 - **Impostors.** A known name with a different key is refused until you accept the new key.
 - **Eavesdropping.** Everything between two hosts is encrypted, with keys that exist only for that connection.
 

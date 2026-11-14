@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEnvelope, type Envelope, type NodeMeta, newNodeId } from "@pi-lattice/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CollabSession, type HostPort, Identity, type Network, PeerBook, TcpTransport } from "../src/index.ts";
+import { CollabSession, type HostPort, Identity, type Network, PeerBook, type Relay, TcpTransport } from "../src/index.ts";
 
 /** An in-memory stand-in for a lattice host. */
 class FakeHost extends EventEmitter implements HostPort {
@@ -119,14 +119,14 @@ const enrol = (collab: CollabSession, name: string, scope: string, where?: strin
 };
 
 /** A person's host. `code` is where a teammate's host is; without it nobody has told them of anyone. */
-const seat = (name: string, code?: string, keyDir?: string, network = TEAM): Seat => {
+const seat = (name: string, code?: string, keyDir?: string, network = TEAM, relay?: Relay): Seat => {
 	const host = new FakeHost(name);
 	const dir = join(root, keyDir ?? name);
 	mkdirSync(join(dir, "project"), { recursive: true });
 	const collab = new CollabSession({
 		host, identity: Identity.loadOrCreate(join(dir, "keys"), name), peers: new PeerBook(join(dir, "people.json")), network,
 		transport: new TcpTransport({ host: "127.0.0.1", port: 0 }), dir: join(dir, "collab"), projectDir: join(dir, "project"),
-		advertise: "127.0.0.1", redialMs: 0, offerTtlMs: 60_000, requestTimeoutMs: 5000, now: () => clock,
+		advertise: "127.0.0.1", redialMs: 0, offerTtlMs: 60_000, requestTimeoutMs: 5000, now: () => clock, ...(relay ? { relay } : {}),
 	});
 	enrol(collab, name, "", code);
 	sessions.push(collab);
@@ -424,6 +424,89 @@ describe("asking for a session", () => {
 		await sam.collab.ask(kid.id);
 		clock += 61_000;
 		expect([yan.collab.requests(), sam.collab.requests()]).toEqual([[], []]);
+	});
+});
+
+describe("what is said about asking, carried by something other than the two hosts", () => {
+	interface Carried { from: string; to: string; frame: { t: string; id: number; op?: string; ok?: boolean; e?: string; p?: unknown } }
+	/** Stands in for the team's server: it carries frames, and could say anything about who they are from. */
+	class Carrier {
+		readonly handlers = new Map<string, (from: string, frame: unknown) => void>();
+		readonly carried: Carried[] = [];
+		for(name: string): Relay {
+			return {
+				send: async (to, frame) => this.hand(name, to, frame),
+				listen: (handler) => void this.handlers.set(name, handler),
+				online: (other) => this.handlers.has(other),
+			};
+		}
+		hand(from: string, to: string, frame: unknown): void {
+			const copy = JSON.parse(JSON.stringify(frame)) as Carried["frame"];
+			this.carried.push({ from, to, frame: copy });
+			this.handlers.get(to)?.(from, copy);
+		}
+		answerTo(id: number): Carried["frame"] | undefined {
+			return this.carried.find((entry) => entry.frame.t === "res" && entry.frame.id === id)?.frame;
+		}
+	}
+	const carriedPair = async () => {
+		const carrier = new Carrier();
+		const yan = seat("yan", undefined, undefined, TEAM, carrier.for("yan"));
+		const top = yan.host.add("checkout");
+		const kid = yan.host.add("impl", top.id);
+		await yan.collab.start();
+		const sam = seat("sam", whereIs(yan.collab), undefined, TEAM, carrier.for("sam"));
+		await sam.collab.start();
+		await until(() => yan.collab.isOnline("sam") && sam.host.node(kid.id), "sam to see yan's nodes");
+		return { carrier, yan, sam, kid };
+	};
+
+	it("takes a request its asker signed", async () => {
+		const { carrier, yan, sam, kid } = await carriedPair();
+		await sam.collab.ask(kid.id);
+		expect(carrier.carried.some((entry) => entry.frame.op === "ask")).toBe(true); // it did go that way
+		expect(yan.collab.requests()).toMatchObject([{ nodeId: kid.id, from: "sam", role: "owner" }]);
+	});
+
+	it("does not take the carrier's word for who asks", async () => {
+		const { carrier, yan, kid } = await carriedPair();
+		carrier.hand("sam", "yan", { t: "req", id: 9001, op: "ask", p: { nodeId: kid.id } });
+		await until(() => carrier.answerTo(9001), "an answer");
+		expect(carrier.answerTo(9001)).toMatchObject({ ok: false, e: expect.stringMatching(/not signed/) });
+		expect(yan.collab.requests()).toEqual([]);
+	});
+
+	it("does not take a request signed by someone else, or made to someone else", async () => {
+		const { carrier, yan, sam, kid } = await carriedPair();
+		await sam.collab.ask(kid.id);
+		const asked = carrier.carried.find((entry) => entry.frame.op === "ask") as Carried;
+		await sam.collab.withdraw(kid.id);
+		// sam's own words, handed over as if kim had said them.
+		carrier.hand("kim", "yan", { ...asked.frame, id: 9002 });
+		await until(() => carrier.answerTo(9002), "an answer");
+		expect(carrier.answerTo(9002)).toMatchObject({ ok: false });
+		expect(yan.collab.requests()).toEqual([]);
+	});
+
+	it("does not let a withdrawn request be played back", async () => {
+		const { carrier, yan, sam, kid } = await carriedPair();
+		await sam.collab.ask(kid.id);
+		const asked = carrier.carried.find((entry) => entry.frame.op === "ask") as Carried;
+		await sam.collab.withdraw(kid.id);
+		expect(yan.collab.requests()).toEqual([]);
+		carrier.hand("sam", "yan", { ...asked.frame, id: 9003 });
+		await until(() => carrier.answerTo(9003), "an answer");
+		expect(carrier.answerTo(9003)).toMatchObject({ ok: false, e: expect.stringMatching(/before something newer/) });
+		expect(yan.collab.requests()).toEqual([]);
+	});
+
+	it("does not take the carrier's word that the owner said no", async () => {
+		const { carrier, sam, kid } = await carriedPair();
+		await sam.collab.ask(kid.id);
+		carrier.hand("yan", "sam", { t: "req", id: 9004, op: "declined", p: { nodeId: kid.id } });
+		await until(() => carrier.answerTo(9004), "an answer");
+		expect(carrier.answerTo(9004)).toMatchObject({ ok: false });
+		expect(sam.collab.requests()).toMatchObject([{ nodeId: kid.id, role: "asker" }]); // still asking
 	});
 });
 

@@ -28,7 +28,7 @@ A host that is not on a server used a network joined by a code, as before. That 
 
 It can see who offered what to whom, by session id and name. It holds the secret that admits a host to the team's connections, so whoever controls the server can connect as a member; it cannot sign as one, because it has no private key. It can refuse to pass something on. It cannot read a session.
 
-What is handed over is signed by its author where it matters: an acceptance or a cancellation is an event in the owner's log and is checked against the pinned key, and so is the record that carries an offer. Asking and declining are not signed; for those the server's word on who sent them is taken.
+What is handed over is signed by its author where it matters: an acceptance or a cancellation is an event in the owner's log and is checked against the pinned key, and so is the record that carries an offer. Asking, withdrawing a request and declining were not signed at first, and the server's word on who sent them was taken. They are signed now: each names the session and who it is said to, and a host takes one only when it is newer than the last thing that person said about that session, so the server can neither say them for someone nor play an old one back.
 
 ## Consequences
 
