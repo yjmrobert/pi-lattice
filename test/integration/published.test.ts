@@ -97,7 +97,7 @@ describe("the published package", () => {
 		await pi.see(/roles\s+protocol · reporting · worker/);
 		pi.press("c");
 		const canopy = await pi.see("close chat");
-		expect(canopy.some((row) => (row.split("│")[0] ?? "").includes("payments"))).toBe(true);
+		expect(canopy.some((row) => (row.split(/[│┃]/)[0] ?? "").includes("payments"))).toBe(true);
 		expect(readFileSync(join(stateDir, "daemon.err"), "utf8")).toBe("");
 	}, 90_000);
 });

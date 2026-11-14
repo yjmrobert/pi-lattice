@@ -21,6 +21,8 @@ export const spin = (frame: number): string => SPINNER[Math.floor(frame) % SPINN
 export interface PaintOptions {
 	/** The item the cursor is on. */
 	selected?: string;
+	/** The keyboard is somewhere else: what is selected is marked, quietly. */
+	away?: boolean;
 	/** Counts up twelve times a second. Zero draws a still. */
 	frame?: number;
 	/** Only this person's work keeps its colour. */
@@ -184,7 +186,7 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		// Held with nobody on it: it is dim until what holds it is finished. What nobody is on and nothing holds reads like work.
 		const held = world.flow.held.has(item.id) && !item.agent && !landed;
 		const behind = world.flow.behind.get(item.id)?.length ?? 0;
-		const nameStyle: Style = { fg: held || (place.leaf && item.done) ? grey(item, COLOR.dim) : grey(item, place.leaf ? COLOR.text : COLOR.bright), bold: !place.leaf && !held, ...(selected ? { bg: COLOR.select, fg: COLOR.bright } : {}) };
+		const nameStyle: Style = { fg: held || (place.leaf && item.done) ? grey(item, COLOR.dim) : grey(item, place.leaf ? COLOR.text : COLOR.bright), bold: !place.leaf && !held, ...(selected ? (options.away ? { bg: COLOR.selectAway } : { bg: COLOR.select, fg: COLOR.bright, bold: true }) : {}) };
 		/** After the name: how many things need someone here, and how many wait on this. */
 		const marks = (from: number): number => {
 			let at = from;
@@ -262,7 +264,7 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 			const more = index === 1 && item.buds.length > 2 ? ` +${item.buds.length - 2}` : "";
 			grid.text(col + 2, row + 2 + index, "╰", { fg: grey(bud, COLOR.faint) });
 			grid.text(col + 4, row + 2 + index, bud.failed ? "✗" : bud.done ? "✓" : bud.agent ? agentGlyph(bud.agent, frame) : "○", bud.asks > 0 || bud.agent?.state === "asking" ? amber : { fg: hue(bud), level: strength(bud, 1) });
-			grid.text(col + 6, row + 2 + index, `${cut(bud.name, 16)}${more}`, { fg: bud.id === options.selected ? COLOR.bright : grey(bud, COLOR.dim), ...(bud.id === options.selected ? { bg: COLOR.select } : {}) });
+			grid.text(col + 6, row + 2 + index, `${cut(bud.name, 16)}${more}`, { fg: bud.id === options.selected ? COLOR.bright : grey(bud, COLOR.dim), ...(bud.id === options.selected ? { bg: options.away ? COLOR.selectAway : COLOR.select } : {}) });
 		});
 	}
 	return grid;

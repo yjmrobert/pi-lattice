@@ -58,7 +58,8 @@ const withTree = async (options: { cols?: number; rows?: number; env?: Record<st
 };
 /** The tree's part of a row and the chat's, split at the divider between them. */
 const split = (row: string): [string, string] => {
-	const at = row.indexOf("│");
+	// Thin while the chat has the keyboard, heavy while the tree does.
+	const at = row.search(/[│┃]/);
 	return at < 0 ? [row, ""] : [row.slice(0, at), row.slice(at + 1)];
 };
 const ALT_L_RELEASED = "\x1b[108;3:3u";
@@ -72,12 +73,15 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		expect(beside.some((row) => split(row)[0].includes("◉ work"))).toBe(true);
 		expect(beside.some((row) => split(row)[1].includes("alt+l moves to the tree"))).toBe(true);
 		expect(split(beside.at(-1) as string)[0]).not.toContain("move");
+		// The line between them says which side has the keyboard: thin for the chat's.
+		expect(beside.join("")).not.toContain("┃");
 
 		pi.press(KEY.altL);
 		// A terminal that reports releases says the key was let go; that is not a second press.
 		pi.press(ALT_L_RELEASED);
 		const tree = await pi.see("close chat");
 		expect(split(tree.at(-1) as string)[0]).toContain("move");
+		expect(tree.every((row) => row.includes("┃"))).toBe(true);
 		// The keys are the tree's now: nothing is typed into Pi's editor.
 		pi.press("zzz");
 		await new Promise((resolve) => setTimeout(resolve, 300));
@@ -174,7 +178,7 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		const asked = await pi.waitFor((_screen, rows) => rows.some((row) => split(row)[0].includes("? kid → work")), "what waits, under the tree", 30_000);
 		expect(asked.map((row) => split(row)[0]).join("\n")).toMatch(/ o {2}reject, say why/);
 		pi.press("o");
-		await pi.see("Reject, and tell work:");
+		await pi.see("Reject, and tell work ›");
 		// Every key is text while the line is typed: `a` does not approve.
 		pi.press("say mangosteen");
 		await pi.see("say mangosteen▏");

@@ -146,7 +146,14 @@ describe("acting", () => {
 		for (const key of "say no") step = interpret(w, step.state, key, W, H, asking);
 		const lines = renderPlain(w, step.state, W, H, 0, { animations: [], now: 0, asking });
 		expect(lines.join("\n")).toContain("Run it against the live account?");
-		expect(lines.join("\n")).toMatch(/Instead, tell copy: say no▏ +⏎ +send +esc +cancel/);
+		// The line is written under the question, where its answers were; the foot says how to send it.
+		const at = lines.findIndex((line) => line.includes("Run it against the live account?"));
+		expect(lines[at + 1]).toContain("Instead, tell copy › say no▏");
+		expect(lines[at + 1]).not.toMatch(/ y {2}yes/);
+		expect(lines.at(-1)).toMatch(/^ +⏎ +send +esc +cancel$/);
+		// Before it is typed, a key the question took is not listed again at the foot with its other meaning.
+		expect(renderPlain(w, initial(w, "copy"), W, H, 0, { animations: [], now: 0, asking }).at(-1)).not.toMatch(/ o {2}as filed/);
+		expect(renderPlain(w, initial(w, "copy"), W, H).at(-1)).toMatch(/ o {2}as filed/);
 		expect(interpret(w, step.state, "escape", W, H, asking).state.typing).toBeUndefined();
 		step = interpret(w, step.state, "enter", W, H, asking);
 		expect(step.actions).toEqual([{ do: "answer", id: "q:copy:1", key: "o", text: "say no" }]);

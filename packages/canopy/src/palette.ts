@@ -15,7 +15,9 @@ export const COLOR = {
 	attention: "#e8b755",
 	failed: "#f0717b",
 	root: "#e06bd0",
-	select: "#1b2a44",
+	/** Behind what is selected while the canopy has the keyboard, and while it does not. */
+	select: "#27457a",
+	selectAway: "#222936",
 	wait: "#8fa3c8",
 } as const;
 

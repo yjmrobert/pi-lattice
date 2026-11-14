@@ -309,7 +309,7 @@ function drawerWidth(): number {
 	// Too narrow for both: whichever has the keyboard has the screen.
 	if (columns < BESIDE_WIDTH) return shared.at === "chat" ? columns : 0;
 	// The tree keeps its floor, and the column that divides the two.
-	return Math.max(50, Math.min(columns - HOME_FLOOR.cols - 1, Math.round(columns * 0.55)));
+	return Math.max(50, Math.min(columns - HOME_FLOOR.cols - 2, Math.round(columns * 0.55)));
 }
 
 /** Move the chat towards where it belongs, a few steps at a time, and stop when it is there. */
@@ -581,11 +581,12 @@ function installPane(tui: Hooked): void {
 	// Where the canopy is what Pi opens on, it takes the pane's place and the chat slides in on its right.
 	const tree: Component = {
 		render: (width) => {
-			const lines = shared.canopy?.view.render(shared.drawer > 0 ? width - 1 : width) ?? [];
+			// The divider and a column of air: Pi writes some of its lines from the first column.
+			const lines = shared.canopy?.view.render(shared.drawer > 0 ? width - 2 : width) ?? [];
 			if (shared.drawer === 0) return lines;
-			// As beside the pane: the divider lights up on the side that has the keyboard.
-			const divider = shared.at === "tree" ? shared.paint.accent("│") : shared.paint.dim("│");
-			return lines.map((line) => `${line}${divider}`);
+			// The divider says which side has the keyboard: heavy and lit on the tree's, thin and dim on the chat's.
+			const divider = shared.at === "tree" ? shared.paint.accent("┃") : shared.paint.dim("│");
+			return lines.map((line) => `${line}${divider} `);
 		},
 		invalidate() {},
 	};

@@ -263,6 +263,8 @@ function wrap(text: string, width: number): string[] {
 
 const DIM: Style = { fg: COLOR.dim };
 const KEYCAP: Style = { fg: COLOR.bright, bg: "#272e3d" };
+/** A key that answers what a session asks. */
+const ANSWER: Style = { fg: "#14100a", bg: COLOR.attention, bold: true };
 
 /** Write runs of styled text one after another, and say where the next would start. */
 function run(grid: Grid, col: number, row: number, parts: Array<[text: string, style?: Style | undefined]>): number {
@@ -314,9 +316,14 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 	return grid;
 }
 
-function footer(world: World, state: CanopyState, width: number, leave?: ReadonlyArray<readonly [string, string]>, away = false): Grid {
+function footer(world: World, state: CanopyState, width: number, leave?: ReadonlyArray<readonly [string, string]>, away = false, asking?: Asking, banded = false): Grid {
 	const grid = new Grid(width, FOOTER);
 	const item = state.selected ? world.items.get(state.selected) : undefined;
+	if (state.typing?.what === "answer" && banded) {
+		// The line itself is in the band, under the question: here are only its keys.
+		run(grid, 1, 0, [[" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]]);
+		return grid;
+	}
 	if (state.typing) {
 		const room = Math.max(8, width - [...state.typing.label].length - 30);
 		const shown = [...state.typing.text].slice(-room).join("");
@@ -341,8 +348,11 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 		keys.push([".", "next to start"], ["o", state.order === "dependency" ? "as filed" : "first to last"], ["1-9", "one person"], ["a", "panel"], ["shift+←→", "pan"]);
 		if (!leave) keys.push(["esc", "back"]);
 	}
+	// A key that answers what is asked means only that while it is asked: it is not listed twice.
+	const taken = new Set(away ? [] : (asking?.keys ?? []).map((entry) => keyName(entry.key)));
 	let at = 1;
 	for (const [key, does] of keys) {
+		if (taken.has(key)) continue;
 		if (at + key.length + does.length + 4 > width) break;
 		at = run(grid, at, 0, [[` ${key} `, KEYCAP], [` ${does}   `, DIM]]);
 	}
@@ -354,7 +364,7 @@ const keyName = (key: string): string => (key === "enter" ? "⏎" : key);
 const ASKING_LINES = 8;
 
 /** What the selected session asks, in full, with the keys that answer it: a band under the tree, as wide as the tree's window. */
-function askingBand(asking: Asking, width: number, away: boolean): Grid {
+function askingBand(asking: Asking, width: number, away: boolean, typing?: { label: string; text: string }): Grid {
 	const amber: Style = { fg: COLOR.attention, bold: true };
 	const room = Math.max(10, width - 5);
 	const all = asking.text.split("\n").flatMap((line) => (line.trim() === "" ? [""] : wrap(line, room)));
@@ -365,12 +375,20 @@ function askingBand(asking: Asking, width: number, away: boolean): Grid {
 	run(grid, 1, 1, [["? ", amber], [cut(asking.title, Math.max(8, width - 6 - more.length)), { fg: COLOR.bright, bold: true }]]);
 	if (more) grid.text(Math.max(1, width - 1 - more.length), 1, more, DIM);
 	text.forEach((line, index) => grid.text(3, 2 + index, line, { fg: COLOR.text }));
+	const foot = 2 + text.length;
+	// The line typed instead of an answer is written where the answers were: under what it answers.
+	if (typing) {
+		const room = Math.max(8, width - [...typing.label].length - 8);
+		run(grid, 3, foot, [[`${typing.label} `, amber], ["› ", { fg: COLOR.attention, level: 0.6 }], [`${[...typing.text].slice(-room).join("")}▏`, { fg: COLOR.bright }]]);
+		return grid;
+	}
 	// The keys are not the canopy's while the keyboard is elsewhere: then the band only says what is asked.
+	// They are the one thing on the screen to press, so they are amber where every other key is grey.
 	let at = 2;
 	for (const { key, does } of away ? [] : asking.keys) {
 		const name = keyName(key);
 		if (at + name.length + does.length + 5 > width) break;
-		at = run(grid, at, 2 + text.length, [[` ${name} `, KEYCAP], [` ${does}   `, DIM]]);
+		at = run(grid, at, foot, [[` ${name} `, ANSWER], [` ${does}   `, { fg: COLOR.text }]]);
 	}
 	return grid;
 }
@@ -525,17 +543,17 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const view = state.framed ? state : frame(state, plan, width, height, true);
 	const win = windowOf(view, width, height);
 	const side = sideWidth(view, width);
-	const tree = paint(world, plan, { frame: tick, letters: view.letters, folded: view.folded, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
+	const tree = paint(world, plan, { frame: tick, letters: view.letters, folded: view.folded, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(moving?.away ? { away: true } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
 	const blink = tick === 0 || tick % BEAT < BEAT / 2;
 	for (const edge of edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
 	// What is asked takes the foot of the tree's window. The rows it takes are the ones the selection is not in.
-	const band = moving?.asking && win.height > 16 ? lines(askingBand(moving.asking, win.width, moving.away === true)) : [];
+	const band = moving?.asking && win.height > 16 ? lines(askingBand(moving.asking, win.width, moving.away === true, view.typing?.what === "answer" ? view.typing : undefined)) : [];
 	const left = win.height - band.length;
 	const selected = view.selected ? plan.places.get(view.selected) : undefined;
 	const hidden = selected !== undefined && selected.row - view.camera.row + 2 >= left;
 	const canvas = [...lines(tree, view.camera.col, view.camera.row + (hidden ? band.length : 0), win.width, left), ...band];
 	const panel = side > 0 ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick)) : [];
-	return [...lines(header(world, view, width, tick)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away))];
+	return [...lines(header(world, view, width, tick)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away, moving?.asking, band.length > 0))];
 }
 
 /** The screen as terminal lines, exactly `height` of them and `width` cells wide. */
