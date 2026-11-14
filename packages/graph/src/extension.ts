@@ -5,7 +5,7 @@
  */
 import { connect, type Socket } from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { assignmentFromEnv, childrenOf, describeScheme, emitEvent, formatTree, formatWork, type HostAssignment, HostClient, type IssueChange, isHeld, issueLine, onEvent, PROTOCOL_VERSION, sameAssignment, WORKSPACE_MODES, type WorkspaceMode, waitingFor } from "@pi-lattice/protocol";
+import { assignmentFromEnv, childrenOf, describeScheme, directionsFor, emitEvent, formatTree, formatWork, type HostAssignment, HostClient, type IssueChange, isHeld, issueLine, onEvent, PROTOCOL_VERSION, sameAssignment, WORKSPACE_MODES, type WorkspaceMode, waitingFor } from "@pi-lattice/protocol";
 import { Type } from "typebox";
 
 const GRAPH_ENTRY = "lattice:graph";
@@ -222,7 +222,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		name: "work_add",
 		label: "Add work",
 		description:
-			"Add an issue to the team's work: an epic, a feature, a story, a task, a bug, or whatever types the team has. Nothing is started; it is work written down, for people and sessions to pick up. Everyone on the team sees it at once.",
+			"Add an issue to the team's work: an epic, a feature, a story, a task, a bug, or whatever types the team has. Nothing is started; it is work written down, for sessions to pick up. Everyone on the team sees it at once. It goes last under its parent unless place says otherwise.",
 		promptSnippet: "Add an issue to the team's work",
 		promptGuidelines: [
 			"Use work_add to write work down before anyone starts on it: the larger pieces first, then what each breaks into, with parent naming the issue each belongs to.",
@@ -240,6 +240,8 @@ export default function graphExtension(pi: ExtensionAPI): void {
 			waits_on: Type.Optional(Type.Array(Type.Number(), { description: "The numbers of the issues that must be finished before this one is ready" })),
 			human: Type.Optional(Type.Boolean({ description: "True when it is for a person to do, not for a session" })),
 			repo: Type.Optional(Type.String({ description: "The repository it is to be done in, when that is not the one its parent is in" })),
+			place: Type.Optional(Type.Union([Type.Literal("first"), Type.Literal("last"), Type.Object({ before: Type.Number() }), Type.Object({ after: Type.Number() })], { description: 'Where it goes among the issues under the same parent: "first", "last", or {"before": n} or {"after": n} with the number of an issue beside it. Sessions take work in this order' })),
+			why: Type.Optional(Type.String({ description: "Why, in a sentence. It is kept with the change and is what a person reads later to see what was done while they were away" })),
 		}),
 		async execute(_toolCallId, params) {
 			const change: IssueChange = {
@@ -253,8 +255,9 @@ export default function graphExtension(pi: ExtensionAPI): void {
 				...(params.waits_on !== undefined ? { waitsOn: params.waits_on } : {}),
 				...(params.human !== undefined ? { human: params.human } : {}),
 				...(params.repo !== undefined ? { repo: params.repo } : {}),
+				...(params.place !== undefined ? { place: params.place } : {}),
 			};
-			const { issue } = await host().request("work", { request: { do: "add", change } });
+			const { issue } = await host().request("work", { request: { do: "add", change, ...(params.why ? { why: params.why } : {}) } });
 			if (!issue) throw new Error("The server did not say what it made.");
 			return { content: [{ type: "text", text: `Added ${issueLine(issue)}${issue.parent !== undefined ? `, under #${issue.parent}` : ""}. Nobody is on it and nothing has started.` }], details: { issue } };
 		},
@@ -268,7 +271,9 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		promptSnippet: "Change an issue, or comment on it",
 		promptGuidelines: [
 			"Use work_update with a comment to record on an issue what was decided or found, so that the people and sessions who come to it later have it.",
-			"You do not need work_update to move the issue you are on: being on it starts it, and sending your result moves it on by the team's rules. Leave closing an issue to the person who looks at the result, unless you were told to close it.",
+			"You do not need work_update to move the issue you are on: being on it starts it, and work_done moves it on by the team's rules. Closing an issue is for the session that checks its result: the one tending the branch, or a reviewer. Do not close your own work.",
+			"Give why on every change. Nobody keeps these issues by hand: what you change is read later by a person who was not watching.",
+			"To say what comes first, use place. Sessions take work in the order of the tree, so order is how priority is said.",
 			"When you open a pull request or push a branch for an issue, record where it is in the issue's url field, when the team has one.",
 		],
 		parameters: Type.Object({
@@ -285,12 +290,14 @@ export default function graphExtension(pi: ExtensionAPI): void {
 			human: Type.Optional(Type.Boolean({ description: "True when it is for a person to do, not for a session" })),
 			repo: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "The repository it is to be done in" })),
 			comment: Type.Optional(Type.String({ description: "A comment to add" })),
+			place: Type.Optional(Type.Union([Type.Literal("first"), Type.Literal("last"), Type.Object({ before: Type.Number() }), Type.Object({ after: Type.Number() })], { description: 'Where it goes among the issues under the same parent: "first", "last", or {"before": n} or {"after": n} with the number of an issue beside it. Sessions take work in this order' })),
+			why: Type.Optional(Type.String({ description: "Why, in a sentence. It is kept with the change and is what a person reads later to see what was done while they were away" })),
 		}),
 		async execute(_toolCallId, params) {
-			const { number, comment, waits_on, ...rest } = params;
+			const { number, comment, waits_on, why, ...rest } = params;
 			const change = Object.fromEntries(Object.entries({ ...rest, waitsOn: waits_on }).filter(([, value]) => value !== undefined)) as IssueChange;
 			if (Object.keys(change).length === 0 && comment === undefined) throw new Error("Say what to change, or give a comment.");
-			let issue = Object.keys(change).length > 0 ? (await host().request("work", { request: { do: "update", number, change } })).issue : undefined;
+			let issue = Object.keys(change).length > 0 ? (await host().request("work", { request: { do: "update", number, change, ...(why ? { why } : {}) } })).issue : undefined;
 			if (comment !== undefined) issue = (await host().request("work", { request: { do: "comment", number, body: comment } })).issue ?? issue;
 			const did = [Object.keys(change).length > 0 ? `Changed ${Object.keys(change).join(", ")}` : "", comment !== undefined ? "commented" : ""].filter(Boolean).join(" and ");
 			return { content: [{ type: "text", text: `${did.charAt(0).toUpperCase()}${did.slice(1)}.${issue ? ` It is now: ${issueLine(issue)}` : ""}` }], details: { issue } };
@@ -301,7 +308,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		name: "work_on",
 		label: "Work on",
 		description:
-			"Say which issue this session is working on. The team sees this session on that issue, and the issue is marked as started. Sending your result to your parent moves it on by the team's rules: by default to review, for a person to look at.",
+			"Say which issue this session is working on. The team sees this session on that issue, and the issue is marked as started. When the work is finished, work_done moves it on by the team's rules: by default to review, where the session tending the branch or a reviewer checks it.",
 		promptSnippet: "Say which issue this session is on",
 		promptGuidelines: ["When you move on to a different issue from the one you were given, call work_on with its number, so the team sees where you are."],
 		parameters: Type.Object({ number: Type.Union([Type.Number(), Type.Null()], { description: "The issue's number, or null when this session is on no issue" }) }),
@@ -332,12 +339,62 @@ export default function graphExtension(pi: ExtensionAPI): void {
 				return { content: [{ type: "text", text }], details };
 			}
 			const read = await host().request("work", { request: { do: "read", number: issue.number } });
+			const { work } = await host().request("work", { request: { do: "look" } });
+			const above = work ? directionsFor(issue, new Map(work.issues.map((entry) => [entry.number, entry]))) : [];
 			const text = [
 				`This session is on ${issueLine(issue)}.`,
 				...(issue.body.trim() ? ["", issue.body.trim()] : []),
+				...(above.length > 0 ? ["", "Directions that reach it. A person gave them; they outrank the issue:", ...above.map((direction) => `- "${direction.text}" (${direction.who}, on #${direction.on})`)] : []),
 				...((read.comments ?? []).length > 0 ? ["", ...(read.comments ?? []).map((comment) => `${comment.author}: ${comment.body}`)] : []),
 			].join("\n");
 			return { content: [{ type: "text", text }], details };
+		},
+	});
+
+	pi.registerTool({
+		name: "work_done",
+		label: "Work done",
+		description:
+			"Say that the work on an issue is finished: what was done, how it was checked, and where to look. It is kept on the issue and the issue moves on by the team's rules, by default to review. Whoever checks it reads this and nothing else, so write it for someone who was not there.",
+		promptSnippet: "Report the result on the issue you are on",
+		promptGuidelines: ["When the issue you are on is finished, call work_done before you report to your parent: the summary is what is checked, and an issue with no result is checked on nothing."],
+		parameters: Type.Object({
+			number: Type.Optional(Type.Number({ description: "The issue's number. Leave out for the one this session is on" })),
+			summary: Type.String({ description: "What was done, leading with the outcome" }),
+			checks: Type.Optional(Type.String({ description: "How it was checked: tests run, what was tried by hand" })),
+			url: Type.Optional(Type.String({ description: "Where to look: a branch, a pull request" })),
+		}),
+		async execute(_toolCallId, params) {
+			let number = params.number;
+			if (number === undefined) {
+				const { work } = await host().request("work", { request: { do: "look" } });
+				number = work?.sessions.find((session) => session.id === nodeId)?.issue;
+				if (number === undefined) throw new Error("This session is on no issue. Give the issue's number.");
+			}
+			const { issue } = await host().request("work", { request: { do: "done", number, summary: params.summary, ...(params.checks ? { checks: params.checks } : {}), ...(params.url ? { url: params.url } : {}) } });
+			return { content: [{ type: "text", text: issue ? `The result is on ${issueLine(issue)}. It is checked from here; do not close it yourself.` : "The result was recorded." }], details: { issue } };
+		},
+	});
+
+	pi.registerTool({
+		name: "work_direction",
+		label: "Keep a direction",
+		description:
+			"Keep something a person said as a direction that stands on the issue they said it about, or lift one. A direction is a rule, in the person's own words, for that issue and everything under it: every session working there is told it. You cannot write one. You can only keep a line a person said, named by the number you were given with it.",
+		promptSnippet: "Keep what a person said as a standing direction, or lift it",
+		promptGuidelines: [
+			"When a person steers you with a rule that should hold from here on (ask me before this lands, no new dependencies), keep it with work_direction. When it is something to do once (this first, drop this), do it and keep nothing.",
+			"Lift a direction only when the person who gave it says so.",
+		],
+		parameters: Type.Object({
+			line: Type.Number({ description: "The number of the line, as given when the person said it, or as shown when reading the issue" }),
+			stands: Type.Optional(Type.Boolean({ description: "False to lift it. It stands by default" })),
+			why: Type.Optional(Type.String({ description: "Why, in a sentence" })),
+		}),
+		async execute(_toolCallId, params) {
+			const { issue } = await host().request("work", { request: { do: "stand", line: params.line, stands: params.stands !== false, ...(params.why ? { why: params.why } : {}) } });
+			const all = issue?.directions ?? [];
+			return { content: [{ type: "text", text: issue ? `${params.stands === false ? "Lifted" : "Kept"}. ${all.length === 0 ? `Nothing stands on #${issue.number}.` : `Standing on #${issue.number}: ${all.map((direction) => `"${direction.text}" (${direction.who})`).join("; ")}.`}` : "Done." }], details: { issue } };
 		},
 	});
 

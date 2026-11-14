@@ -3,7 +3,7 @@
  * as a Pi child process, routes and journals every envelope between them, and surfaces
  * anything that needs a human (blocked dialogs, mail awaiting approval).
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
@@ -56,6 +56,12 @@ import {
 	WORKSPACE_MODES,
 	waitingFor,
 	roleOf,
+	type Note,
+	type Steer,
+	directionsFor,
+	reviewed,
+	isClosed,
+	type Issue,
 	type WorkRequest,
 	type WorkResult,
 	type WorkSession,
@@ -114,9 +120,9 @@ export interface WorkPort {
 	/** Null while this person has joined no server. */
 	state(): WorkState | null;
 	/** Read or change issues. `on` never comes here: which session is on what is the host's to keep. */
-	run(request: WorkRequest): Promise<WorkResult>;
-	/** A session was put on an issue, or reported its result. */
-	session(number: number, event: "start" | "report"): Promise<void>;
+	run(request: WorkRequest, note?: Note): Promise<WorkResult>;
+	/** A session was put on an issue, or reported its result. `note` says which session. */
+	session(number: number, event: "start" | "report", note?: Note): Promise<void>;
 	/** What this host runs, for the server to tell everyone. */
 	publish(sessions: Array<Omit<WorkSession, "host" | "owner" | "repo">>): void;
 	/** Join or leave a server, or say which one this is. Returns text to show. */
@@ -166,12 +172,18 @@ interface Runtime {
 	/** The last few things the agent said and did, one line each, and when the latest happened. */
 	recent: string[];
 	recentAt: number;
+	/** The last thing the agent said in words, in full: its answer when a person steered it. Cleared when it is steered. */
+	said?: string;
 	connected: Promise<void>;
 	markConnected: () => void;
 	failConnect: (error: Error) => void;
 }
 
 const RECENT_LINES = 12;
+/** How long what a person said on the tree, and its answer, are shown. */
+const STEER_MS = 10 * 60_000;
+const STEERS_MAX = 20;
+const ANSWER_MAX = 600;
 /** How long a message stays in what the interface is told has just been sent. */
 const TRAFFIC_MS = 10_000;
 /** How long a session is taken to still be on the item it last touched. */
@@ -272,6 +284,16 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private readonly releaseComplaints = new Map<string, string>();
 	private sharing: SharingPort | undefined;
 	private work: WorkPort | undefined;
+	/** What the person said on the tree lately, and the answers. */
+	private readonly steers: Steer[] = [];
+	/** What is to be typed into a session open in a terminal, where only that terminal can type. */
+	private readonly toTell = new Map<string, string[]>();
+	/** The issues with a result waiting to be checked, as last seen: a new one is handed to whatever checks it. */
+	private inReview: Set<string> | undefined;
+	/** Results whose reporter told the session that checks them itself. */
+	private readonly reported = new Set<number>();
+	/** The last thing a teammate said on the tree that this host has dealt with, by the server's revision. */
+	private heardSaid: number | undefined;
 	private publishTimer: NodeJS.Timeout | undefined;
 	/** The name this person's sessions here were under until this start, when it changed. */
 	readonly renamedFrom: string | undefined;
@@ -830,6 +852,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		} else if (event.type === "agent_settled") {
 			runtime.streaming = false;
 			this.refresh(id, runtime);
+			this.answerSteer(id, runtime.said);
 			this.wakeQueued();
 			this.afterTurn(id, runtime);
 		} else if (event.type === "extension_ui_request" && DIALOG_METHODS.has(event.method)) {
@@ -846,6 +869,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		} else if (event.type === "message_end" && event.message?.role === "assistant") {
 			const text = brief(textOf(event.message.content));
 			if (text) this.note(id, runtime, text);
+			const said = textOf(event.message.content).trim();
+			if (said) runtime.said = said;
 			const usage = event.message.usage as { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } } | undefined;
 			if (usage) this.addUsage(id, usage.totalTokens ?? (usage.input ?? 0) + (usage.output ?? 0), usage.cost?.total ?? 0);
 		}
@@ -1063,6 +1088,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		work?.onChanged(() => {
 			this.notifyUi();
 			this.publishSoon();
+			this.checkResults();
+			void this.hearTeammates();
 		});
 		for (const event of ["node", "activity", "dialog"] as const) this.on(event, () => this.publishSoon());
 		this.publishSoon();
@@ -1100,15 +1127,19 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const state = this.work?.state();
 		if (!this.work || !state) throw new Error("There is no server: you have not joined one. Start a board on this machine with /lattice server start, or join your team's with /lattice server <address>.");
 		if (request.do === "look") return { work: state };
+		const session = asker ? this.must(asker) : undefined;
+		// A change a session makes is recorded as its own, with the person it runs for.
+		const note: Note = session ? { as: this.nameOf(session) } : {};
+		if (session && (request.do === "say" || request.do === "seen")) throw new Error("Only a person does that, on the tree. If you want a rule to stand, ask the user for it.");
 		if (request.do === "next") {
-			const taker = asker ? this.must(asker) : undefined;
+			const taker = session;
 			if (!taker) throw new Error("Only a session takes the next issue.");
-			const taken = await this.work.run(request);
+			const taken = await this.work.run(request, note);
 			// The server has started it already: the session is put on it, and nothing more is said.
 			if (taken.issue && taker.issue !== taken.issue.number) this.update(taker.id, { issue: taken.issue.number });
 			return taken;
 		}
-		if (request.do !== "on") return this.work.run(request);
+		if (request.do !== "on") return this.work.run(request, note);
 		const id = request.nodeId ?? asker;
 		const node = id ? this.must(id) : undefined;
 		if (!node) throw new Error("Say which session.");
@@ -1124,10 +1155,211 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		return { issue: this.work.state()?.issues.find((entry) => entry.number === issue.number) ?? issue };
 	}
 
+	/** What a session is called where its changes are recorded: what it is there to do. */
+	private nameOf(node: NodeMeta): string {
+		return roleOf(node);
+	}
+
+	/** Say something to a session as the host. One open in a terminal is told by that terminal, which is the only thing that can type there. */
+	private async tell(id: string, message: string, whenBusy: "steer" | "followUp"): Promise<void> {
+		const runtime = this.runtimes.get(id);
+		if (runtime && !runtime.proc) {
+			this.toTell.set(id, [...(this.toTell.get(id) ?? []), message]);
+			this.notifyUi();
+			return;
+		}
+		await this.prompt(id, message, whenBusy);
+	}
+
+	/**
+	 * The session of this person here that tends an issue: the nearest one with the coordinator role
+	 * on it or on something above it. A coordinator at the root of a tree, on no issue, tends what nothing else does.
+	 */
+	private tending(number: number): { node: NodeMeta; distance: number } | undefined {
+		const state = this.work?.state();
+		if (!state) return undefined;
+		const by = new Map(state.issues.map((issue) => [issue.number, issue]));
+		const mine = this.store.listNodes().filter((node) => !node.archived && !isPlanned(node) && node.owner === this.owner && node.fragments.includes("coordinator"));
+		let distance = 0;
+		for (let at = by.get(number); at && distance < 64; at = at.parent === undefined ? undefined : by.get(at.parent), distance++) {
+			const node = mine.find((candidate) => candidate.issue === at?.number);
+			if (node) return { node, distance };
+		}
+		const root = mine.find((node) => node.parentId === null && node.issue === undefined);
+		return root ? { node: root, distance } : undefined;
+	}
+
+	/** How near a teammate's coordinator sits to an issue, when one does: what it tends is theirs to check and to steer. */
+	private tendedElsewhere(number: number): { owner: string; distance: number } | undefined {
+		const state = this.work?.state();
+		if (!state) return undefined;
+		const by = new Map(state.issues.map((issue) => [issue.number, issue]));
+		const own = new Set(this.store.listNodes().map((node) => node.id));
+		const others = state.sessions.filter((session) => session.role === "coordinator" && session.issue !== undefined && !(session.owner === this.owner && own.has(session.id)));
+		let distance = 0;
+		for (let at = by.get(number); at && distance < 64; at = at.parent === undefined ? undefined : by.get(at.parent), distance++) {
+			const session = others.find((candidate) => candidate.issue === at?.number);
+			if (session) return { owner: session.owner, distance };
+		}
+		return undefined;
+	}
+
+	/** Put a session on the top of an issue's branch, to tend it: nothing did. */
+	private async startTender(issue: Issue): Promise<NodeMeta> {
+		const state = this.work?.state();
+		const by = new Map((state?.issues ?? []).map((entry) => [entry.number, entry]));
+		let top = issue;
+		for (let steps = 0; top.parent !== undefined && by.has(top.parent) && steps < 64; steps++) top = by.get(top.parent) as Issue;
+		const root = this.store.listNodes().find((node) => node.parentId === null && !node.archived && node.owner === this.owner);
+		if (!root) throw new Error("Nothing tends that yet, and there is no session here to start one from. Send a first message in this repository, then say it again.");
+		const name = top.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || `issue-${top.number}`;
+		return this.spawnChild(root.id, {
+			name,
+			kind: top.type,
+			fragments: ["coordinator"],
+			issue: top.number,
+			brief: `You tend #${top.number} "${top.title}" and everything under it. Nobody was tending it. Read it with work_list (under ${top.number}) so you know what is there, and change nothing yet: a person is about to say what they want.`,
+		});
+	}
+
+	private directionsText(issue: Issue): string {
+		const by = new Map((this.work?.state()?.issues ?? []).map((entry) => [entry.number, entry]));
+		return directionsFor(issue, by).map((direction) => `- "${direction.text}" (${direction.who}, on #${direction.on})`).join("\n");
+	}
+
+	/**
+	 * A person says something about an item on the tree. It goes to whatever tends that branch,
+	 * which changes the work and answers in a sentence. On a server the line is kept on the issue.
+	 */
+	async steer(params: { number?: number | undefined; nodeId?: string | undefined; text: string }): Promise<Steer> {
+		const text = params.text.trim();
+		if (text === "") throw new Error("There is nothing to say.");
+		let target: NodeMeta;
+		let about: string;
+		let line: number | undefined;
+		let directions = "";
+		if (params.number !== undefined) {
+			const state = this.work?.state();
+			if (!this.work || !state) throw new Error("There is no server: you have not joined one.");
+			if (!state.connected) throw new Error(`Nothing can be said: ${state.problem ?? "the server cannot be reached."}`);
+			const issue = state.issues.find((entry) => entry.number === params.number);
+			if (!issue) throw new Error(`There is no issue #${params.number}.`);
+			about = `#${issue.number} ${issue.title} (${issue.type})`;
+			directions = this.directionsText(issue);
+			line = (await this.work.run({ do: "say", number: issue.number, text })).line?.id;
+			const mine = this.tending(issue.number);
+			const theirs = this.tendedElsewhere(issue.number);
+			// A teammate's session tends it more closely than anything here: it is theirs to act on. Their host hears the line from the server.
+			if (theirs && theirs.owner !== this.owner && (!mine || theirs.distance < mine.distance)) {
+				const steer: Steer = { id: randomUUID(), at: Date.now(), text, about, number: issue.number, to: { nodeId: "", name: `${theirs.owner}'s coordinator`, role: "coordinator" }, ...(line !== undefined ? { line } : {}), answer: `Kept on #${issue.number} for ${theirs.owner}, whose session tends it. It is theirs to act on.`, answeredAt: Date.now() };
+				this.keepSteer(steer);
+				return steer;
+			}
+			target = mine?.node ?? (await this.startTender(issue));
+		} else {
+			const node = this.must(params.nodeId ?? "");
+			if (node.owner !== this.owner) throw new Error(`"${node.name}" is ${node.owner}'s. It is theirs to steer.`);
+			about = `"${node.name}" (${node.kind})`;
+			const all = this.store.listNodes();
+			let at: NodeMeta | undefined = node;
+			// The nearest session at or above it that coordinates; failing that, the top of its tree.
+			while (at && (isPlanned(at) || !at.fragments.includes("coordinator")) && at.parentId) at = all.find((candidate) => candidate.id === at?.parentId);
+			target = at && !isPlanned(at) ? at : (all.find((candidate) => candidate.id === node.rootId) ?? node);
+		}
+		const steer: Steer = { id: randomUUID(), at: Date.now(), text, about, ...(params.number !== undefined ? { number: params.number } : { nodeId: params.nodeId as string }), to: { nodeId: target.id, name: target.name, role: roleOf(target) }, ...(line !== undefined ? { line } : {}) };
+		this.keepSteer(steer);
+		const runtime = this.runtimes.get(target.id);
+		if (runtime) delete runtime.said;
+		const message = this.template("steer", { who: this.owner, about, text, line: line !== undefined ? String(line) : undefined, directions });
+		await this.tell(target.id, message, "steer");
+		return steer;
+	}
+
+	private keepSteer(steer: Steer): void {
+		this.steers.push(steer);
+		while (this.steers.length > STEERS_MAX) this.steers.shift();
+		this.notifyUi();
+	}
+
+	/** A session a person steered has finished a turn: what it said last is its answer. */
+	private answerSteer(nodeId: string, said: string | undefined): void {
+		const steer = this.steers.find((entry) => entry.to.nodeId === nodeId && entry.answer === undefined);
+		if (!steer || !said) return;
+		const one = said.replace(/\s+/g, " ").trim();
+		steer.answer = one.length > ANSWER_MAX ? `${one.slice(0, ANSWER_MAX - 1)}…` : one;
+		steer.answeredAt = Date.now();
+		const runtime = this.runtimes.get(nodeId);
+		if (runtime) delete runtime.said;
+		this.notifyUi();
+	}
+
+	/**
+	 * A result came in on an issue: hand it to whatever checks it. A session of its own, with the
+	 * reviewer role, for the types the scheme names; otherwise the session tending the branch.
+	 * Only what comes in while this host runs is handed on, and only what a session here tends.
+	 */
+	private checkResults(): void {
+		const state = this.work?.state();
+		const target = state?.scheme.rules.onReport;
+		if (!state || !state.connected || !target) return;
+		const waiting = state.issues.filter((issue) => issue.state === target && !isClosed(state.scheme, issue));
+		const key = (issue: Issue): string => `${issue.number}:${issue.result?.at ?? 0}`;
+		const before = this.inReview;
+		this.inReview = new Set(waiting.map(key));
+		if (!before) return;
+		for (const issue of waiting) {
+			if (before.has(key(issue)) || before.has(`${issue.number}:0`)) continue;
+			void this.handResult(issue).catch((error: unknown) => this.emit("log", "warn", `The result on #${issue.number} was not handed on: ${error instanceof Error ? error.message : String(error)}`));
+		}
+	}
+
+	private async handResult(issue: Issue): Promise<void> {
+		const state = this.work?.state();
+		const mine = this.tending(issue.number);
+		if (!state || !mine) return;
+		const theirs = this.tendedElsewhere(issue.number);
+		if (theirs && theirs.distance < mine.distance) return;
+		const own = reviewed(state.scheme, issue.type);
+		const told = this.reported.delete(issue.number);
+		const values = { issue: `#${issue.number} "${issue.title}" (${issue.type})`, by: issue.result?.by ?? "the session on it", summary: issue.result?.summary ?? "It reported its result to the session it works for; nothing was written on the issue.", checks: issue.result?.checks, url: issue.result?.url, directions: this.directionsText(issue) };
+		if (own) {
+			try {
+				await this.spawnChild(mine.node.id, { name: `review-${issue.number}`, kind: "review", fragments: ["reviewer"], issue: issue.number, brief: this.template("review", values) });
+				return;
+			} catch (error) {
+				this.emit("log", "warn", `No reviewer was started for #${issue.number}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		} else if (told) return;
+		await this.tell(mine.node.id, this.template("result", values), "followUp");
+	}
+
+	/** A teammate said something about an issue a session here tends: it is passed on, as theirs. */
+	private async hearTeammates(): Promise<void> {
+		const state = this.work?.state();
+		if (!state || !state.connected || !this.work) return;
+		const said = state.recent.filter((event) => event.what === "said");
+		const newest = Math.max(this.heardSaid ?? 0, ...state.recent.map((event) => event.rev));
+		const after = this.heardSaid;
+		this.heardSaid = newest;
+		if (after === undefined) return;
+		for (const event of said) {
+			if (event.rev <= after || event.who === this.owner) continue;
+			const issue = state.issues.find((entry) => entry.number === event.issue);
+			const mine = issue ? this.tending(issue.number) : undefined;
+			if (!issue || !mine) continue;
+			const theirs = this.tendedElsewhere(issue.number);
+			if (theirs && theirs.distance < mine.distance) continue;
+			const lines = (await this.work.run({ do: "read", number: issue.number }).catch(() => ({ said: [] }) as WorkResult)).said ?? [];
+			const line = [...lines].reverse().find((entry) => entry.who === event.who);
+			const who = `${event.who}, a teammate who does not own this work. Treat it as a request: do it if it fits what ${this.owner} wants, ask ${this.owner} if you are unsure, and do not keep it as a direction`;
+			await this.tell(mine.node.id, this.template("steer", { who, about: `#${issue.number} ${issue.title} (${issue.type})`, text: line?.text ?? event.to ?? "", directions: this.directionsText(issue) }), "followUp").catch(() => {});
+		}
+	}
+
 	/** Tell the server what a session did to its issue. The server being away never stops the session's own work. */
-	private async noteWork(number: number | undefined, event: "start" | "report"): Promise<void> {
+	private async noteWork(number: number | undefined, event: "start" | "report", by?: NodeMeta): Promise<void> {
 		if (number === undefined || !this.work?.state()) return;
-		await this.work.session(number, event).catch((error: unknown) => this.emit("log", "warn", `Issue #${number} was not updated: ${error instanceof Error ? error.message : String(error)}`));
+		await this.work.session(number, event, by ? { as: this.nameOf(by) } : {}).catch((error: unknown) => this.emit("log", "warn", `Issue #${number} was not updated: ${error instanceof Error ? error.message : String(error)}`));
 	}
 
 	/** Run a sharing action by name, as the pane does. */
@@ -1177,6 +1409,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			...(Object.keys(focus).length > 0 ? { focus } : {}),
 			foreground: [...this.runtimes].filter(([, runtime]) => runtime.foreground).map(([id]) => id),
 			...(this.work?.state() ? { work: this.work.state() as WorkState } : {}),
+			...(this.steers.some((steer) => now - steer.at < STEER_MS) ? { steers: this.steers.filter((steer) => now - steer.at < STEER_MS) } : {}),
+			...(this.toTell.size > 0 ? { told: Object.fromEntries([...this.toTell].map(([id, lines]) => [id, lines.length])) } : {}),
 			sharing: this.sharing?.state() ?? null,
 			named: this.sharing?.named() ?? false,
 		};
@@ -1240,6 +1474,21 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				return { text: await this.runSharing(call("sharing").action, call("sharing").args) };
 			case "work":
 				return this.runWork(call("work").request);
+			case "steer":
+				return { steer: await this.steer(call("steer")) };
+			case "said": {
+				const { nodeId, text } = call("said");
+				if (this.runtimes.get(nodeId)?.foreground === connection.id) this.answerSteer(nodeId, text.trim());
+				return {};
+			}
+			case "told": {
+				const { nodeId } = call("told");
+				const lines = this.runtimes.get(nodeId)?.foreground === connection.id ? (this.toTell.get(nodeId) ?? []) : [];
+				if (lines.length > 0) this.toTell.delete(nodeId);
+				// What is typed there from now on is in answer to it.
+				for (const steer of this.steers) if (steer.to.nodeId === nodeId && steer.answer === undefined) delete steer.message;
+				return { messages: lines };
+			}
 			case "server": {
 				if (!this.work) throw new Error("This host cannot join a server.");
 				return { text: await this.work.server(call("server").action, call("server").args) };
@@ -1582,7 +1831,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			this.owing.delete(sender.id);
 			if (envelope.intent === "result" && !sender.done) {
 				this.update(sender.id, { done: true });
-				void this.noteWork(sender.issue, "report");
+				// What it reports to is told by the message itself: it is not told again when the issue moves.
+				if (sender.issue !== undefined && above.issue !== undefined && above.fragments.includes("coordinator")) this.reported.add(sender.issue);
+				void this.noteWork(sender.issue, "report", sender);
 				this.releaseReady();
 			}
 		}

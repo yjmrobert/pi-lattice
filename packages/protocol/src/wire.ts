@@ -106,6 +106,31 @@ export interface SharingHandoff {
 }
 
 /** Everything the pane shows, fetched in one request. */
+/** Something a person said about an item on the tree, to whatever tends it; and its answer, once it has one. */
+export interface Steer {
+	id: string;
+	at: number;
+	text: string;
+	/** What it is about, as it is shown: `#12 Pay by card`, or a session's name. */
+	about: string;
+	/** The issue it is about, on a server. */
+	number?: number;
+	/** The session it is about, when there is no issue. */
+	nodeId?: string;
+	/** The session it went to. */
+	to: { nodeId: string; name: string; role: string };
+	/** The line it was kept as on the server, which can be made to stand. */
+	line?: number;
+	/** What the session said it did, in a sentence. */
+	answer?: string;
+	answeredAt?: number;
+	/**
+	 * The session is open in a terminal, where the host cannot type: whoever has it open says
+	 * this there. Present only in the answer to the one who asked.
+	 */
+	message?: string;
+}
+
 export interface UiState {
 	owner: string;
 	/** Whether the person chose that name. Until they do it is their OS user name, and they are asked before joining a server. */
@@ -126,6 +151,10 @@ export interface UiState {
 	focus?: Record<string, { nodeId: string; at: number }>;
 	/** Present when this person has joined a server: the team's work, as last heard from it. */
 	work?: WorkState;
+	/** What this person said on the tree lately, and what whoever tends that branch answered. */
+	steers?: Steer[];
+	/** Per session open in a terminal: how many things the host has for it to be told. */
+	told?: Record<string, number>;
 	/** Present when this person is on a server and this tree is shared with the people on it: sessions go between their machines directly. */
 	sharing: null | {
 		/** What the team is shown as: the server it is on. */
@@ -182,6 +211,15 @@ export interface UiApi {
 	sharing: { params: { action: string; args: string[] }; result: { text: string } };
 	/** Read or change the team's work. `nodeId` names the session meant by `on`. */
 	work: { params: { request: WorkRequest }; result: WorkResult };
+	/**
+	 * A person says something about an item on the tree: an issue by its number, or a session.
+	 * It goes to whatever tends that branch, which is started when nothing does.
+	 */
+	steer: { params: { number?: number; nodeId?: string; text: string }; result: { steer: Steer } };
+	/** What a session open in a terminal last said: the host cannot hear those turns itself. */
+	said: { params: { nodeId: string; text: string }; result: Record<string, never> };
+	/** Take what the host has for a session open in this terminal to be told. Whoever takes it types it there. */
+	told: { params: { nodeId: string }; result: { messages: string[] } };
 	/** The team's server: `join <address> [name]`, `leave`, `status`. Returns text to show. */
 	server: { params: { action: string; args: string[] }; result: { text: string } };
 	shutdown: { params: Record<string, never>; result: Record<string, never> };

@@ -99,6 +99,14 @@ export interface LatticeEvents {
 	"lattice:waiting:query": { nodeId: string; items?: Array<{ id: string; title: string; text: string; keys: Array<{ key: string; does: string; line?: string }> }> };
 	/** Answer one of those things with one of its keys, and with the line typed for a key that takes one (`line` is its label). Whoever carries it out sets `done`. */
 	"lattice:waiting:answer": { id: string; key: string; text?: string; done?: boolean };
+	/**
+	 * A person says something about an item on the tree: an issue by its number, or a session. Whoever
+	 * can reach its host carries it to what tends that branch, and sets `done`; what is answered comes
+	 * back in the state, as a steer.
+	 */
+	"lattice:steer": { number?: number; nodeId?: string; text: string; done?: boolean };
+	/** The person has looked at everything agents changed: nothing before now is new to them. */
+	"lattice:seen": { done?: boolean };
 	/** Ask the roles extension to replace the applied fragments. */
 	"lattice:roles:set": { fragments: string[] };
 }

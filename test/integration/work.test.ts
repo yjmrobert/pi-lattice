@@ -205,7 +205,7 @@ describe("the team's work", () => {
 		try {
 			expect(await work.server("share", []).catch((error: Error) => error.message)).toBe("Only the board on this machine can be shared from here. Start one with /lattice server start.");
 			expect(await work.server("start", [])).toBe(
-				"A board is running on this machine, and you are on it as tester. There is no work on it yet: press c in the pane for the canopy, then N to add the first issue. Only this machine can reach it. To let teammates join, /lattice server share.",
+				"A board is running on this machine, and you are on it as tester. There is no work on it yet: tell a session what you want done, and it writes the work down. Press c in the pane for the canopy. Only this machine can reach it. To let teammates join, /lattice server share.",
 			);
 			await h.runWork({ do: "add", change: { title: "Checkout", type: "epic" } });
 			expect(await work.server("status", [])).toBe("The board on this machine, not shared, as tester. 1 issue, 1 person (1 online), 0 sessions running.");
@@ -242,3 +242,102 @@ describe("the team's work", () => {
 		}
 	}, 90_000);
 });
+describe("steering the work", () => {
+	const answered = async (h: LatticeHost, text: string): Promise<string> =>
+		eventually(() => h.uiState().steers?.find((steer) => steer.text === text)?.answer, "the session that tends it to answer");
+
+	it("takes what a person says about an issue to the session tending it, which changes the work, says why, and answers in a sentence", async () => {
+		const h = await joined();
+		const sam = await teammate("sam");
+		await sam.create({ title: "Checkout", type: "epic" });
+		await sam.create({ title: "Pay by card", parent: 1 });
+		await sam.create({ title: "Cart", parent: 1 });
+		await eventually(() => issues(h).length === 3, "the host to hear of the issues");
+		const root = await h.createRoot({ name: "checkout", cwd: sandbox.work, fragments: ["coordinator"] });
+		await ask(h, root.id, tool("work_on", { number: 1 }));
+
+		// Said about the second feature: it goes to the coordinator on the epic above it.
+		const first = tool("work_update", { number: 3, place: "first", why: "the person said so" });
+		const steer = await h.steer({ number: 3, text: first });
+		expect(steer).toMatchObject({ about: "#3 Cart (feature)", number: 3, to: { nodeId: root.id, name: "checkout", role: "coordinator" }, line: 1 });
+		expect(await answered(h, first)).toContain("tool-result: Changed place.");
+		// The session was told who said it, about what, and how to answer.
+		const { messages } = await h.rpc<{ messages: Array<{ role: string; content: unknown }> }>(root.id, { type: "get_messages" });
+		const told = messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : (m.content as Array<{ type: string; text?: string }>).filter((p) => p.type === "text").map((p) => p.text).join(""))).join("\n");
+		expect(told).toContain("[pi-lattice] tester says, about #3 Cart (feature):");
+		expect(told).toContain("End your turn with one sentence that says what you did");
+		// The change is the agent's, with why; the order is the server's, for everyone.
+		await eventually(() => (sam.issue(3)?.rank ?? 99) < (sam.issue(2)?.rank ?? 0), "the cart to come first");
+		expect((await sam.read(3)).history.at(-1)).toMatchObject({ who: "tester", as: "coordinator", what: "order", to: "first", why: "the person said so" });
+		// What was said is kept on the issue in the person's words, and stands only once the session keeps it.
+		expect((await sam.read(3)).said).toMatchObject([{ id: 1, who: "tester", text: first, stands: false }]);
+
+		const rule = `ask me before this lands ${tool("work_direction", { line: 2 })}`;
+		await h.steer({ number: 1, text: rule });
+		expect(await answered(h, rule)).toContain("tool-result: Kept. Standing on #1:");
+		await eventually(() => sam.issue(1)?.directions?.length === 1, "the direction to stand on the epic");
+		expect(sam.issue(1)?.directions?.[0]).toMatchObject({ who: "tester", text: rule });
+		// An agent cannot say a line of its own, or mark what a person has seen.
+		await ask(h, root.id, tool("work_update", { number: 1, comment: "noted" }));
+		expect(await h.runWork({ do: "say", number: 1, text: "mine" }, root.id).then(() => "allowed", (error: Error) => error.message)).toContain("Only a person does that");
+		// Everything the agent did is new to a teammate who has not looked since.
+		await sam.refresh();
+		expect(sam.state().recent.filter((event) => event.rev > sam.state().seen && event.as === "coordinator").map((event) => event.what)).toEqual(expect.arrayContaining(["order", "direction", "commented"]));
+	}, 60_000);
+
+	it("starts a session to tend a branch that nothing tends, and takes a line about a session where there is no server issue", async () => {
+		const h = await joined();
+		const sam = await teammate("sam");
+		await sam.create({ title: "Search", type: "epic" });
+		await sam.create({ title: "Reindex", parent: 1 });
+		await eventually(() => issues(h).length === 2, "the host to hear of the issues");
+		// The session here does not coordinate: nothing tends the epic.
+		const root = await h.createRoot({ name: "scratch", cwd: sandbox.work });
+		const text = tool("work_update", { number: 2, comment: "start here" });
+		const steer = await h.steer({ number: 2, text });
+		const tender = await eventually(() => childrenOf(h.nodes(), root.id).find((node) => node.name === "search"), "a session to be started on the epic");
+		expect(tender).toMatchObject({ kind: "epic", issue: 1 });
+		expect(tender.fragments).toContain("coordinator");
+		expect(steer.to).toMatchObject({ nodeId: tender.id, role: "coordinator" });
+		expect(await answered(h, text)).toContain("tool-result: Commented.");
+		await eventually(async () => (await sam.read(2)).comments.some((comment) => comment.body === "start here"), "the comment");
+		// A second line goes to the same session: it tends the branch now.
+		const again = tool("work_update", { number: 2, comment: "and then this" });
+		expect((await h.steer({ number: 1, text: again })).to.nodeId).toBe(tender.id);
+		await answered(h, again);
+		// About a session, with no issue: to the nearest one above that coordinates, here the tender itself.
+		expect((await h.steer({ nodeId: tender.id, text: "carry on" })).about).toBe('"search" (epic)');
+		expect(await h.steer({ number: 99, text: "x" }).then(() => "allowed", (error: Error) => error.message)).toBe("There is no issue #99.");
+	}, 60_000);
+
+	it("hands a result to whatever checks it: the session tending the branch for a task, a reviewer of its own for anything larger", async () => {
+		const h = await joined();
+		const sam = await teammate("sam");
+		await sam.create({ title: "Checkout", type: "epic" });
+		await sam.create({ title: "Pay by card", parent: 1 });
+		await sam.create({ title: "Total is wrong", type: "bug", parent: 1 });
+		await eventually(() => issues(h).length === 3, "the host to hear of the issues");
+		const root = await h.createRoot({ name: "checkout", cwd: sandbox.work, fragments: ["coordinator"] });
+		await ask(h, root.id, tool("work_on", { number: 1 }));
+
+		// An agent with no host, from a shell, takes the bug and finishes it.
+		const taken = await sam.next({ type: "bug", lease: true }, { as: "claude" });
+		expect(taken.issue).toMatchObject({ number: 3, agent: "claude" });
+		await eventually(() => issues(h).find((issue) => issue.number === 3)?.agent === "claude", "the host to see who holds it");
+		await sam.done(3, { summary: "The total adds tax once.", checks: "9 tests pass" }, { as: "claude" });
+		// A bug is checked by the session tending the branch: it is told, with what was reported.
+		await eventually(async () => (await said(h, root.id)).includes('A result is in on #3 "Total is wrong" (bug), from claude.'), "the coordinator to be told of the result");
+		const told = await said(h, root.id);
+		expect(told).toContain("The total adds tax once.");
+		expect(told).toContain("Checked: 9 tests pass");
+		expect(childrenOf(h.nodes(), root.id).some((node) => node.name === "review-3")).toBe(false);
+
+		// A feature is checked by a session of its own, with the reviewer role, under the one that tends it.
+		await sam.done(2, { summary: "Cards can be paid with." }, { as: "claude" });
+		const reviewer = await eventually(() => childrenOf(h.nodes(), root.id).find((node) => node.name === "review-2"), "a reviewer to be started");
+		expect(reviewer).toMatchObject({ kind: "review", issue: 2 });
+		expect(reviewer.fragments).toContain("reviewer");
+		await eventually(async () => (await said(h, reviewer.id)).includes('Check the result that came in on #2 "Pay by card" (feature), from claude'), "the reviewer to have its brief");
+	}, 60_000);
+});
+

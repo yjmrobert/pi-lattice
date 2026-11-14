@@ -93,6 +93,9 @@ What a session is told is made of files, and each can be replaced. `/lattice pro
 | `instead` | What an agent is told when the person says something else instead of answering its question or approving a message. | `{{asked}}` `{{from}}` `{{text}}` |
 | `reminder` | What a child is told when it ends its turn without reporting to its parent. | `{{parent.name}}` |
 | `child-stopped` | What a parent is told when a child stops without reporting. | `{{name}}` `{{id}}` `{{reason}}` `{{last}}` `{{held}}` |
+| `steer` | What the session tending a branch is told when a person says something about an item on the tree. | `{{who}}` `{{about}}` `{{text}}` `{{line}}` `{{directions}}` |
+| `result` | What the session tending a branch is told when a result lands on an issue under it that it checks itself. | `{{issue}}` `{{by}}` `{{summary}}` `{{checks}}` `{{url}}` `{{directions}}` |
+| `review` | The brief of a session started to check a result on an issue. | `{{issue}}` `{{by}}` `{{summary}}` `{{checks}}` `{{url}}` `{{directions}}` |
 
 `{{name}}` is replaced by its value. `{{#name}}…{{/name}}` is kept only when the value is not empty.
 

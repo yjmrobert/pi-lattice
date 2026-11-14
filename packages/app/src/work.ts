@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkPort } from "@pi-lattice/host";
-import type { WorkRequest, WorkResult, WorkSession, WorkState } from "@pi-lattice/protocol";
+import type { Note, WorkRequest, WorkResult, WorkSession, WorkState } from "@pi-lattice/protocol";
 import { joinServer, type Peering, type ServerAccount, WorkClient } from "@pi-lattice/server";
 import { boardAddresses, ensureBoard, liveBoard, shareBoard } from "./board.ts";
 
@@ -195,34 +195,46 @@ export class Work implements WorkPort {
 		return this.client;
 	}
 
-	async run(request: WorkRequest): Promise<WorkResult> {
+	async run(request: WorkRequest, note: Note = {}): Promise<WorkResult> {
 		const client = this.must();
+		const because = (why: string | undefined): Note => ({ ...note, ...(why ? { why } : {}) });
 		switch (request.do) {
 			case "look":
 				return { work: client.state() };
 			case "read":
 				return client.read(request.number);
 			case "add":
-				return { issue: await client.create(request.change) };
+				return { issue: await client.create(request.change, because(request.why)) };
 			case "update":
-				return { issue: await client.update(request.number, request.change, request.basedOn) };
+				return { issue: await client.update(request.number, request.change, request.basedOn, because(request.why)) };
 			case "comment":
-				await client.comment(request.number, request.body);
+				await client.comment(request.number, request.body, note);
 				return { issue: client.issue(request.number) as NonNullable<WorkResult["issue"]> };
+			case "done":
+				return { issue: await client.done(request.number, { summary: request.summary, ...(request.checks ? { checks: request.checks } : {}), ...(request.url ? { url: request.url } : {}) }, note) };
+			case "drop":
+				return { issue: await client.drop(request.number, request.why, note.as) };
+			case "stand":
+				return { issue: await client.stand(request.line, request.stands, because(request.why)) };
+			case "say":
+				return { line: await client.say(request.number, request.text) };
+			case "seen":
+				await client.looked();
+				return {};
 			case "scheme":
 				return { scheme: await client.setScheme(request.scheme) };
 			case "next": {
 				// Work that is for another repository is left for the sessions there.
 				const { do: _do, ...filter } = request;
-				return client.next({ ...filter, repo: this.options.repo });
+				return client.next({ ...filter, repo: this.options.repo }, note);
 			}
 			default:
 				throw new Error("The host keeps which session is on what.");
 		}
 	}
 
-	async session(number: number, event: "start" | "report"): Promise<void> {
-		await this.must().session(number, event);
+	async session(number: number, event: "start" | "report", note: Note = {}): Promise<void> {
+		await this.must().session(number, event, note);
 	}
 
 	publish(sessions: Array<Omit<WorkSession, "host" | "owner" | "repo">>): void {
@@ -250,7 +262,7 @@ export class Work implements WorkPort {
 			this.sync();
 			await this.client?.refresh().catch(() => {});
 			const count = this.state()?.issues.length ?? 0;
-			return `A board is running on this machine, and you are on it as ${account.name}. ${count === 0 ? "There is no work on it yet: press c in the pane for the canopy, then N to add the first issue." : `It has ${count} issue${count === 1 ? "" : "s"}. Press c in the pane for the canopy.`} Only this machine can reach it. To let teammates join, /lattice server share.`;
+			return `A board is running on this machine, and you are on it as ${account.name}. ${count === 0 ? "There is no work on it yet: tell a session what you want done, and it writes the work down. Press c in the pane for the canopy." : `It has ${count} issue${count === 1 ? "" : "s"}. Press c in the pane for the canopy.`} Only this machine can reach it. To let teammates join, /lattice server share.`;
 		}
 		if (action === "share" || action === "unshare") {
 			if (!readAccount(this.options.home)?.board) throw new Error("Only the board on this machine can be shared from here. Start one with /lattice server start.");
