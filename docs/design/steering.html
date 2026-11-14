@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Lattice Steering</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+/* Layout: two terminals. The upper is Pi on the canopy: the tree of work on a grid of cells, a panel for the selected item, and one line at the foot where a person says what they want and is answered. The lower is another agent's shell on the same work. Both are pictures of a terminal, so the page is dark by choice in either theme; the tokens are the ones the pane and canopy mockups use. */
+:root {
+  color-scheme: dark;
+  --page: #06080c; --t-bg: #0b0e14; --t-panel: #10141c; --t-edge: #232936; --t-fg: #c6ccd9; --t-dim: #808a9e; --t-bright: #f3f6fb;
+  --amber: #e8b755; --t-cyan: #5fd4d0; --t-mag: #e06bd0; --t-sel: #1b2a44; --t-key: #272e3d;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--page); color: var(--t-fg); font: 400 13px/1.5 var(--mono); font-variant-ligatures: none; font-variant-numeric: tabular-nums; padding-block: 16px 32px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+::selection { background: var(--t-sel); color: var(--t-bright); }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+:focus-visible { outline: 1px solid var(--t-cyan); outline-offset: 1px; }
+pre { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+kbd { font: inherit; color: var(--t-bright); background: var(--t-key); padding: 0 7px; border-radius: 2px; }
+.page { max-width: 1400px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.win { background: var(--t-bg); border: 1px solid var(--t-edge); border-radius: 6px; overflow: hidden; }
+.bar { display: flex; flex-wrap: wrap; gap: 2px 16px; justify-content: space-between; padding: 5px 14px; background: var(--t-panel); border-bottom: 1px solid var(--t-edge); color: var(--t-dim); }
+.bar b { color: var(--t-fg); font-weight: 400; }
+.td { color: var(--t-dim); } .tw { color: var(--t-bright); font-weight: 700; } .ta { color: var(--amber); }
+.row { padding: 0 14px; }
+#top { display: flex; flex-wrap: wrap; gap: 0 22px; padding-block: 8px 2px; }
+#top .net { color: var(--t-mag); font-weight: 700; }
+#top .end { margin-left: auto; display: flex; flex-wrap: wrap; gap: 0 22px; }
+
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 318px; }
+.view { min-width: 0; overflow-x: auto; scrollbar-color: var(--t-edge) transparent; }
+#c { display: block; width: 100%; min-width: 880px; height: auto; cursor: pointer; }
+#side { border-left: 1px solid var(--t-edge); padding: 10px 14px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+#side h3 { font: inherit; color: var(--t-dim); letter-spacing: .08em; margin: 0 0 2px; }
+#side .dir { display: grid; grid-template-columns: 2ch minmax(0, 1fr); }
+#side .line { display: flex; gap: 1ch; min-width: 0; } #side .line span:last-child { margin-left: auto; white-space: nowrap; }
+#side .line .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pi { display: flex; flex-direction: column; }
+@media (max-width: 1080px) { .stage { display: contents; } #band { order: 1; } #keys { order: 2; } #side { order: 3; border-left: 0; border-top: 1px solid var(--t-edge); } }
+
+#band { border-top: 1px solid var(--t-edge); padding-block: 8px; min-height: 8.2em; display: flex; flex-direction: column; gap: 2px; }
+#band .what { display: flex; flex-wrap: wrap; gap: 0 14px; }
+#band .ans { color: var(--t-bright); max-width: 110ch; }
+#band .do { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 4px; color: var(--t-dim); }
+.k:hover { color: var(--t-bright); }
+.k.amber kbd { background: #4a3a14; color: var(--amber); }
+#linewrap { display: flex; flex-wrap: wrap; gap: 0 1ch; }
+#line { flex: 1 1 24ch; min-width: 0; font: inherit; color: var(--t-bright); background: none; border: 0; border-bottom: 1px solid var(--t-edge); padding: 0; caret-color: var(--t-cyan); outline: none; }
+#line:focus { border-bottom-color: var(--t-cyan); }
+.try { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 5px; }
+.try button, #cmds button { border: 1px solid var(--t-edge); border-radius: 3px; padding: 0 9px; color: var(--t-fg); transition: border-color .15s, color .15s; }
+.try button:hover, #cmds button:hover { border-color: var(--t-cyan); color: var(--t-bright); }
+.try button:active, #cmds button:active { background: var(--t-sel); }
+#keys { display: flex; flex-wrap: wrap; gap: 4px 18px; padding-block: 7px; border-top: 1px solid var(--t-edge); background: var(--t-panel); color: var(--t-dim); }
+
+#log { padding: 10px 14px 4px; height: 15em; overflow-y: auto; scrollbar-color: var(--t-edge) transparent; }
+#log .p { color: var(--t-cyan); } #log .c { color: var(--t-bright); }
+#cmds { display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 6px 14px 12px; }
+#cmds button { padding: 1px 10px; }
+@media (max-width: 700px) { body { font-size: 12px; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="page">
+  <section class="win" id="pi" aria-label="Pi, on the canopy">
+    <div class="bar"><span><b>pi</b>  ~/shop</span><span>the canopy, as proposed in ADR 0033 · press space on anything and say what you want</span></div>
+    <div class="row" id="top"></div>
+    <div class="stage">
+      <div class="view" id="view"><canvas id="c" role="img" aria-label="The team's work as a tree: epics, features, stories and tasks, with the sessions on them"></canvas></div>
+      <aside id="side" aria-live="polite"></aside>
+    </div>
+    <div class="row" id="band"></div>
+    <div class="row" id="keys"></div>
+  </section>
+
+  <section class="win" id="sh" aria-label="Another agent's shell">
+    <div class="bar"><span><b>claude</b>  ~/shop</span><span>an agent that is not a Pi session, on the same work through the command line</span></div>
+    <pre id="log" aria-live="polite"></pre>
+    <div id="cmds">
+      <button data-c="next">pi-lattice work next</button>
+      <button data-c="done">pi-lattice work done</button>
+      <button data-c="prime">pi-lattice work prime</button>
+    </div>
+  </section>
+</div>
+
+<script>
+// One invented team. Agents keep these issues; the person at this terminal is @yan, and steers.
+const HUE = { yan: '#5fd4d0', sam: '#7aa7ff', mira: '#c79bf2', teo: '#7fd18b' }, ME = 'yan';
+let NO = 11;
+const T = (name, state, x = {}) => ({ name, state, kids: [], no: NO++, ...x });
+const N = (name, owner, seat, kids, x = {}) => ({ name, owner, seat: seat && { role: seat[0], state: seat[1] }, kids, no: NO++, ...x });
+const TREE = [
+  N('checkout-v2', 'yan', ['coordinator', 'run'], [
+    N('payments', 'yan', ['planner', 'run'], [
+      N('cards', 'yan', null, [T('card-vault', 'done'), T('card-form', 'done', { fresh: 1 }), T('3ds-flow', 'run', { agent: 'worker-2' }), T('e2e', 'wait', { waits: '3ds-flow' })]),
+      N('webhooks', 'yan', null, [
+        T('stripe-listen', 'ask', { agent: 'worker-4', ask: { q: 'Run `stripe listen` against the staging account? It forwards live events to this machine.', keys: [['y', 'yes'], ['n', 'no']] } }),
+        T('retry-queue', 'ask', { agent: 'worker-5', ask: { land: 1, q: 'retry-queue is finished, and a direction on payments sends it to you: it moves money. 9 tests pass; a failed charge was retried against staging. +140 −22 in 4 files.', keys: [['a', 'land it'], ['x', 'send it back']] } }),
+        T('signatures', 'plan', { fresh: 1, body: 'Check the signature of every webhook before it is read.', means: 'an unsigned or wrongly signed event is refused and logged.' })]),
+      N('tax-lines', 'yan', null, [T('rates', 'wait', { waits: 'copy' }), T('display', 'plan', { body: 'Show tax as its own line in the cart.', means: 'the line is there, and absent when tax is zero.' })], { fresh: 1 })],
+      { dirs: [{ who: 'yan', text: 'ask me before anything that moves money lands' }] }),
+    N('cart', 'yan', null, [
+      N('totals', 'yan', null, [T('endpoint', 'done'), T('cache', 'done'), T('docs', 'done')]),
+      N('offline', 'teo', null, [T('local-store', 'done'), T('sync-engine', 'plan', { body: 'Send what was changed offline when the connection is back.', means: 'nothing is lost or sent twice.' }), T('conflicts', 'ask', { agent: 'worker-1', ask: { q: 'Last write wins, or keep both carts?', keys: [] } })])])]),
+  N('pricing-migration', 'sam', ['coordinator', 'run'], [
+    N('new-tables', 'sam', null, [
+      N('tables', 'sam', ['planner', 'idle'], [T('schema', 'done'), T('copy', 'run', { agent: 'copier' }), T('verify-copy', 'wait', { waits: 'copy' })], { dirs: [{ who: 'sam', text: 'no freeze during the copy' }] }),
+      N('dual-write', 'sam', null, [T('writer', 'run', { agent: 'worker-3' }), T('reader', 'plan'), T('flag', 'plan'), T('cutover', 'plan')])]),
+    N('invoices', 'sam', null, [
+      N('export', 'sam', null, [T('csv', 'done'), T('pdf', 'ask', { agent: 'worker-2', ask: { q: 'Overwrite fixtures/invoice.pdf?', keys: [] } }), T('fixtures', 'done'), T('review', 'run', { agent: 'reviewer' })])])],
+    { dirs: [{ who: 'sam', text: 'ask me before the cutover' }] }),
+  N('sso-rollout', 'mira', ['coordinator', 'run'], [
+    N('sign-on', 'mira', ['planner', 'run'], [
+      N('oidc', 'mira', null, [T('provider', 'run', { agent: 'codex', out: 1 }), T('claims', 'done'), T('store', 'run', { agent: 'worker-6' }), T('load-test', 'wait', { waits: 'store' }), T('logout', 'plan')])])]),
+];
+const LEVEL = ['epic', 'feature', 'story', 'task'], ROWY = [33, 24, 14], LEAF = 10, COLS = 128, ROWS = 44, CW = 8, CH = 17, CORE = [64, 41];
+let items = [], clock = 0;
+const $ = q => document.querySelector(q);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const find = name => items.find(i => i.name === name);
+const apex = it => it.parent ? apex(it.parent) : it;
+const own = it => it.owner || own(it.parent);
+const leaves = it => it.level === 3 ? [it] : it.kids.flatMap(leaves);
+const nDone = it => leaves(it).filter(t => t.state === 'done').length;
+const path = it => { const p = []; for (let q = it.parent; q; q = q.parent) p.unshift(q.name); return p; };
+const tender = it => { for (let q = it; q; q = q.parent) if (q.seat && q.seat.role !== 'reviewer') return q; return apex(it); };
+const dirsFor = it => { const d = []; for (let q = it; q; q = q.parent) (q.dirs || []).forEach(x => d.push({ ...x, on: q })); return d; };
+const held = t => t.state === 'wait' && find(t.waits) && find(t.waits).state !== 'done';
+const order = () => TREE.flatMap(function walk(it) { return [it, ...it.kids.flatMap(walk)]; });
+
+function layout() {
+  const old = new Set(items); items = [];
+  let lanes = 0; (function count(list, level) { list.forEach(it => level === 2 || !it.kids.length ? lanes++ : count(it.kids, level + 1)); })(TREE, 0);
+  const gap = Math.min(13, (COLS - 20) / Math.max(1, lanes - 1)), x0 = Math.max(9, (COLS - (lanes - 1) * gap) / 2 - 4); let lane = 0;
+  (function walk(list, level, parent) {
+    list.forEach(it => {
+      it.level = level; it.parent = parent; items.push(it);
+      if (level === 3) return;
+      if (level === 2 || !it.kids.length) { it.tx = Math.round(x0 + lane++ * gap); if (level === 2) it.kids.forEach((k, j, a) => { k.level = 3; k.parent = it; k.tx = it.tx + 2 * j - (a.length - 1); items.push(k); }); }
+      else { walk(it.kids, level + 1, it); it.tx = Math.round(it.kids.reduce((a, k) => a + k.tx, 0) / it.kids.length); }
+    });
+  })(TREE, 0, null);
+  // Labels on one level keep clear of each other, whatever is under them.
+  [1, 0].forEach(lv => { let edge = -99; items.filter(i => i.level === lv).sort((a, b) => a.tx - b.tx).forEach(i => { i.tx = Math.max(i.tx, edge); edge = i.tx + 6 + Math.max(i.name.length + ((i.dirs || []).length ? 2 : 0), i.seat ? i.seat.role.length + 9 : 5); }); });
+  items.forEach(it => { if (it.x == null) { it.x = it.parent && old.size ? it.parent.x ?? it.tx : it.tx; it.born = old.size ? clock : -1e9; } if (still) it.x = it.tx; });
+}
+layout();
+
+// What agents changed while the person was away: who, what, and why.
+const events = [
+  { who: 'reviewer', what: 'landed card-form', why: 'it does what the issue says done means: 11 tests pass, and wrong input is marked before submit.', it: 'card-form', age: '9m' },
+  { who: 'coordinator', what: 'moved tax-lines after webhooks', why: 'rates waits on the price copy in pricing-migration, so webhooks can be finished first.', it: 'tax-lines', age: '22m', undo: () => { const p = find('payments'), k = find('tax-lines'); if (p && k) { p.kids = [p.kids[0], k, ...p.kids.slice(1).filter(x => x !== k)]; } } },
+  { who: 'planner', what: 'added signatures under webhooks', why: 'found on stripe-listen: nothing checks that a webhook really came from Stripe.', it: 'signatures', age: '31m', undo: () => remove(find('signatures')) },
+];
+const unseen = () => events.filter(e => !e.seen && find(e.it));
+
+let sel = find('webhooks'), mode = null, pending = null, answer = null, viewing = null, hold = null;
+const remove = it => { if (!it) return; const list = it.parent ? it.parent.kids : TREE; list.splice(list.indexOf(it), 1); if (sel === it || path(sel).includes(it.name)) sel = it.parent || TREE[0]; layout(); };
+const log = (who, what, why, it, extra = {}) => events.unshift({ who, what, why, it, age: 'now', seen: true, ...extra });
+
+// The canvas: a grid of terminal cells, text in cells and branches as braille dots under it.
+const cv = $('#c'), ctx = cv.getContext('2d'), dpr = Math.min(2, devicePixelRatio || 1); cv.width = COLS * CW * dpr; cv.height = ROWS * CH * dpr;
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const K = { bg: css('--t-bg'), fg: css('--t-fg'), dim: css('--t-dim'), bright: css('--t-bright'), sel: css('--t-sel'), mag: css('--t-mag'), amber: css('--amber') };
+const glyph = t => t.state === 'done' ? ['✓', K.fg] : t.state === 'run' ? ['⠹', HUE[own(t)], 1] : t.state === 'ask' ? [t.ask && t.ask.land ? '◇' : '●', K.amber] : t.state === 'wait' ? ['⧗', K.dim] : ['○', K.dim];
+function bez(ax, ay, bx, by) { const k = (ay - by) * .55, m = Math.ceil(Math.hypot(bx - ax, by - ay) * 2.2), p = [];
+  for (let i = 0; i <= m; i++) { const t = i / m, u = 1 - t; p.push([u * u * u * ax + 3 * u * u * t * ax + 3 * u * t * t * bx + t * t * t * bx, u * u * u * ay + 3 * u * u * t * (ay - k) + 3 * u * t * t * (by + k) + t * t * t * by]); } return p; }
+const cx = CORE[0] * 2 + 1, cy = CORE[1] * 4 + 1;
+function edges() {
+  const out = [];
+  items.forEach(it => {
+    const grown = Math.min(1, (clock - it.born) / 600), col = HUE[own(it)], ls = leaves(it), d = nDone(it);
+    if (it.level === 3) { const s = it.parent; out.push({ p: bez(s.x * 2 + 1, ROWY[2] * 4 - 1, (s.x + it.tx - s.tx) * 2 + 1, LEAF * 4 + 4), col, level: 3, live: it.state === 'run', look: it.state === 'done' ? 'lit' : it.state === 'plan' ? 'plan' : 'grow', grown }); return; }
+    const from = it.parent ? [it.parent.x * 2 + 1, ROWY[it.level - 1] * 4 - 1] : [cx, cy - 6], busy = ls.some(t => t.state === 'run') || (it.seat && it.seat.state === 'run');
+    out.push({ p: bez(from[0], from[1], it.x * 2 + 1, ROWY[it.level] * 4 + 4), col, level: it.level, live: busy, look: ls.length && d === ls.length ? 'lit' : !busy && ls.every(t => t.state === 'plan') ? 'plan' : 'grow', grown });
+  });
+  items.filter(t => t.level === 3 && held(t)).forEach(t => { const o = find(t.waits), X = k => (k.parent.x + k.tx - k.parent.tx) * 2 + 1, a = [X(t), LEAF * 4 - 1], b = [X(o), LEAF * 4 - 1], d = Math.abs(b[0] - a[0]), h = Math.min(22, d * .18 + 5), m = Math.ceil(d * 2.4), p = [];
+    for (let i = 0; i <= m; i++) { const u = i / m; p.push([a[0] + (b[0] - a[0]) * u, a[1] - 4 * h * u * (1 - u)]); } out.push({ p, dep: 1 }); });
+  return out;
+}
+let text = [], occ;
+function build() {
+  text = []; const W = (c, r, s, col, o = {}) => text.push({ c: Math.round(c), r, s, col, ...o });
+  const story = sel.level === 3 ? sel.parent : sel.level === 2 ? sel : null;
+  items.forEach(it => {
+    if (it.level === 3) { const g = glyph(it); W(it.parent.x + it.tx - it.parent.tx, LEAF, g[0], g[1], { spin: g[2], blink: it.state === 'ask' }); return; }
+    const o = HUE[own(it)], ls = leaves(it), d = nDone(it), full = ls.length && d === ls.length, row = ROWY[it.level], ask = it.seat && it.seat.state === 'ask';
+    W(it.x, row, full ? '✓' : it.seat ? '◉' : '○', full ? K.fg : it.seat ? (ask ? K.amber : o) : K.dim);
+    W(it.x + 2, row, it.name, K.bright, { b: 1, on: it === sel });
+    let c = it.x + 3 + it.name.length;
+    (it.dirs || []).slice(0, 1).forEach(x => { W(c, row, '⚑', HUE[x.who]); c += 2; });
+    c = it.x + 2;
+    if (it.seat) { const run = it.seat.state === 'run'; W(c, row + 1, run ? '⠹' : '·', run ? o : K.dim, { spin: run }); W(c + 2, row + 1, it.seat.role, run ? o : K.dim); c += 3 + it.seat.role.length; }
+    const tally = `${it.seat ? '· ' : ''}${own(it) !== (it.parent ? own(it.parent) : null) && !it.seat ? '@' + own(it) + ' ' : ''}${d}/${ls.length}`;
+    W(c, row + 1, tally, K.dim); if (it.fresh) W(c + tally.length + 1, row + 1, '+', K.bright, { b: 1 });
+  });
+  if (story) story.kids.forEach((t, j) => { const g = glyph(t), c0 = Math.max(0, Math.min(COLS - 30, Math.round(story.x) - 5)), r = LEAF - 1 - story.kids.length + j;
+    W(c0, r, g[0], g[1], { spin: g[2], blink: t.state === 'ask' }); W(c0 + 2, r, t.name, t.state === 'plan' || t.state === 'wait' ? K.dim : t === sel ? K.bright : K.fg, { on: t === sel, b: t === sel });
+    let c = c0 + 3 + t.name.length; if (t.dirs && t.dirs.length) { W(c, r, '⚑', HUE[t.dirs[0].who]); c += 2; } if (t.fresh) { W(c, r, '+', K.bright, { b: 1 }); c += 2; } if (t.agent && t.state !== 'done') W(c, r, t.agent, K.dim); });
+  [['TASKS', LEAF], ['STORIES', 14], ['FEATURES', 24], ['EPICS', 33]].forEach(l => W(0, l[1], l[0], K.dim));
+  W(CORE[0] - 7, 43, 'harbor', K.mag, { b: 1 }); W(CORE[0], 43, '· 4 people', K.dim);
+  occ = new Uint8Array(COLS * ROWS); text.forEach(t => { for (let i = 0; i < [...t.s].length; i++) if (t.c + i >= 0 && t.c + i < COLS) occ[t.r * COLS + t.c + i] = 1; });
+}
+const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'; let last = -1;
+function draw(ms) {
+  const t = Math.floor(ms / 83) * .083;   // a terminal repaints about 12 times a second
+  if (t === last) return; last = t; clock = ms;
+  items.forEach(it => { if (it.level < 3) { it.x += (it.tx - it.x) * .4; if (Math.abs(it.tx - it.x) < .4) it.x = it.tx; } });
+  build();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalAlpha = 1; ctx.fillStyle = K.bg; ctx.fillRect(0, 0, COLS * CW, ROWS * CH);
+  const wave = (t * 60) % 400, cells = new Map();
+  const plot = (x, y, col, hot) => { const dx = Math.round(x), dy = Math.round(y); if (dx < 0 || dy < 0 || dx >= COLS * 2 || dy >= ROWS * 4) return; const k = (dy >> 2) * COLS + (dx >> 1); if (occ[k]) return;
+    let c = cells.get(k); if (!c) cells.set(k, c = { d: new Set(), col, hot }); c.d.add((dy & 3) * 2 + (dx & 1)); if (hot >= c.hot) { c.col = col; c.hot = hot; } };
+  edges().forEach(e => {
+    if (e.dep) return e.p.forEach((q, i) => { if ((((i - Math.floor(t * 12)) % 8) + 8) % 8 < 4) plot(q[0], q[1], K.dim, 1); });
+    const pi = wave - e.level * 90, n = Math.ceil(e.p.length * e.grown);
+    e.p.slice(0, n).forEach((q, i) => { if (e.look === 'plan' && i % 7 > 1) return; const hot = e.live && Math.abs(i - pi) < 10; plot(q[0], q[1], hot ? K.bright : e.col, hot ? 2 : e.look === 'lit' ? 1 : 0); });
+  });
+  items.filter(it => it.level < 3 && it.seat && nDone(it) < leaves(it).length).forEach(it => { const run = it.seat.state === 'run', col = it.seat.state === 'ask' ? K.amber : run ? HUE[own(it)] : K.dim, X = it.x * 2 + 1, Y = ROWY[it.level] * 4 + 1.5, turn = run ? t * 3 : 0;
+    for (let a = 0; a < 6.28; a += .3) if (!run || ((a - turn) % 6.28 + 6.28) % 6.28 > 1.6) plot(X + Math.cos(a) * 3.3, Y + Math.sin(a) * 3.3, col, 1); });
+  const r = 5.4 + (still ? 0 : Math.sin(t * 2) * .9);
+  for (let y = -9; y <= 9; y++) for (let x = -9; x <= 9; x++) { const d = Math.hypot(x, y); if (d <= r) plot(cx + x, cy + y, K.mag, 2); else if (d <= r + 3 && (x + y) % 2 === 0) plot(cx + x, cy + y, K.mag, 0); }
+  cells.forEach((c, k) => { const X = (k % COLS) * CW, Y = Math.floor(k / COLS) * CH; ctx.fillStyle = c.col; ctx.globalAlpha = [.5, .95, 1][c.hot];
+    c.d.forEach(b => { ctx.beginPath(); ctx.arc(X + 2 + (b & 1) * 4, Y + 2.1 + (b >> 1) * 4.25, 1.15, 0, 6.3); ctx.fill(); }); });
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  text.forEach(e => {
+    const ch = [...(e.spin && !still ? SPIN[Math.floor(t * 11) % 10] : e.s)];
+    ctx.globalAlpha = 1;
+    if (ch.length > 1 || e.on) { ctx.fillStyle = e.on ? K.sel : K.bg; ctx.fillRect(e.c * CW - (e.on ? 3 : 1), e.r * CH + (e.on ? 0 : 1), ch.length * CW + (e.on ? 6 : 2), CH - (e.on ? 0 : 2)); }
+    if (e.blink && !still) ctx.globalAlpha = .45 + .55 * Math.abs(Math.sin(t * 2.4));
+    ctx.font = `${e.b ? 700 : 400} 13.3px "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace`; ctx.fillStyle = e.col;
+    ch.forEach((g, i) => ctx.fillText(g, (e.c + i) * CW + CW / 2, e.r * CH + CH / 2 + .5));
+  });
+}
+function loop(ms) { draw(ms); requestAnimationFrame(loop); }
+const kick = () => { if (still) { last = -1; draw(clock + 1000); } };
+
+// The words at the foot and in the panel.
+const stateOf = it => it.level < 3 ? `${nDone(it)} of ${leaves(it).length} landed` : { done: 'landed', run: `${it.agent} is on it${it.out ? ', from a shell' : ''}`, ask: it.ask && it.ask.land ? 'finished, and waiting for you' : `${it.agent} asks`, wait: held(it) ? `waits on ${it.waits}` : 'free to start', plan: 'nobody is on it yet' }[it.state];
+const whom = it => { const t = tender(it); return `${t.seat ? t.seat.role : 'coordinator'} on ${t.name}`; };
+const Kb = (k, d, amber) => `<button class="k${amber ? ' amber' : ''}" data-k="${k}"><kbd>${k}</kbd> ${d}</button>`;
+function tries(it) {
+  const out = ['this first'];
+  if (it.level < 3 && !(it.dirs || []).length) out.push('ask me before anything here lands');
+  if ((it.dirs || []).length) out.push('forget what I said here');
+  if (it.level === 3 && it.state !== 'done') out.push('split it by provider');
+  if (it.state === 'wait' || it.state === 'plan') out.push('why is this not started?');
+  if (it.level < 3 && leaves(it).some(t => t.state === 'plan')) out.push('put more agents on this');
+  out.push('no new dependencies', 'drop this');
+  return out.slice(0, 5);
+}
+function paint() {
+  const mine = t => own(apex(t)) === ME, asks = items.filter(t => t.ask), mineAsk = asks.filter(mine).length, ch = unseen().length;
+  const people = Object.keys(HUE).map(p => { if (p === 'teo') return '<span class="td">○@teo away</span>'; const n = items.filter(t => own(apex(t)) === p && (t.state === 'run' || (t.seat && t.seat.state === 'run'))).length, a = asks.filter(t => own(apex(t)) === p).length;
+    return `<span><span style="color:${HUE[p]}">@${p}</span> <span style="color:${HUE[p]}">⠹</span>${n}${a ? ` <span class="ta">●${a}</span>` : ''}</span>`; }).join('');
+  $('#top').innerHTML = `<span class="net">◆ harbor</span>${people}<span class="end"><span class="${ch ? 'tw' : 'td'}">+ ${ch} changed by agents since you looked</span><span class="${mineAsk ? 'ta' : 'td'}">● ${mineAsk} need you</span></span>`;
+
+  const it = sel, o = own(it), t = tender(it), dirs = dirsFor(it), kids = it.kids, hist = events.filter(e => e.it === it.name || (find(e.it) && path(find(e.it)).includes(it.name))).slice(0, 4);
+  const g = k => { const x = glyph(k); return `<span style="color:${x[1]}">${x[0]}</span>`; };
+  $('#side').innerHTML = `<div><div class="line"><span class="tw nm">${esc(it.name)}</span><span class="td">${LEVEL[it.level]} · #${it.no}</span></div><div class="td">${path(it).length ? esc(path(it).join(' ▸ ')) : '◆ harbor'}</div>` +
+    `<div><span style="color:${HUE[o]}">@${o}${o === ME ? ' (you)' : ''}</span> <span class="td">· ${esc(stateOf(it))}</span></div></div>` +
+    `<div><h3>TENDED BY</h3><div>${t.seat ? esc(t.seat.role) : 'coordinator'} <span class="td">${t === it ? 'here' : 'on ' + esc(t.name)}</span></div><div class="td">It keeps the issues under it. What you say here goes to it.</div></div>` +
+    `<div><h3>DIRECTIONS</h3>${dirs.length ? dirs.map(d => `<div class="dir"><span style="color:${HUE[d.who]}">⚑</span><span>${esc(d.text)}<br><span class="td">@${d.who}, ${d.on === it ? 'here' : 'on ' + esc(d.on.name)}</span></span></div>`).join('') : '<div class="td">None stand here or above. The agents decide.</div>'}</div>` +
+    (kids.length ? `<div><h3>UNDER IT</h3>${kids.map(k => `<div class="line"><span>${k.level === 3 ? g(k) : '<span class="td">›</span>'}</span><span class="nm${k.state === 'plan' || k.state === 'wait' ? ' td' : ''}">${esc(k.name)}</span><span class="td">${k.level === 3 ? esc(k.state === 'run' || k.state === 'ask' ? k.agent : k.state === 'wait' ? '⧗ ' + k.waits : k.state === 'done' ? 'landed' : '') : nDone(k) + '/' + leaves(k).length}</span></div>`).join('')}</div>` : '') +
+    (hist.length ? `<div><h3>WHAT HAPPENED</h3>${hist.map(e => `<div><span class="td">${e.age}</span> ${esc(e.who)} ${esc(e.what)}<br><span class="td">${esc(e.why)}</span></div>`).join('')}</div>` : '');
+
+  let h;
+  const head = `<div class="what">${g(it.level === 3 ? it : { state: it.seat ? 'run' : 'plan', owner: o })} <span class="tw">${esc(it.name)}</span><span class="td">${LEVEL[it.level]}</span><span style="color:${HUE[o]}">@${o}${o === ME ? ' (you)' : ''}</span><span class="td">${esc(stateOf(it))}</span></div>`;
+  if (mode) h = `<label id="linewrap"><span style="color:${HUE[ME]}">to ${esc(whom(it))}, about ${esc(it.name)}:</span><input id="line" autocomplete="off" spellcheck="false" aria-label="What you want"></label>` +
+    `<div class="td">${mine(it) ? 'It will change the issues to match, and say what it did.' : `This is @${own(apex(it))}'s. It goes as a message from you, for them to approve.`}  enter to send · esc to leave it</div><div class="try">${(mode.kind === 'back' ? ['retries must stop after 3 days', 'add a test for a replayed event'] : tries(it)).map(s => `<button data-say="${esc(s)}">${esc(s)}</button>`).join('')}</div>`;
+  else if (pending) h = head + `<div><span style="color:${HUE[ME]}">you:</span> ${esc(pending.text)}</div><div class="td">⠹ ${esc(pending.who)} is reading it…</div>`;
+  else {
+    h = head;
+    if (viewing) h += `<div class="ans">+ ${esc(viewing.who)} ${esc(viewing.what)} <span class="td">${viewing.age} ago</span></div><div><span class="td">why</span>  ${esc(viewing.why)}</div>`;
+    else if (answer && answer.who === 'canopy') h += `<div class="td">${esc(answer.said)}</div>`;
+    else if (answer) h += `<div><span style="color:${HUE[ME]}">you:</span> ${esc(answer.text)}</div><div class="ans"><span class="td">${esc(answer.who)}:</span> ${esc(answer.said)}</div>`;
+    else if (it.ask) h += `<div>${esc(it.ask.q)}</div>`;
+    else h += `<div class="td">${(it.dirs || []).length ? 'A direction of ' + it.dirs.map(d => '@' + d.who).join(', ') + ' stands here.' : 'Agents keep this. Say what you want and ' + esc(whom(it)) + ' changes it.'}</div>`;
+    const ks = [];
+    if (viewing) { if (viewing.undo && !viewing.undone) ks.push(Kb('x', 'put it back', 1)); ks.push(Kb('u', `next change${unseen().length ? ' (' + unseen().length + ')' : ''}`)); }
+    else if (!answer && it.ask && mine(it)) { it.ask.keys.forEach(([k, d]) => ks.push(Kb(k, d, 1))); ks.push(Kb('o', 'something else', 1)); }
+    ks.push(Kb('space', 'say something'));
+    if (it.agent && !it.out && it.state !== 'done' || it.seat) ks.push(Kb('enter', 'open the session'));
+    h += `<div class="do">${ks.join('')}</div>`;
+  }
+  $('#band').innerHTML = h;
+  if (mode) $('#line').focus();
+  $('#keys').innerHTML = [['←→', 'beside'], ['↑↓', 'level'], ['space', 'say'], ['u', `what agents changed${ch ? ' (' + ch + ')' : ''}`], ['tab', 'next that needs you'], ['enter', 'open']].map(([k, d]) => Kb(k, d)).join('');
+  const v = $('#view'); if (v.scrollWidth > v.clientWidth) v.scrollTo({ left: (sel.level === 3 ? sel.parent.tx : sel.tx) / COLS * v.scrollWidth - v.clientWidth / 2, behavior: still ? 'auto' : 'smooth' });
+  kick();
+}
+
+// Whatever tends the branch reads the line and changes the issues. The reading here is a few patterns; in Pi it is a session.
+function carry(it, text) {
+  const who = whom(it), why = `@yan said: “${text}”`, s = text.toLowerCase(), list = it.parent ? it.parent.kids : TREE, under = it.parent ? it.parent.name : 'harbor';
+  if (own(apex(it)) !== ME) return `Passed to @${own(apex(it))}'s ${who} as a message from you. It is theirs to approve; nothing has changed.`;
+  if (/forget|lift|never mind/.test(s)) { const n = (it.dirs || []).length; it.dirs = []; return n ? `Lifted: ${n === 1 ? 'the direction' : n + ' directions'} on ${it.name} no longer ${n === 1 ? 'stands' : 'stand'}. Everything under it is told.` : `Nothing of yours stands on ${it.name}.`; }
+  if (/\bwhy\b/.test(s)) return it.state === 'wait' ? `${it.name} waits on ${it.waits}, which ${find(it.waits) ? stateOf(find(it.waits)).replace(/^.* is on it.*/, 'is being worked on') : 'is gone'}. It starts by itself when that lands.` : it.state === 'plan' ? `Nothing holds ${it.name}. ${order().filter(t => t.level === 3 && t.state === 'plan' && own(apex(t)) === ME).indexOf(it)} planned tasks are ahead of it in this tree; say "this first" to change that.` : `${it.name}: ${stateOf(it)}.`;
+  if (/first|priorit|before the rest|now\b/.test(s)) { if (list[0] === it) return `${it.name} is already first under ${under}.`; const at = list.indexOf(it); list.splice(at, 1); list.unshift(it); layout(); log(tender(it).seat.role, `moved ${it.name} first under ${under}`, why, it.name); return `${it.name} is first under ${under} now. Sessions take what is under it before the rest.`; }
+  if (/last|later|after the rest/.test(s)) { list.splice(list.indexOf(it), 1); list.push(it); layout(); log(tender(it).seat.role, `moved ${it.name} last under ${under}`, why, it.name); return `${it.name} is last under ${under} now.`; }
+  if (/drop|cut this|remove|not doing|delete/.test(s)) { const ls = leaves(it), run = ls.filter(t => t.state === 'run' || t.state === 'ask').length, name = it.name; remove(it); log(who.split(' ')[0], `dropped ${name}`, why, sel.name); return `Dropped ${name}${it.level < 3 ? ` and the ${ls.length} under it` : ''}.${run ? ` ${run} session${run > 1 ? 's were' : ' was'} stopped; their branches are kept.` : ''}`; }
+  if (/split|break/.test(s)) {
+    if (it.level !== 3) return `${it.name} is ${LEVEL[it.level] === 'epic' ? 'an' : 'a'} ${LEVEL[it.level]}: say what it should be split into, or go up into it and split a task.`;
+    const by = (s.match(/by (.+)$/) || [])[1] || '', parts = /provider/.test(by) ? ['stripe', 'adyen'] : by.split(/,| and /).map(x => x.trim().replace(/\s+/g, '-')).filter(Boolean).slice(0, 3);
+    const names = (parts.length > 1 ? parts : ['a', 'b']).map(p => `${it.name}-${p}`), at = list.indexOf(it), made = names.map(n => T(n, 'plan', { body: `The ${n.split('-').pop()} part of ${it.name}.`, means: 'as for the issue it was split from.' }));
+    list.splice(at, 1, ...made); sel = made[0]; layout(); log(tender(made[0]).seat.role, `split ${it.name} into ${names.join(' and ')}`, why, made[0].name); return `Split ${it.name} into ${names.join(' and ')}.${it.state === 'run' || it.state === 'ask' ? ` ${it.agent} carries on with the first.` : ''}`;
+  }
+  if (/more agents|faster|more sessions|speed/.test(s)) { const free = leaves(it).filter(t => t.state === 'plan').slice(0, 2); if (!free.length) return `Nothing under ${it.name} is free to start: what is left is being worked on, or waits on something.`; free.forEach((t, i) => { t.state = 'run'; t.agent = 'worker-' + (7 + i); }); log(tender(it).seat.role, `put sessions on ${free.map(t => t.name).join(' and ')}`, why, it.name); return `Put ${free.length} more session${free.length > 1 ? 's' : ''} on ${it.name}: ${free.map(t => t.name).join(' and ')}.`; }
+  if (/pause|hold this|stop/.test(s)) { const run = leaves(it).filter(t => t.state === 'run'); run.forEach(t => { t.state = 'plan'; delete t.agent; }); (it.dirs = it.dirs || []).unshift({ who: ME, text }); return `Stopped ${run.length} session${run.length === 1 ? '' : 's'} under ${it.name}, and kept that as a direction: nothing here is started until you lift it.`; }
+  (it.dirs = it.dirs || []).unshift({ who: ME, text });
+  return /ask me|show me|check with me|before .*land/.test(s) ? `Kept as a direction on ${it.name}. Results under it come to you before they land; the rest I close myself.` : `Kept as a direction on ${it.name}, in your words. Everything under it is told, and so is whatever starts there later.`;
+}
+function send(text) {
+  const it = sel, kind = mode.kind; mode = null; text = text.trim(); viewing = null;
+  if (!text) { answer = null; return paint(); }
+  const t = tender(it); pending = { text, who: whom(it) }; answer = null; paint();
+  setTimeout(() => {
+    pending = null; let said;
+    if (kind === 'back') { it.state = 'run'; delete it.ask; log('reviewer', `sent ${it.name} back`, `@yan said: “${text}”`, it.name); said = `${it.name} is back with ${it.agent}, with what you said.`; }
+    else if (kind === 'else') { it.state = 'run'; delete it.ask; said = `${it.agent} is told what you typed, and that it was said instead of an answer.`; }
+    else said = carry(it, text);
+    answer = { text, who: t.seat ? t.seat.role : 'coordinator', said }; paint();
+  }, still ? 0 : 900);
+}
+
+function go(it) { if (it) { sel = it; answer = null; viewing = null; } }
+function key(k) {
+  if (pending) return;
+  const it = sel, row = items.filter(i => i.level === it.level).sort((a, b) => (a.level === 3 ? a.parent.tx + a.tx / 1000 : a.tx) - (b.level === 3 ? b.parent.tx + b.tx / 1000 : b.tx)), i = row.indexOf(it), mine = own(apex(it)) === ME;
+  if (k === 'right') go(row[(i + 1) % row.length]); else if (k === 'left') go(row[(i + row.length - 1) % row.length]);
+  else if (k === 'up') go(it.kids[0]); else if (k === 'down') go(it.parent);
+  else if (k === 'tab') { const a = items.filter(t => t.ask && own(apex(t)) === ME); if (a.length) go(a[(a.indexOf(it) + 1) % a.length]); else answer = { text: 'tab', who: 'canopy', said: 'Nothing needs you.' }; }
+  else if (k === 'space') mode = { kind: 'say' };
+  else if (k === 'u') { const e = unseen()[0]; if (e) { go(find(e.it)); e.seen = true; find(e.it).fresh = 0; viewing = e; } else { viewing = null; answer = { text: 'u', who: 'canopy', said: 'Nothing else has changed since you looked.' }; } }
+  else if (k === 'x' && viewing && viewing.undo && !viewing.undone) { const e = viewing; e.undo(); e.undone = 1; layout(); viewing = null; answer = { text: 'put it back', who: e.who, said: `Put back: I ${e.what.replace(/^moved/, 'had moved').replace(/^added/, 'had added')}. Tell me if the reason still matters.` }; }
+  else if (it.ask && mine && !viewing && !answer) {
+    const hit = it.ask.keys.find(q => q[0] === k);
+    if (k === 'o') mode = { kind: 'else' };
+    else if (hit && it.ask.land && k === 'x') mode = { kind: 'back' };
+    else if (hit && it.ask.land) { it.state = 'done'; delete it.ask; log('reviewer', `landed ${it.name}`, '@yan said to land it.', it.name); answer = { text: hit[1], who: 'reviewer', said: `${it.name} has landed.` }; }
+    else if (hit) { it.state = 'run'; delete it.ask; answer = { text: hit[1], who: it.agent, said: 'Carrying on.' }; }
+  }
+  else if (k === 'enter' && (it.seat || (it.agent && !it.out))) answer = { text: 'enter', who: 'canopy', said: `In Pi this opens ${it.seat ? it.seat.role : it.agent}'s chat in a box over the tree. alt+l closes it.` };
+  paint();
+}
+
+// The other terminal: the same server, from a shell.
+const LOG = ['<span class="td"># Run a command. Then say "this first" on cart above, and take the next one again.</span>'];
+const P = c => LOG.push(`<span class="p">$</span> <span class="c">${esc(c)}</span>`), O = (...l) => LOG.push(...l);
+function shell(c) {
+  const h = hold && items.includes(hold) && hold.state === 'run' ? hold : null;
+  if (c === 'next') {
+    P('pi-lattice work next');
+    if (h) O(`You are on #${h.no} ${esc(h.name)}. Say done or drop it first.   <span class="td">exit 4</span>`);
+    else { const t = order().find(t => t.level === 3 && t.state === 'plan' && own(apex(t)) === ME);
+      if (!t) O('Nothing is ready in this repository.   <span class="td">exit 3</span>');
+      else { t.state = 'run'; t.agent = 'claude'; t.out = 1; t.fresh = 0; hold = t; log('claude', `took ${t.name}`, 'next in tree order, from a shell.', t.name, { seen: false }); t.fresh = 1; const d = dirsFor(t);
+        O(`<span class="c">#${t.no} ${esc(t.name)}</span>   <span class="td">task · ${esc(path(t).slice(1).join(' ▸ '))} · @${own(t)} · shop</span>`, esc(t.body || 'As its tending session wrote it.'), `Done means: ${esc(t.means || 'as written in the issue.')}`, ...(d.length ? ['Directions above it:', ...d.map(x => `  <span style="color:${HUE[x.who]}">⚑</span> ${esc(x.text)}   <span class="td">@${x.who}, on ${esc(x.on.name)}</span>`)] : ['<span class="td">No directions stand above it.</span>']), '<span class="td">It is yours until you say done or drop it, or go quiet for 30 minutes.</span>'); } }
+  } else if (c === 'done') {
+    if (!h) { P('pi-lattice work done'); O('You hold no issue. Take one with: pi-lattice work next   <span class="td">exit 4</span>'); }
+    else { P(`pi-lattice work done ${h.no} --summary "…" --check "tests pass; tried it by hand"`); hold = null; const gate = dirsFor(h).find(d => /ask me|show me|before .*land/.test(d.text)), t = tender(h);
+      if (gate) { h.state = 'ask'; h.ask = { land: 1, q: `${h.name} is finished by claude, from a shell, and a direction on ${gate.on.name} sends it to you. Tests pass; tried by hand. +64 −9 in 3 files.`, keys: [['a', 'land it'], ['x', 'send it back']] }; O(`#${h.no} is with @${gate.who}: a direction on ${esc(gate.on.name)} asks for it.`); }
+      else { O(`#${h.no} is being checked by ${esc(whom(h))}.`); setTimeout(() => { if (!items.includes(h)) return; h.state = 'done'; h.fresh = 1; log(t.seat ? t.seat.role : 'coordinator', `landed ${h.name}`, 'it does what the issue says done means; no direction above asks for a person.', h.name, { seen: false }); paint(); }, 1400); } }
+  } else { P('pi-lattice work prime'); O('This team keeps its work as issues on a lattice server. Agents keep them; you are one.', '  next            take the next ready issue. Read the directions above it: a person gave them.', '  note N "…"      write down what you learn; the next agent reads it.', '  add "…" --why   file what you find, and say why.', '  done N --summary "…" --check "…"   say what you did and how you checked.', '  drop N "why"    give it back when you cannot finish.', '<span class="td">Add --json to read any of them as data.</span>'); }
+  $('#log').innerHTML = LOG.slice(-60).join('\n'); $('#log').scrollTop = 1e6; paint();
+}
+$('#log').innerHTML = LOG.join('\n');
+
+cv.onclick = e => { const b = cv.getBoundingClientRect(), c = (e.clientX - b.left) / b.width * COLS, r = (e.clientY - b.top) / b.height * ROWS, story = sel.level === 3 ? sel.parent : sel.level === 2 ? sel : null;
+  let hit = story && story.kids.find((t, j) => { const c0 = Math.max(0, Math.min(COLS - 30, Math.round(story.x) - 5)), row = LEAF - 1 - story.kids.length + j; return r >= row && r < row + 1 && c >= c0 - 1 && c <= c0 + 24; });
+  hit = hit || items.find(t => t.level === 3 && Math.abs(c - .5 - (t.parent.x + t.tx - t.parent.tx)) < 1 && r >= LEAF - .2 && r < LEAF + 1.2) || items.find(it => it.level < 3 && c >= it.x - 1 && c <= it.x + 5 + it.name.length && r >= ROWY[it.level] - .5 && r <= ROWY[it.level] + 2);
+  if (hit && !pending) { mode = null; go(hit); paint(); } };
+document.addEventListener('click', e => { const t = e.target.closest('[data-k],[data-say],[data-c]'); if (!t) return; if (t.dataset.c) return shell(t.dataset.c); if (t.dataset.say) return send(t.dataset.say); if (mode) mode = null; key({ '←→': 'right', '↑↓': 'up' }[t.dataset.k] || t.dataset.k); });
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (mode) { if (e.key === 'Enter') { e.preventDefault(); send($('#line').value); } else if (e.key === 'Escape') { mode = null; paint(); } return; }
+  if (e.target.closest && e.target.closest('#sh')) return;
+  const k = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', Tab: 'tab', ' ': 'space', Enter: 'enter' }[e.key] || (e.key.length === 1 ? e.key : null);
+  if (!k || (k === 'tab' && e.shiftKey)) return;
+  e.preventDefault(); key(k);
+});
+paint();
+(document.fonts ? document.fonts.load('13.3px "JetBrains Mono"') : Promise.resolve()).then(() => requestAnimationFrame(loop), () => requestAnimationFrame(loop));
+</script>
+</body>
+</html>

@@ -109,6 +109,6 @@ Phase 8 is last because it removes something that works, and nothing before it d
 - Whether the scheme should be editable by everyone, as planned, or by the person who started the server.
 - ~~Whether a host should be able to carry a small server of its own.~~ Yes: the board, after Kanzo.
 - Whether the board should start by itself, so that a person has issues without asking. Today it is one command, because with it the canopy draws issues instead of the session tree, and that is a change someone should choose.
-- The order sessions take issues in. Lowest number first is predictable and cannot be changed; Kanzo lets cards be dragged. Proposed in [0033](../decisions/0033-flow-and-a-command-line.md): a rank people set, taken in tree order.
+- The order sessions take issues in. Lowest number first is predictable and cannot be changed; Kanzo lets cards be dragged. Proposed in [0033](../decisions/0033-agents-keep-the-issues.md): a rank the agents keep and people steer, taken in tree order.
 - Whether a repository should be known by its remote rather than its folder's name, so that clones under different names are one repository.
 - Whether the work tools should also be an MCP server, so that agents outside a lattice host can use the board. Proposed in 0033: a command line, `pi-lattice work`, not MCP.
