@@ -5,11 +5,11 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { liveBoard, readBoard } from "../../packages/app/src/board.ts";
-import { joinAndSave, Work } from "../../packages/app/src/work.ts";
+import { boardAddress, liveBoard, readBoard } from "../../packages/app/src/board.ts";
+import { joinAndSave, readAccount, Work } from "../../packages/app/src/work.ts";
 import { LatticeHost } from "../../packages/host/src/index.ts";
 import { childrenOf } from "../../packages/protocol/src/index.ts";
-import { joinServer, WorkClient, WorkServer } from "../../packages/server/src/index.ts";
+import { createCertificate, formatAddress, joinServer, WorkClient, WorkServer } from "../../packages/server/src/index.ts";
 import { createSandbox, eventually, hostOptionsFor, type Sandbox } from "../support/harness.ts";
 
 let sandbox: Sandbox;
@@ -193,6 +193,36 @@ describe("the team's work", () => {
 		elsewhere.stop();
 	}, 60_000);
 
+	it("lets someone already on a server take its address again when it starts encrypting, and stay who they are", async () => {
+		// A server that encrypts, joined the old way: in the clear, as a member from before would be.
+		const secure = new WorkServer({ file: ":memory:", host: "127.0.0.1", tls: createCertificate() });
+		const port = await secure.start();
+		try {
+			const h = await LatticeHost.start(hostOptionsFor(sandbox));
+			host = h;
+			work = new Work({ home: sandbox.home, hostId: "laptop:shop", repo: "shop", name: () => "tester" });
+			h.setWork(work);
+			expect(await work.server("join", [`http://127.0.0.1:${port}/#${secure.tracker.code}`])).toContain("Joined http://127.0.0.1");
+			const before = readAccount(sandbox.home);
+			expect(before?.pin).toBeUndefined();
+
+			// A wrong address changes nothing.
+			const wrong = formatAddress(`https://127.0.0.1:${port}`, secure.tracker.code, "A".repeat(43));
+			expect(await work.server("join", [wrong]).catch((error: Error) => error.message)).toContain("not the server this address was given for");
+			expect(readAccount(sandbox.home)).toEqual(before);
+
+			const address = formatAddress(`https://127.0.0.1:${port}`, secure.tracker.code, secure.pin);
+			expect(await work.server("join", [address])).toBe(`You are still tester on https://127.0.0.1:${port}. Everything said to it is encrypted from here on, and only that server is spoken to.`);
+			expect(readAccount(sandbox.home)).toEqual({ ...before, url: `https://127.0.0.1:${port}`, pin: secure.pin });
+			expect(secure.tracker.people().map((person) => person.name)).toEqual(["tester"]);
+			await eventually(() => h.uiState().work?.connected === true, "the host to be on the server again, encrypted");
+		} finally {
+			work?.stop();
+			work = undefined;
+			await secure.stop();
+		}
+	}, 60_000);
+
 	it("is kept on the person's own machine with nothing to deploy, shared with teammates, and started again by whoever finds it gone", async () => {
 		const boards: ChildProcess[] = [];
 		// As a host starts it: `pi-lattice server --board`, a process of its own.
@@ -218,7 +248,13 @@ describe("the team's work", () => {
 			const board = await liveBoard(sandbox.home);
 			expect(board).toMatchObject({ shared: true, port: first?.port, code: first?.code });
 			expect(board?.pid).not.toBe(first?.pid);
-			const sam = new WorkClient(await joinServer(`http://127.0.0.1:${board?.port}/#${board?.code}`, "sam"), { waitSeconds: 5 });
+			// What teammates are given is encrypted, and says which machine it is.
+			expect(board?.pin).toMatch(/^[\w-]{43}$/);
+			expect(shared).toContain("Connections to it are encrypted");
+			const line = boardAddress(board as NonNullable<typeof board>, "127.0.0.1");
+			expect(line).toBe(`https://127.0.0.1:${board?.port}/#${board?.code}.${board?.pin}`);
+			expect([...shared.matchAll(/\/lattice server (http\S+)/g)].every((match) => (match[1] as string).startsWith("https://") && (match[1] as string).endsWith(`.${board?.pin}`))).toBe(true);
+			const sam = new WorkClient(await joinServer(line, "sam"), { waitSeconds: 5 });
 			others.push(sam);
 			await sam.refresh();
 			expect(sam.state().issues.map((issue) => issue.title)).toEqual(["Checkout"]);

@@ -41,6 +41,6 @@ Begins the move away from peer to peer ([0012](0012-peer-to-peer-collab.md), [00
 
 - **Something to run.** A team needs one machine that stays on.
 - **No roles.** Anyone with the team's code can join, and every member can change everything, the scheme included.
-- **Plain HTTP.** TLS is left to whatever is put in front of it.
+- **Plain HTTP.** TLS is left to whatever is put in front of it. (No longer: [0034](0034-a-server-encrypts-by-itself.md).)
 - **Two ways to share, for now.** Reading a teammate's conversation, mail between owners and handing a session over still go peer to peer; the plan moves them to the server and then removes `collab`.
 - **A name cannot be taken back.** Leaving keeps the name taken on the server; a lost token means a new name.

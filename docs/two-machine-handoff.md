@@ -15,7 +15,7 @@ There is no port to choose. If a firewall asks whether to let `node` accept conn
 
 1. **A** opens `pi` in the project and runs `/lattice server start`, then `/lattice server share`.
 
-   Expected: a line to send, `/lattice server http://<A's address>:<port>/#<code>`, one for each network A's machine is on.
+   Expected: a line to send, `/lattice server https://<A's address>:<port>/#<code>.<fingerprint>`, one for each network A's machine is on. Send all of it: the last part is how B knows the server it reaches is A's.
 
 2. **A** creates a child with its own worktree (`alt+l`, `n`, workspace `worktree`), lets it do some work, and has it commit.
 

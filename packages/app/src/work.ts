@@ -8,8 +8,8 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rm
 import { join } from "node:path";
 import type { WorkPort } from "@pi-lattice/host";
 import type { Note, WorkRequest, WorkResult, WorkSession, WorkState } from "@pi-lattice/protocol";
-import { joinServer, type Peering, type ServerAccount, WorkClient } from "@pi-lattice/server";
-import { boardAddresses, ensureBoard, liveBoard, shareBoard } from "./board.ts";
+import { joinServer, parseAddress, type Peering, type ServerAccount, WorkClient } from "@pi-lattice/server";
+import { boardAddress, boardAddresses, ensureBoard, liveBoard, shareBoard } from "./board.ts";
 
 /** A server joined, and whether it is the board on this machine. */
 export type Account = ServerAccount & { board?: boolean };
@@ -23,7 +23,7 @@ export const PEOPLE_FILE = "people.json";
 export function readAccount(home: string, file = join(home, SERVER_FILE)): Account | undefined {
 	try {
 		const value = JSON.parse(readFileSync(file, "utf8")) as Partial<Account>;
-		return typeof value.url === "string" && typeof value.name === "string" && typeof value.token === "string" ? { url: value.url, name: value.name, token: value.token, ...(value.board === true ? { board: true } : {}) } : undefined;
+		return typeof value.url === "string" && typeof value.name === "string" && typeof value.token === "string" ? { url: value.url, name: value.name, token: value.token, ...(typeof value.pin === "string" ? { pin: value.pin } : {}), ...(value.board === true ? { board: true } : {}) } : undefined;
 	} catch {
 		return undefined;
 	}
@@ -50,6 +50,28 @@ function spawnSelf(home: string): (args: string[]) => void {
 export async function joinAndSave(home: string, address: string, name: string): Promise<ServerAccount> {
 	const account = await joinServer(address, name);
 	mkdirSync(home, { recursive: true });
+	saveAccount(join(home, SERVER_FILE), account);
+	return account;
+}
+
+/** The machine and port of a server's address, whatever it is spoken to in. */
+const placeOf = (url: string): string => new URL(url).host;
+
+/**
+ * Take a server's address again for a server this person is already on: the same place, now
+ * said to encrypt, or with another fingerprint. They stay who they are there; only how it is
+ * reached changes. The server is asked something as them first, so a wrong address changes nothing.
+ */
+async function reachAgain(home: string, before: Account, address: string): Promise<Account> {
+	const { url, pin } = parseAddress(address);
+	const { pin: _old, ...kept } = before;
+	const account: Account = { ...kept, url, ...(pin !== undefined ? { pin } : {}) };
+	const probe = new WorkClient(account, { waitSeconds: 0 });
+	try {
+		await probe.refresh();
+	} finally {
+		probe.stop();
+	}
 	saveAccount(join(home, SERVER_FILE), account);
 	return account;
 }
@@ -271,14 +293,22 @@ export class Work implements WorkPort {
 			if (action === "unshare") return "The board is no longer shared: only this machine can reach it. Teammates who joined keep their names, and see it again when it is shared again.";
 			const addresses = boardAddresses(board);
 			return addresses.length === 0
-				? `The board is shared, but this machine has no network address to give out. Teammates join with /lattice server http://<this machine's address>:${board.port}/#${board.code}`
-				: `The board is shared. On another machine, teammates join with${addresses.length > 1 ? " the line for the network they are on" : ""}:\n\n${addresses.map((address) => `  /lattice server ${address}`).join("\n")}\n\nAnyone with that address can read and change everything on it. It speaks plain HTTP: share it only on a network you trust, such as a VPN. It is reachable while this machine is on; stop sharing with /lattice server share off.`;
+				? `The board is shared, but this machine has no network address to give out. Teammates join with /lattice server ${boardAddress(board, "<this machine's address>")}`
+				: `The board is shared. On another machine, teammates join with${addresses.length > 1 ? " the line for the network they are on" : ""}:\n\n${addresses.map((address) => `  /lattice server ${address}`).join("\n")}\n\nAnyone with that address can read and change everything on it. ${board.pin !== undefined ? "Connections to it are encrypted, and the address says which machine it is: pass on all of it, over a channel the team already trusts." : "It speaks plain HTTP: share it only on a network you trust, such as a VPN."} It is reachable while this machine is on; stop sharing with /lattice server share off.`;
 		}
 		if (action === "join") {
 			const [address, name] = [args[0], args[1]?.replace(/^@/, "")];
 			if (!address) throw new Error("Give the server's address: /lattice server https://lattice.example.com/#code");
 			const before = readAccount(this.options.home);
 			if ((await liveBoard(this.options.home))?.shared) throw new Error("This machine shares its own board. Stop sharing first with /lattice server share off, so teammates are not left on a board nobody looks at.");
+			// The address of the server they are already on, given again: it encrypts now, or was set up again in the same place.
+			const given = parseAddress(address);
+			if (before && !before.board && name === undefined && placeOf(before.url) === placeOf(given.url) && (before.url !== given.url || before.pin !== given.pin)) {
+				const account = await reachAgain(this.options.home, before, address);
+				this.sync();
+				await this.client?.refresh().catch(() => {});
+				return `You are still ${account.name} on ${account.url}.${account.pin !== undefined ? " Everything said to it is encrypted from here on, and only that server is spoken to." : ""}`;
+			}
 			const account = await joinAndSave(this.options.home, address, name ?? this.options.name());
 			if (before && before.url !== account.url) rmSync(join(this.options.home, PEOPLE_FILE), { force: true });
 			this.sync();

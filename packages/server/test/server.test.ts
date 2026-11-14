@@ -523,9 +523,17 @@ describe("a server that encrypts by itself", () => {
 		const port = await strict.start();
 		expect(await refused(joinServer(`http://127.0.0.1:${port}/#${strict.tracker.code}`, "sam"))).toMatch(/encrypts its connections now/);
 		expect(strict.tracker.people()).toEqual([]);
-		// What it is can still be asked in the clear: nothing secret is said.
-		expect(((await (await fetch(`http://127.0.0.1:${port}/`)).json()) as { service: string }).service).toBe("pi-lattice");
 		expect((await joinServer(formatAddress(`https://127.0.0.1:${port}`, strict.tracker.code, strict.pin), "sam")).name).toBe("sam");
+	});
+
+	it("stops at once, whoever is still connected or waiting for news", async () => {
+		const client = new WorkClient(await joinServer(where, "yan"), { waitSeconds: 20, retryMs: 50 });
+		clients.push(client);
+		client.start();
+		await until(() => client.state().connected, "the client to be waiting for news");
+		const began = Date.now();
+		await secure.stop();
+		expect(Date.now() - began).toBeLessThan(1500);
 	});
 
 	it("lets go of a connection that never says anything, when it stops", async () => {

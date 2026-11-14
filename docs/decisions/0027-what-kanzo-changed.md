@@ -41,6 +41,6 @@ Kanzo is AGPL-3.0. Its design was read; none of its code is used.
 
 - One person gets issues, a structure and the canopy over them with one command and nothing to run.
 - A team can start on someone's laptop and move to a machine that stays on later. Moving means copying one file (`board/work.db`) and joining again; there is no command for it.
-- A shared board is reachable only while its machine is on, over plain HTTP. For anything beyond a trusted network it needs a VPN or TLS in front, as before.
+- A shared board is reachable only while its machine is on, over plain HTTP. For anything beyond a trusted network it needs a VPN or TLS in front, as before. (No longer over plain HTTP: [0034](0034-a-server-encrypts-by-itself.md).)
 - A background process outlives the Pi sessions that started it, for up to ten minutes, or for as long as it is shared.
 - Existing servers are migrated in place: issues gain three columns. A server whose scheme was never edited is on the default and so gains `review`; one whose scheme was edited keeps its states and rules.

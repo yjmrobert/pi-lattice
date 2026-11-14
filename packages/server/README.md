@@ -33,6 +33,6 @@ const { issue } = await client.next({ repo: "shop" });               // the next
 
 `next` is how a session takes work: the first issue, in the order of the tree, that is in a state sessions take from, is not for a person, is nobody else's, has nothing unfinished under it and waits on nothing unfinished. The server decides, so two askers never get the same one.
 
-It speaks plain HTTP: put it behind TLS. Anyone with the team's code can join, and every member can read and change everything, the scheme included.
+Given a certificate (`tls`, from `loadOrCreateCertificate`), it speaks TLS on its port and plain HTTP there to its own machine only, and `pin` is what goes in its address after the code so that clients reach that server and no other ([ADR 0034](../../docs/decisions/0034-a-server-encrypts-by-itself.md)). Without one it speaks plain HTTP: put it behind TLS. Anyone with the team's code can join, and every member can read and change everything, the scheme included.
 
 Read [the plan](../../docs/design/server-plan.md) for why it exists and what is not built.

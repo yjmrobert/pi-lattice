@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /** `pi-lattice`: the lattice host, as a background daemon or with a line-based interface. */
 import { homedir, hostname } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { latticeHome } from "@pi-lattice/protocol";
 import { parseArgs, USAGE } from "./args.ts";
 import { runBoard } from "./board.ts";
 import { runDaemon } from "./daemon.ts";
-import { WorkServer } from "@pi-lattice/server";
+import { formatAddress, loadOrCreateCertificate, WorkServer } from "@pi-lattice/server";
 import { runPlain } from "./plain.ts";
 import { workCommand } from "./workcli.ts";
 
@@ -44,10 +44,20 @@ async function main(): Promise<number> {
 	}
 	if (options.command === "server") {
 		const home = latticeHome(process.env, homedir());
-		const server = new WorkServer({ file: resolve(options.data ?? join(home, "server", "work.db")), port: options.port ?? 7420 });
+		const data = resolve(options.data ?? join(home, "server", "work.db"));
+		// It encrypts by itself, with a certificate kept beside the work. An http:// address for teammates
+		// says something in front of it does the encrypting, and it then speaks plain HTTP as before.
+		const fronted = options.url?.startsWith("http://") === true;
+		const server = new WorkServer({ file: data, port: options.port ?? 7420, ...(fronted ? {} : { tls: loadOrCreateCertificate(dirname(data)) }) });
 		const port = await server.start();
-		const url = (options.url ?? `http://${hostname()}:${port}`).replace(/\/+$/, "");
-		process.stdout.write(`The server is running. Teammates join with:\n\n  /lattice server ${url}/#${server.tracker.code}\n\nAnyone with that address can read and change everything on it. It speaks plain HTTP: put it behind TLS before it leaves a network you trust.\n`);
+		const url = options.url ?? `https://${hostname()}:${port}`;
+		process.stdout.write(
+			`The server is running. Teammates join with:\n\n  /lattice server ${formatAddress(url, server.tracker.code, server.pin)}\n\nAnyone with that address can read and change everything on it. ${
+				fronted
+					? "It speaks plain HTTP: put it behind TLS before it leaves a network you trust."
+					: "Connections to it are encrypted, and the address says which server it is: pass on all of it, over a channel the team already trusts."
+			}\n`,
+		);
 		await new Promise<void>((done) => {
 			for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => done());
 		});

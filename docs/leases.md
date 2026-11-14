@@ -8,8 +8,8 @@ Sessions are shared machine to machine. Each person runs their own host, and the
 
 Your team is the people on the server you have joined. You join once, and it holds for every repository.
 
-1. Someone has a server: a board on their own machine (`/lattice server start`, then `/lattice server share`), or `pi-lattice server` on a machine that stays on. Either prints a line to send: `/lattice server http://host:port/#code`.
-2. They pass that line to their teammates over a channel the team already trusts. Whoever has it is in.
+1. Someone has a server: a board on their own machine (`/lattice server start`, then `/lattice server share`), or `pi-lattice server` on a machine that stays on. Either prints a line to send: `/lattice server https://host:port/#code.fingerprint`.
+2. They pass that line, all of it, to their teammates over a channel the team already trusts. Whoever has it is in. Its last part says which server it is: what a teammate's Pi says to the server is encrypted, and said to that server only.
 3. Each teammate pastes it into their Pi, in any project. The first time, they are asked what teammates should call them. When teammates are around, the pane says who was found.
 
 That is all. Nobody approves anybody, chooses a port or types a teammate's address. Everyone is told when someone joins.

@@ -1,13 +1,15 @@
 /**
  * A board on this machine: the same server a team runs, started by the person's own host with
  * nothing to deploy. It keeps its work in the lattice home, listens only to this machine until
- * it is shared, and is one process for every repository's host. Nobody is in charge of it: a
+ * it is shared, and is one process for every repository's host. Other machines reach it over
+ * TLS, to a certificate it made itself and whose fingerprint is in the address they are given;
+ * this machine's own hosts speak to it plainly, over loopback. Nobody is in charge of it: a
  * host that finds it gone starts it, and the port decides which of two started at once stays.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
-import { WorkServer } from "@pi-lattice/server";
+import { formatAddress, loadOrCreateCertificate, WorkServer } from "@pi-lattice/server";
 
 /** The first port tried. A team's server defaults to the one below, so both can run on one machine. */
 export const BOARD_PORT = 7421;
@@ -20,6 +22,8 @@ export interface Board {
 	code: string;
 	/** Whether other machines can reach it. */
 	shared: boolean;
+	/** The fingerprint of the certificate it proves itself with to other machines. */
+	pin?: string;
 }
 
 const dir = (home: string): string => join(home, "board");
@@ -29,7 +33,7 @@ const file = (home: string): string => join(dir(home), "board.json");
 export function readBoard(home: string): Board | undefined {
 	try {
 		const value = JSON.parse(readFileSync(file(home), "utf8")) as Partial<Board>;
-		return typeof value.port === "number" && typeof value.pid === "number" && typeof value.code === "string" ? { port: value.port, pid: value.pid, code: value.code, shared: value.shared === true } : undefined;
+		return typeof value.port === "number" && typeof value.pid === "number" && typeof value.code === "string" ? { port: value.port, pid: value.pid, code: value.code, shared: value.shared === true, ...(typeof value.pin === "string" ? { pin: value.pin } : {}) } : undefined;
 	} catch {
 		return undefined;
 	}
@@ -66,8 +70,10 @@ export async function runBoard(home: string, options: { shared: boolean; idleMs:
 	const ports = [...new Set([...(before ? [before.port] : []), ...Array.from({ length: PORTS }, (_, index) => BOARD_PORT + index)])];
 	let server: WorkServer | undefined;
 	let port = 0;
+	// Kept with the work, so the address teammates joined with holds across restarts.
+	const tls = loadOrCreateCertificate(dir(home));
 	for (const candidate of ports) {
-		const attempt = new WorkServer({ file: join(dir(home), "work.db"), port: candidate, ...(options.shared ? {} : { host: "127.0.0.1" }), info: { pid: process.pid } });
+		const attempt = new WorkServer({ file: join(dir(home), "work.db"), port: candidate, ...(options.shared ? {} : { host: "127.0.0.1" }), info: { pid: process.pid }, tls });
 		try {
 			port = await attempt.start();
 			server = attempt;
@@ -81,7 +87,7 @@ export async function runBoard(home: string, options: { shared: boolean; idleMs:
 		}
 	}
 	if (!server) throw new Error(`No port from ${BOARD_PORT} to ${BOARD_PORT + PORTS - 1} is free for the board.`);
-	writeFileSync(file(home), `${JSON.stringify({ port, pid: process.pid, code: server.tracker.code, shared: options.shared } satisfies Board, null, 2)}\n`, { mode: 0o600 });
+	writeFileSync(file(home), `${JSON.stringify({ port, pid: process.pid, code: server.tracker.code, shared: options.shared, ...(server.pin !== undefined ? { pin: server.pin } : {}) } satisfies Board, null, 2)}\n`, { mode: 0o600 });
 	await new Promise<void>((done) => {
 		for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => done());
 		if (!options.shared && options.idleMs > 0) {
@@ -135,5 +141,10 @@ export function boardAddresses(board: Board): string[] {
 		.flat()
 		.filter((entry) => entry !== undefined && !entry.internal && entry.family === "IPv4")
 		.map((entry) => (entry as { address: string }).address);
-	return [...new Set(hosts)].map((host) => `http://${host}:${board.port}/#${board.code}`);
+	return [...new Set(hosts)].map((host) => boardAddress(board, host));
+}
+
+/** The line a teammate joins the board with, at one of this machine's addresses. */
+export function boardAddress(board: Board, host: string): string {
+	return formatAddress(`${board.pin !== undefined ? "https" : "http"}://${host}:${board.port}`, board.code, board.pin);
 }

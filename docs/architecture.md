@@ -138,6 +138,7 @@ Session transfer is fork-on-receipt ([ADR 0007](decisions/0007-session-transfer.
 - Remote-originated content is never executed and never treated as instructions. Every inbound envelope is validated against the schema and delivered as delimited, attributed data.
 - The host socket is private to the user and children authenticate with a per-child token.
 - Hosts connect only to members of the person's team, over an encrypted channel. Ownership events are signed, and a teammate's key is pinned when first known. The server's address with its code is the one secret: whoever has it can join, read the team's work and its sessions. Whoever controls the server can connect as a member, though not sign as one.
+- A host speaks to the server over TLS, to a certificate the server made itself and whose fingerprint is in the address it was joined with, so nothing is sent to anything else ([ADR 0034](decisions/0034-a-server-encrypts-by-itself.md)). Only the server's own machine may speak to it plainly.
 - Limits on hops, send rate and spawning are enforced by code.
 
 ## Build phases

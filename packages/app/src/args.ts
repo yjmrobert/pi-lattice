@@ -38,6 +38,7 @@ pi in a project and run /lattice. Pi starts the host in the background as needed
   pi-lattice server   Run a team's server: one always-on place for its work. Prints the address
                       teammates join with. Takes --port (default 7420), --data <file> (default
                       <lattice home>/server/work.db) and --url <address teammates reach it at>.
+                      It encrypts by itself; with an http:// --url it leaves that to what is in front.
                       For a machine that is always on. To keep the work on your own machine
                       instead, there is nothing to run: /lattice server start, in pi.
   pi-lattice work     The team's work from a shell, for agents that are not Pi sessions: take the

@@ -8,8 +8,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createServer as createSecureServer } from "node:https";
-import { type AddressInfo, createServer as createListener, type Server as Listener, type Socket } from "node:net";
-import type { TLSSocket } from "node:tls";
+import { type AddressInfo, connect, createServer as createListener, type Server as Listener, type Socket } from "node:net";
 import { type Certificate, pinOf } from "./cert.ts";
 import type { Issue, IssueChange, IssueEvent, Note, Scheme, WorkHost, WorkSession, WorkState } from "@pi-lattice/protocol";
 import { Tracker, WorkError } from "./tracker.ts";
@@ -32,7 +31,9 @@ export interface ServerOptions {
 	/**
 	 * The certificate to encrypt with. Given one, the server speaks TLS on its port, and still
 	 * answers plain HTTP there from this machine only: a board's own host, and a proxy in front.
-	 * Without one it speaks plain HTTP to everyone, for whatever does the encrypting in front.
+	 * Anyone else speaking plainly is told to take the server's address again, and nothing they
+	 * sent is acted on. Without one it speaks plain HTTP to everyone, for whatever does the
+	 * encrypting in front.
 	 */
 	tls?: Certificate & {
 		/** Who may still speak plain HTTP, by the address they connect from. Default: this machine. */
@@ -44,6 +45,18 @@ export interface ServerOptions {
 const isLoopback = (address: string | undefined): boolean => address !== undefined && /^(::ffff:)?127\.|^::1$/.test(address);
 /** How long a connection may say nothing before it is known what it speaks. */
 const FIRST_BYTE_MS = 10_000;
+
+/**
+ * Answer someone speaking plain HTTP to a server that encrypts, from another machine. Whatever
+ * they sent, a code or a token, has already crossed the network in the clear; it is not read,
+ * and they are told how to stop.
+ */
+function turnAway(socket: Socket): void {
+	const body = JSON.stringify({ error: "This server encrypts its connections now, and this one is not. Ask whoever runs it for its address again and give it to /lattice server: your name there is kept." });
+	socket.on("data", () => {}); // let them finish saying it, so the answer is not lost to a reset
+	socket.end(`HTTP/1.1 426 Upgrade Required\r\nupgrade: TLS/1.2\r\nconnection: close\r\ncontent-type: application/json; charset=utf-8\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+	setTimeout(() => socket.destroy(), 2000).unref();
+}
 
 /** What `/changes` answers. */
 export interface Changes {
@@ -85,9 +98,9 @@ export class WorkServer {
 	private readonly ttl: number;
 	private server: Server | undefined;
 	private secure: Server | undefined;
-	/** With TLS, what listens: it hands each connection to the server for what it speaks. */
+	/** With TLS, what listens on the port: it passes each connection to the server for what it speaks. */
 	private front: Listener | undefined;
-	private readonly unrouted = new Set<Socket>();
+	private readonly passing = new Set<Socket>();
 	/** What each host last said it runs, by owner and host id. */
 	private readonly hosts = new Map<string, { owner: string; at: number; sessions: WorkSession[]; peer?: WorkHost }>();
 	/** What is waiting to be handed over, by recipient and scope, and who is waiting for it. */
@@ -113,41 +126,60 @@ export class WorkServer {
 
 	/** Start listening. Returns the port, which is chosen by the system when none was asked for. */
 	async start(): Promise<number> {
-		const server = createServer((request, response) => void this.handle(request, response));
+		const answer = (request: IncomingMessage, response: ServerResponse): void => void this.handle(request, response);
+		const server = createServer(answer);
 		this.server = server;
-		let listener: Listener = server;
+		const listen = (listener: Listener, port: number, host: string | undefined): Promise<number> =>
+			new Promise<number>((resolve, reject) => {
+				listener.once("error", reject);
+				listener.listen(port, host, () => resolve((listener.address() as AddressInfo).port));
+			});
 		const tls = this.options.tls;
-		if (tls) {
-			// One port for both, so there is one address: a TLS connection opens with a handshake
-			// record (0x16), which no HTTP request starts with.
-			const secure = createSecureServer({ key: tls.key, cert: tls.cert }, (request, response) => void this.handle(request, response));
+		let port: number;
+		if (!tls) port = await listen(server, this.options.port ?? 0, this.options.host);
+		else {
+			// One port for both, so there is one address. The two servers listen to this machine
+			// only, and what listens on the port passes each connection to the one for what it
+			// speaks: a TLS connection opens with a handshake record (0x16), which no HTTP request
+			// starts with.
+			const secure = createSecureServer({ key: tls.key, cert: tls.cert }, answer);
 			this.secure = secure;
-			const route = (socket: Socket): void => {
+			const [plainPort, securePort] = [await listen(server, 0, "127.0.0.1"), await listen(secure, 0, "127.0.0.1")];
+			const plainFrom = tls.plainFrom ?? isLoopback;
+			const pass = (socket: Socket): void => {
 				const first = socket.read(1) as Buffer | null;
 				if (first === null) {
-					if (!socket.destroyed && !socket.readableEnded) socket.once("readable", () => route(socket));
+					if (!socket.destroyed && !socket.readableEnded) socket.once("readable", () => pass(socket));
 					return;
 				}
-				this.unrouted.delete(socket);
 				socket.setTimeout(0);
+				const encrypted = first[0] === 0x16;
+				if (!encrypted && !plainFrom(socket.remoteAddress)) return turnAway(socket);
 				socket.unshift(first);
-				(first[0] === 0x16 ? secure : server).emit("connection", socket);
+				const inner = connect(encrypted ? securePort : plainPort, "127.0.0.1");
+				this.passing.add(inner);
+				inner.once("close", () => {
+					this.passing.delete(inner);
+					socket.destroy();
+				});
+				inner.on("error", () => socket.destroy());
+				socket.once("close", () => inner.destroy());
+				socket.pipe(inner);
+				inner.pipe(socket);
 			};
-			listener = this.front = createListener((socket) => {
-				this.unrouted.add(socket);
-				socket.once("close", () => this.unrouted.delete(socket));
+			const front = createListener((socket) => {
+				this.passing.add(socket);
+				socket.once("close", () => this.passing.delete(socket));
 				socket.on("error", () => {});
 				socket.setTimeout(FIRST_BYTE_MS, () => socket.destroy());
-				route(socket);
+				pass(socket);
 			});
+			this.front = front;
+			port = await listen(front, this.options.port ?? 0, this.options.host);
 		}
-		await new Promise<void>((resolve, reject) => {
-			listener.once("error", reject);
-			listener.listen(this.options.port ?? 0, this.options.host, resolve);
-		});
 		this.sweep = setInterval(() => this.expire(), Math.max(250, Math.min(5000, this.ttl / 3)));
 		this.sweep.unref();
-		return (listener.address() as AddressInfo).port;
+		return port;
 	}
 
 	/** The fingerprint of the certificate this server proves itself with, as it goes in its address. Undefined when it speaks plain HTTP. */
@@ -166,11 +198,12 @@ export class WorkServer {
 		for (const waiter of [...this.waiters, ...[...this.listening.values()].flatMap((set) => [...set])]) waiter.done();
 		const [server, secure, front] = [this.server, this.secure, this.front];
 		this.server = this.secure = this.front = undefined;
-		for (const socket of this.unrouted) socket.destroy();
-		server?.closeAllConnections();
-		secure?.closeAllConnections();
-		const listener = front ?? server;
-		if (listener) await new Promise<void>((resolve) => listener.close(() => resolve()));
+		for (const socket of this.passing) socket.destroy();
+		for (const listener of [front, secure, server]) {
+			if (!listener) continue;
+			if ("closeAllConnections" in listener) (listener as Server).closeAllConnections();
+			await new Promise<void>((resolve) => listener.close(() => resolve()));
+		}
 		this.tracker.close();
 	}
 
@@ -263,11 +296,6 @@ export class WorkServer {
 			const method = request.method ?? "GET";
 			const route = `${method} /${parts[0] ?? ""}${parts.length > 1 ? "/:n" : ""}${parts[2] ? `/${parts[2]}` : ""}`;
 			if (route === "GET /") return send(200, { service: "pi-lattice", rev: this.tracker.rev, ...this.options.info });
-			// Before anything is read or answered: a code or a token sent in the clear has already been seen by whoever is listening.
-			const tls = this.options.tls;
-			if (tls && !(request.socket as TLSSocket).encrypted && !(tls.plainFrom ?? isLoopback)(request.socket.remoteAddress)) {
-				throw new WorkError(426, "This server encrypts its connections now, and this one is not. Ask whoever runs it for its address again and give it to /lattice server: your name there is kept.");
-			}
 			const body = method === "GET" ? {} : await readBody(request);
 			if (route === "POST /join") return send(200, this.tracker.join(String(body.code ?? ""), body.name as string));
 
