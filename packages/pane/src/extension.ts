@@ -11,18 +11,24 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Component, HStack, isKeyRelease, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
-import { describeScheme, emitEvent, type IssueChange, issueLine, type Scheme, schemeProblems, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState } from "@pi-lattice/protocol";
+import { type Component, HStack, isKeyRelease, matchesKey, type StackEntry, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { describeScheme, emitEvent, type IssueChange, issueLine, type Scheme, schemeProblems, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState, type LatticeEvents } from "@pi-lattice/protocol";
 import { type ChildForm, type FormKey, formKey, newChildForm, renderForm, waitChoices } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
 import { connectHost, hasTree, inRepository, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
 import { newSettingsScreen, renderSettings, type SettingsData, type SettingsLink, type SettingsScreen, settingsKey } from "./settings.ts";
 import { readSettings, readTemplate, type SettingsRead, templatePath, writeSetting, writeTemplate } from "./settings-io.ts";
-import { type InboxDetails, inboxItems, teamLine, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane, renderStrip } from "./view.ts";
+import { type InboxDetails, inboxItems, itemKey, teamLine, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane, renderStrip } from "./view.ts";
 
 const NODE_ENTRY = "lattice:node";
 const MIN_TERMINAL_WIDTH = 90;
+/** The canopy's floor: narrower or shorter, a label and its branch cannot both be read, and Pi opens on the chat. */
+const HOME_FLOOR = { cols: 60, rows: 20 };
+/** Below this the tree and a chat do not both fit: an open chat takes the whole width. */
+const BESIDE_WIDTH = 120;
+/** How often the chat is drawn again while it slides. Each step re-wraps the conversation, so there are few. */
+const SLIDE_MS = 24;
 const SPINNER_MS = 120;
 /** How often to look for hosts of other repositories starting or stopping. */
 const SCAN_MS = 3000;
@@ -89,13 +95,27 @@ interface Shared {
 	strip: string | undefined;
 	pi: ExtensionAPI | undefined;
 	ctx: ExtensionContext | undefined;
+	/** The canopy as a view in this layout, when the canopy package is here, and the session it was asked for in. */
+	canopy: { view: NonNullable<LatticeEvents["lattice:canopy:mount"]["view"]>; pi: ExtensionAPI } | undefined;
+	/** What the canopy keeps from one session to the next: what is selected, and where its window is. */
+	canopyMemory: { state?: unknown };
+	/** Where the keyboard is while the canopy is what Pi opens on. Not set until the first session has started. */
+	at: "tree" | "chat" | undefined;
+	/** Whether the chat is showing beside the tree. */
+	drawerOpen: boolean;
+	/** How many columns of the chat are showing now: it slides to where it belongs. */
+	drawer: number;
+	slider: ReturnType<typeof setInterval> | undefined;
+	/** Whether the canopy is what Pi opens on, read from the settings a moment ago. */
+	homeChosen: { value: boolean; at: number } | undefined;
 }
-const KEY = Symbol.for("pi-lattice.pane.4");
+const KEY = Symbol.for("pi-lattice.pane.5");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
 	links: new Map(), home: undefined, asleep: [], current: undefined, currentDir: undefined, previous: undefined, assignment: undefined, cursor: undefined, focused: false, form: undefined, screen: undefined, screenLeaves: false,
 	confirm: undefined, help: false, tail: undefined, waiting: 0, titled: 0, starting: false,
 	ticker: undefined, scanner: undefined, scanning: false, paint: PLAIN, tui: undefined, wrapped: false, strip: undefined, pi: undefined, ctx: undefined,
+	canopy: undefined, canopyMemory: {}, at: undefined, drawerOpen: false, drawer: 0, slider: undefined, homeChosen: undefined,
 });
 
 /** The link to the repository this terminal is in, if it has a tree with a running host. */
@@ -263,6 +283,126 @@ function inspecting(): boolean {
 	return shared.focused && shared.wrapped;
 }
 
+// --- the canopy as what Pi opens on (ADR 0031) -------------------------------------
+
+/** Whether the canopy is what Pi shows here: chosen, installed, a tree to draw, and room to draw it. */
+function homeAble(): boolean {
+	const terminal = shared.tui?.terminal;
+	// The canopy starts after the pane in a session, so it may not have been there to ask the first time.
+	if (shared.canopy?.pi !== shared.pi) mountCanopy();
+	if (!shared.wrapped || !shared.canopy || !terminal || shared.links.size === 0 || shared.at === undefined) return false;
+	if (terminal.columns < HOME_FLOOR.cols || terminal.rows < HOME_FLOOR.rows) return false;
+	const now = Date.now();
+	if (!shared.homeChosen || now - shared.homeChosen.at > 1000) shared.homeChosen = { value: settings().settings.values["pane.home"] !== "chat", at: now };
+	return shared.homeChosen.value;
+}
+
+/** Whether the canopy is showing: it steps aside while the pane has the keyboard. */
+function home(): boolean {
+	return !shared.focused && homeAble();
+}
+
+/** How many columns the chat takes once it has slid in. */
+function drawerWidth(): number {
+	const columns = shared.tui?.terminal.columns ?? 0;
+	if (!shared.drawerOpen) return 0;
+	// Too narrow for both: whichever has the keyboard has the screen.
+	if (columns < BESIDE_WIDTH) return shared.at === "chat" ? columns : 0;
+	// The tree keeps its floor, and the column that divides the two.
+	return Math.max(50, Math.min(columns - HOME_FLOOR.cols - 1, Math.round(columns * 0.55)));
+}
+
+/** Move the chat towards where it belongs, a few steps at a time, and stop when it is there. */
+function slide(): void {
+	// Until the canopy is showing the chat has the whole width, and narrows from there when the tree arrives.
+	if (!homeAble()) shared.drawer = shared.drawerOpen ? (shared.tui?.terminal.columns ?? 0) : 0;
+	const still = (): boolean => !homeAble() || process.env.NO_COLOR !== undefined || settings().settings.values["canopy.motion"] === "off";
+	const step = (): boolean => {
+		const target = drawerWidth();
+		const left = target - shared.drawer;
+		if (left === 0) return false;
+		// Most of the way at once, then the rest: it reads as arriving, and the chat is wrapped only a few times.
+		shared.drawer = Math.abs(left) <= 6 ? target : shared.drawer + Math.round(left * 0.6);
+		return true;
+	};
+	if (still()) {
+		shared.drawer = drawerWidth();
+		if (shared.slider) clearInterval(shared.slider);
+		shared.slider = undefined;
+		return;
+	}
+	if (shared.slider || shared.drawer === drawerWidth()) return;
+	shared.slider = setInterval(() => {
+		if (!step() && shared.slider) {
+			clearInterval(shared.slider);
+			shared.slider = undefined;
+		}
+		shared.tui?.requestRender();
+	}, SLIDE_MS);
+	shared.slider.unref?.();
+}
+
+/** Give the keyboard to the tree. The chat stays beside it, so what the session does can still be read. */
+function toTree(): void {
+	shared.at = "tree";
+	redraw();
+}
+
+/** Slide the chat in and give it the keyboard. */
+function toChat(): void {
+	shared.at = "chat";
+	shared.drawerOpen = true;
+	redraw();
+}
+
+/** Give the pane the keyboard: the sessions as a list, with what the cursor is on in full beside it. */
+function toPane(cursor?: string): void {
+	shared.focused = true;
+	shared.form = undefined;
+	shared.screen = undefined;
+	shared.help = false;
+	shared.confirm = undefined;
+	shared.cursor = cursor ?? restingCursor();
+	fetchTail();
+	redraw();
+}
+
+/** Ask for the canopy as a view of this layout, once per session: the one asked for in a session that ended draws nothing new. */
+function mountCanopy(): void {
+	const pi = shared.pi;
+	const tui = shared.tui;
+	if (!pi || !tui || !shared.wrapped || shared.canopy?.pi === pi) return;
+	const request: LatticeEvents["lattice:canopy:mount"] = {
+		tui,
+		memory: shared.canopyMemory,
+		open: (nodeId) => {
+			// Something this session waits on is answered where it is; anything else is talked to in its chat.
+			const waiting = nodeId === shared.current ? undefined : paneInbox(view()).find(({ item }) => item.nodeId === nodeId);
+			if (waiting) return toPane(itemKey(waiting.item.id));
+			toChat();
+			if (nodeId !== shared.current) dispatch(`/lattice open ${nodeId}`);
+		},
+		back: () => {
+			if (!shared.drawerOpen) return;
+			shared.drawerOpen = false;
+			redraw();
+		},
+		keys: () =>
+			shared.at === "chat"
+				? [{ key: "alt+l", does: "tree" }]
+				: [
+						{ key: "alt+l", does: "chat" },
+						...(drawerWidth() > 0 ? [{ key: "esc", does: "close chat" }] : []),
+						{ key: "p", does: "sessions", run: () => toPane() },
+					],
+		away: () => shared.at === "chat",
+	};
+	emitEvent(pi.events, "lattice:canopy:mount", request);
+	if (!request.view) return; // the canopy has not started in this session yet, or is not installed
+	shared.canopy?.view.dispose();
+	shared.canopy = { view: request.view, pi };
+}
+
 /** Whether the terminal is wide enough to keep the pane beside Pi all the time. */
 function roomy(): boolean {
 	return shared.wrapped && (shared.tui?.terminal.columns ?? 0) >= MIN_TERMINAL_WIDTH;
@@ -295,6 +435,8 @@ function tick(): void {
 
 function redraw(): void {
 	tick();
+	mountCanopy();
+	slide();
 	shared.tui?.requestRender();
 	// Between one session ending and the next starting there is no usable context; a redraw then simply waits.
 	try {
@@ -302,7 +444,8 @@ function redraw(): void {
 		if (ctx?.mode !== "tui") return;
 		// Where the pane cannot sit beside Pi (a narrow terminal, or a Pi it cannot be installed in),
 		// two rows above the editor carry the same information.
-		const lines = roomy() || shared.focused ? [] : renderStrip(view(), (shared.tui?.terminal.columns ?? 80) - 2, shared.paint);
+		// Beside the canopy the chat has no pane next to it either, and says the same in its own width.
+		const lines = (roomy() && !homeAble()) || shared.focused ? [] : renderStrip(view(), (homeAble() ? Math.max(HOME_FLOOR.cols, drawerWidth()) : (shared.tui?.terminal.columns ?? 80)) - 2, shared.paint);
 		const strip = lines.length > 0 ? lines.join("\n") : undefined;
 		if (strip !== shared.strip) {
 			ctx.ui.setWidget("lattice", strip === undefined ? undefined : lines);
@@ -438,24 +581,54 @@ function installPane(tui: Hooked): void {
 				: shared.form ? renderForm(shared.form, width, shared.paint, shared.tui?.terminal.rows) : renderInspector(view(), width, shared.paint, shared.tui?.terminal.rows)).map((line) => truncateToWidth(line, width)),
 		invalidate() {},
 	};
-	const wrap = (inner: Component): Component =>
-		new HStack([
+	// Where the canopy is what Pi opens on, it takes the pane's place and the chat slides in on its right.
+	const tree: Component = {
+		render: (width) => {
+			const lines = shared.canopy?.view.render(shared.drawer > 0 ? width - 1 : width) ?? [];
+			if (shared.drawer === 0) return lines;
+			// As beside the pane: the divider lights up on the side that has the keyboard.
+			const divider = shared.at === "tree" ? shared.paint.accent("│") : shared.paint.dim("│");
+			return lines.map((line) => `${line}${divider}`);
+		},
+		invalidate() {},
+	};
+	const wrap = (inner: Component): Component => {
+		const stack = new HStack([
 			// Always there, so opening pi shows the sessions without typing anything.
 			// In a narrow terminal it appears only while it has the keyboard.
-			{ component: pane, basis: numberSetting(settings().settings, "pane.width", 34), shrink: 0, visible: (viewport) => viewport.width >= MIN_TERMINAL_WIDTH || shared.focused },
+			{ component: pane, basis: numberSetting(settings().settings, "pane.width", 34), shrink: 0, visible: (viewport) => (arrange(), !home() && (viewport.width >= MIN_TERMINAL_WIDTH || shared.focused)) },
 			{ component: inspector, basis: 0, grow: 1, minSize: 20, visible: () => inspecting() },
-			{ component: inner, basis: 0, grow: 1, minSize: 20, visible: () => !inspecting() },
+			{ component: tree, basis: 0, grow: 1, minSize: 0, visible: (viewport) => home() && shared.drawer < viewport.width },
+			{ component: inner, basis: 0, grow: 1, minSize: 20, visible: () => !inspecting() && (!home() || shared.drawer > 0) },
 		]);
+		const chat = (stack as unknown as { entries: StackEntry[] }).entries.find((entry) => entry.component === inner);
+		/** Beside the tree the chat is as wide as it has slid; anywhere else it takes what is left. Run before each layout. */
+		const arrange = (): void => {
+			if (!chat) return;
+			const columns = shared.tui?.terminal.columns ?? 0;
+			if (shared.drawer > columns) shared.drawer = columns;
+			const beside = home() && shared.drawer < columns;
+			Object.assign(chat, beside ? { basis: shared.drawer, grow: 0, shrink: 0, minSize: 0 } : { basis: 0, grow: 1, shrink: 1, minSize: 20 });
+		};
+		return stack;
+	};
 	const set = tui.setLayoutRoot.bind(tui);
 	tui.setLayoutRoot = (component) => set(component ? wrap(component) : undefined);
 	tui.setLayoutRoot(tui.layoutRoot);
 	shared.wrapped = true;
 	// Keys go to the pane only while it is focused; otherwise Pi behaves exactly as usual.
 	tui.addInputListener((data) => {
-		if (!shared.focused) return undefined;
 		// A terminal that reports releases sends each key twice. Letting go of alt+l must not hand the keyboard straight back.
+		if (shared.focused) {
+			if (!isKeyRelease(data)) onPaneKey(data);
+			return { consume: true };
+		}
+		if (!home() || shared.at !== "tree") return undefined;
+		// Leaving Pi is Pi's to do, wherever the keyboard is.
+		if (matchesKey(data, "ctrl+c") || matchesKey(data, "ctrl+d")) return undefined;
 		if (isKeyRelease(data)) return { consume: true };
-		onPaneKey(data);
+		if (matchesKey(data, "alt+l")) toChat();
+		else shared.canopy?.view.key(data);
 		return { consume: true };
 	});
 }
@@ -465,6 +638,11 @@ function dispatch(command: string): void {
 	const pi = shared.pi;
 	const ctx = shared.ctx;
 	if (!pi || !ctx) return;
+	// A command may ask something with Pi's own dialogs, and says what it did in the chat: show it.
+	if (homeAble()) {
+		shared.at = "chat";
+		shared.drawerOpen = true;
+	}
 	try {
 		// While the agent is working the input path needs to be told how to take this; a command runs at once either way.
 		pi.sendUserMessage(command, ctx.isIdle() ? { expandPromptTemplates: true } : { expandPromptTemplates: true, deliverAs: "steer" });
@@ -728,6 +906,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			shared.scanner = setInterval(() => void scan(), SCAN_MS);
 			shared.scanner.unref?.();
 		}
+		// With a tree already here, Pi opens on it. Without one it opens on the chat, and the tree joins it when there is one.
+		if (shared.at === undefined) {
+			shared.at = shared.links.size > 0 ? "tree" : "chat";
+			shared.drawerOpen = shared.at === "chat";
+		}
 		if (ctx.mode === "tui") {
 			ctx.ui.setWidget("lattice-pane-anchor", (tui, theme) => {
 				shared.paint = {
@@ -821,6 +1004,10 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		shared.currentDir = undefined;
 		if (shared.scanner) clearInterval(shared.scanner);
 		shared.scanner = undefined;
+		if (shared.slider) clearInterval(shared.slider);
+		shared.slider = undefined;
+		shared.canopy?.view.dispose();
+		shared.canopy = undefined;
 		for (const link of shared.links.values()) link.client.close();
 		shared.links.clear();
 	});
@@ -837,6 +1024,8 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				dispatch("/lattice status");
 				return;
 			}
+			// Beside the canopy the key moves between the chat and the tree. From the tree it is read before it gets here.
+			if (home()) return toTree();
 			shared.focused = !shared.focused;
 			shared.form = undefined;
 			shared.screen = undefined;
@@ -883,7 +1072,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		// The messaging, roles and tree extensions take up the node's identity as soon as they hear of it.
 		emitEvent(pi.events, "lattice:host:assigned", { assignment: shared.assignment ?? null });
 		await refresh();
-		ctx.ui.notify("This session is now part of a lattice tree. alt+l moves to the session pane; /lattice new creates a child.", "info");
+		ctx.ui.notify(`This session is now part of a lattice tree. alt+l moves to the ${homeAble() ? "tree" : "session pane"}; /lattice new creates a child.`, "info");
 	};
 
 	const open = async (ctx: ExtensionCommandContext, text: string): Promise<void> => {
@@ -1713,6 +1902,8 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				shared.focused = false;
 				shared.help = false;
 				shared.screen = undefined;
+				// Where it is already in the layout, the keyboard goes to it there.
+				if (homeAble()) return toTree();
 				emitEvent(pi.events, "lattice:canopy:open", request);
 				if (!request.claimed) ctx.ui.notify("The canopy is not installed here. It comes with the pi-lattice bundle.", "warning");
 			},

@@ -81,7 +81,10 @@ describe("the published package", () => {
 		await pi.see("echo[user] roles=[] hello");
 		await pi.submit("/lattice");
 		await pi.see("This session is now part of a lattice tree");
+		// The tree is beside the chat; alt+l gives it the keyboard, and p lists the sessions.
 		pi.press(KEY.altL);
+		await pi.see("close chat");
+		pi.press("p");
 		await pi.see(/owner\s+you/);
 		pi.press("n");
 		await pi.see("New session under work");
@@ -93,8 +96,8 @@ describe("the published package", () => {
 		// The child's roles come from the fragments in the package, read by the session the host started.
 		await pi.see(/roles\s+protocol · reporting · worker/);
 		pi.press("c");
-		const canopy = await pi.see("next that needs someone");
-		expect(canopy.join("\n")).toMatch(/payments/);
+		const canopy = await pi.see("close chat");
+		expect(canopy.some((row) => (row.split("│")[0] ?? "").includes("payments"))).toBe(true);
 		expect(readFileSync(join(stateDir, "daemon.err"), "utf8")).toBe("");
 	}, 90_000);
 });

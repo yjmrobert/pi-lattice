@@ -3,7 +3,7 @@
  * functions or through RPC mode, where there is no terminal; these run Pi in a pseudo-terminal
  * and read the screen, so the layout hook, the keyboard and the fallbacks are covered too.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSandbox, eventually, extensionPaths, piCli, type Sandbox } from "../support/harness.ts";
@@ -17,6 +17,8 @@ let tui: PiTui | undefined;
 beforeEach(() => {
 	sandbox = createSandbox();
 	stateDir = join(sandbox.root, "state");
+	// These are about the pane beside the chat; `home.test.ts` has the canopy as what Pi opens on.
+	writeFileSync(join(sandbox.home, "config.json"), JSON.stringify({ reports: { remind: false }, pane: { home: "chat" } }));
 });
 afterEach(async () => {
 	await tui?.stop();
@@ -138,7 +140,7 @@ describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 		pi.press(KEY.tab);
 		await pi.see(join(sandbox.home, "config.json"));
 		pi.press("x");
-		await eventually(() => JSON.stringify(JSON.parse(readFileSync(join(sandbox.home, "config.json"), "utf8"))) === JSON.stringify({ reports: { remind: false } }), "nothing to clear in the person's file");
+		await eventually(() => JSON.stringify(JSON.parse(readFileSync(join(sandbox.home, "config.json"), "utf8"))) === JSON.stringify({ reports: { remind: false }, pane: { home: "chat" } }), "nothing to clear in the person's file");
 
 		pi.press(KEY.escape);
 		await pi.see(/owner\s+you/);
