@@ -37,3 +37,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0030 | The canopy in order | built: what must come first is on the left; held work is dim; `o` puts it back as filed |
 | 0031 | Pi opens on the canopy | built: the tree where the chat was, a session's chat sliding in beside it, `alt+l` between them, what a session waits on answered on the tree; `pane.home` puts it back |
 | 0032 | A session opens over the tree | built: the tree is the whole screen, a session's chat opens in a box over it that says whose it is and what it is doing, and folding an item moves |
+| 0033 | Flow: two gates for people, and a command line for other agents | proposed: agents propose and people release, people accept what agents finish, a limit on review, order people set, the tree read as columns, and `pi-lattice work` for agents that are not Pi sessions |
