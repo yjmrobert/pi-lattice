@@ -3,6 +3,7 @@
  * with a panel beside it, and the keys. The tree is as big as it needs to be and the window
  * moves over it. Everything here is a function of the world, the state and the size: no Pi.
  */
+import type { IssueEvent, Steer } from "@pi-lattice/protocol";
 import type { Animation } from "./animate.ts";
 import { Grid, type Style } from "./grid.ts";
 import { cut, type Layout, layout, type Place, type Shape } from "./layout.ts";
@@ -27,9 +28,38 @@ export interface CanopyState {
 	shape: Shape;
 	/** What must come first on the left, or everything as it was filed. */
 	order: Order;
-	/** A line being typed at the foot: the title of a new issue, a comment, or what to say instead of answering. */
-	typing?: { what: "add" | "comment"; label: string; text: string; number: number | undefined } | { what: "answer"; label: string; text: string; id: string; key: string };
+	/** A line being typed at the foot: what to say about the selected item to whatever tends it, or what to say instead of answering. */
+	typing?: { what: "say"; label: string; text: string; number?: number; nodeId?: string } | { what: "answer"; label: string; text: string; id: string; key: string };
+	/** The changes by agents this person has been taken to, since they last looked. */
+	walked: ReadonlySet<string>;
+	/** The change being looked at: who made it, what, and why are written at the foot. */
+	viewing?: string;
 }
+
+/** What tells one change from another: when it was made, and to which issue. */
+export const changeKey = (event: IssueEvent): string => `${event.rev}:${event.issue}`;
+
+/** What was done, as a person would say it of whoever did it. */
+export function describeChange(event: IssueEvent): string {
+	switch (event.what) {
+		case "created": return "filed it";
+		case "state": return `moved it to ${event.to ?? "another state"}`;
+		case "order": return event.to ? `put it ${event.to}` : "moved it among the others";
+		case "parent": return event.to ? `moved it under #${event.to}` : "moved it to the top";
+		case "title": return `renamed it${event.from ? ` from "${event.from}"` : ""}`;
+		case "body": return "rewrote what it says";
+		case "result": return "reported a result on it";
+		case "gave back": return "gave it back";
+		case "direction": return event.to ? "kept what was said as a direction" : "lifted a direction";
+		case "commented": return "commented on it";
+		case "said": return `said: ${event.to ?? ""}`;
+		case "waits on": return event.to ? `made it wait on ${event.to}` : "made it wait on nothing";
+		case "assignee": return event.to ? `gave it to ${event.to}` : "took it off whoever had it";
+		default: return `changed its ${event.what.replace(/^field:/, "")}${event.to !== undefined ? ` to ${event.to}` : ""}`;
+	}
+}
+
+const ago = (ms: number): string => (ms < 60_000 ? "just now" : ms < 3_600_000 ? `${Math.floor(ms / 60_000)}m ago` : ms < 86_400_000 ? `${Math.floor(ms / 3_600_000)}h ago` : `${Math.floor(ms / 86_400_000)}d ago`);
 
 export type CanopyKey = "up" | "down" | "left" | "right" | "shift+up" | "shift+down" | "shift+left" | "shift+right" | "home" | "tab" | "enter" | "escape" | (string & {});
 
@@ -52,8 +82,10 @@ export type CanopyAction =
 	| { do: "start"; id: string; tree: string }
 	/** Put the session open in this terminal on an issue. */
 	| { do: "on"; number: number }
-	/** Change the team's work with a `/lattice` command, and say what is being done meanwhile. */
-	| { do: "run"; command: string; saying: string }
+	/** Say something about an item, an issue by its number or a session, to whatever tends it. */
+	| { do: "steer"; number?: number; nodeId?: string; text: string }
+	/** The person has been through everything agents changed. */
+	| { do: "seen" }
 	| { do: "say"; text: string };
 
 /** What an item is called beside its name: an issue's type, a helper's kind, or the name of its level. */
@@ -75,7 +107,21 @@ export const initial = (world: World, current?: string, shape: Shape = "grown", 
 	letters: false,
 	shape,
 	order,
+	walked: new Set(),
 });
+
+/** Who a line about an item goes to, as it is said before the line is sent. */
+function tendedBy(world: World, item: Item): string {
+	if (item.tender) {
+		const on = world.items.get(item.tender.on);
+		const whose = item.tender.owner === world.me ? "" : `${item.tender.owner}'s `;
+		return `${whose}${item.tender.role}${on && on !== item ? ` on ${cut(on.name, 20)}` : ""}`;
+	}
+	if (item.issue) return "a session that is started to tend it";
+	// With no server the work is the sessions: the nearest one above that coordinates, else the top of the tree.
+	for (let at: Item | undefined = item; at && at.level >= 0; at = at.parent) if (at.agent?.role === "coordinator") return at === item ? at.agent.role : `${at.agent.role} on ${cut(at.name, 20)}`;
+	return "the session at the top of its tree";
+}
 
 const sideWidth = (state: CanopyState, width: number): number => (state.side !== "none" && width >= 100 ? SIDE_WIDTH : 0);
 const windowOf = (state: CanopyState, width: number, height: number): { width: number; height: number } => ({ width: width - sideWidth(state, width), height: Math.max(1, height - HEADER - FOOTER) });
@@ -157,9 +203,7 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 			const text = typing.text.trim().replace(/\s+/g, " ");
 			if (text === "") return keep(rest);
 			if (typing.what === "answer") return keep(rest, [{ do: "answer", id: typing.id, key: typing.key, text }]);
-			return typing.what === "add"
-				? keep(rest, [{ do: "run", command: `/lattice issue add ${typing.number ?? "top"} ${text}`, saying: "Adding it…" }])
-				: keep(rest, [{ do: "run", command: `/lattice issue comment ${typing.number} ${text}`, saying: "Commenting…" }]);
+			return keep(rest, [{ do: "steer", ...(typing.number !== undefined ? { number: typing.number } : {}), ...(typing.nodeId !== undefined ? { nodeId: typing.nodeId } : {}), text }]);
 		}
 		return [...key].length === 1 ? keep({ ...state, typing: { ...typing, text: typing.text + key } }) : keep(state);
 	}
@@ -167,26 +211,35 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 	// While the selected session asks something, the keys that answer it mean that and nothing else.
 	const answers = asking?.keys.find((entry) => entry.key === key);
 	if (asking && answers) return answers.line ? keep({ ...state, typing: { what: "answer", label: answers.line, text: "", id: asking.id, key } }) : keep(state, [{ do: "answer", id: asking.id, key }]);
-	const scheme = world.scheme;
-	if (scheme && (key === "n" || key === "N" || key === "e" || key === "m" || key === "t")) {
-		if (world.stale) return keep(state, [{ do: "say", text: `Nothing can be changed: ${world.stale}` }]);
-		const issue = key === "N" ? undefined : item?.issue;
-		if (key === "n" || key === "N") {
-			// What goes there is the first type the scheme allows there.
-			const type = scheme.types.find((entry) => (issue ? entry.under.includes(issue.type) : entry.top));
-			if (!type) return keep(state, [{ do: "say", text: issue ? `Nothing goes under ${/^[aeiou]/.test(issue.type) ? "an" : "a"} ${issue.type} in your team's scheme.` : "Nothing may be at the top in your team's scheme." }]);
-			return keep({ ...state, typing: { what: "add", label: issue ? `New ${type.name} under #${issue.number}` : `New ${type.name}`, text: "", number: issue?.number } });
+	// A change being looked at stays until something else is done; x puts it back, u goes on.
+	const viewing = state.viewing ? world.changes.find((event) => changeKey(event) === state.viewing) : undefined;
+	if (state.viewing && key !== "x" && key !== "u") {
+		const { viewing: _viewing, ...rest } = state;
+		return interpret(world, rest, key, width, height, asking);
+	}
+	if (key === "x" && viewing) {
+		const { viewing: _viewing, ...rest } = state;
+		if (world.stale) return keep(rest, [{ do: "say", text: `Nothing can be changed: ${world.stale}` }]);
+		return keep(rest, [{ do: "steer", number: viewing.issue, text: `Put this back: ${viewing.as ?? "an agent"} ${describeChange(viewing)}${viewing.why ? `, because "${viewing.why}"` : ""}. I do not want that.` }]);
+	}
+	if (key === "u") {
+		const next = world.changes.find((event) => !state.walked.has(changeKey(event)));
+		const { viewing: _viewing, ...rest } = state;
+		if (!next) return keep({ ...rest, walked: new Set() }, world.changes.length > 0 ? [{ do: "seen" }, { do: "say", text: "That is everything agents changed since you looked." }] : [{ do: "say", text: "No agent has changed anything since you looked." }]);
+		// What it is on may be folded away: then the nearest thing above it that is drawn.
+		let at = world.items.get(`#${next.issue}`);
+		while (at && !plan.places.has(at.id) && at.parent) at = at.parent;
+		return keep(frame({ ...rest, selected: at?.id ?? state.selected, walked: new Set(state.walked).add(changeKey(next)), viewing: changeKey(next) }, plan, width, height));
+	}
+	// Say something about what is selected, to whatever tends it. It is the one way a person changes the work.
+	if (key === " ") {
+		if (!item) return keep(state);
+		if (item.issue) {
+			if (world.stale) return keep(state, [{ do: "say", text: `Nothing can be said: ${world.stale}` }]);
+			return keep({ ...state, typing: { what: "say", label: `to ${tendedBy(world, item)}, about ${cut(item.name, 28)}`, text: "", number: item.issue.number } });
 		}
-		if (!issue) return keep(state, [{ do: "say", text: "Select an issue first." }]);
-		if (key === "t") return keep({ ...state, typing: { what: "comment", label: `Comment on #${issue.number}`, text: "", number: issue.number } });
-		if (key === "m") {
-			const mine = issue.assignee === world.me;
-			return keep(state, [{ do: "run", command: `/lattice issue set ${issue.number} assignee ${mine ? "none" : world.me}`, saying: mine ? `Taking #${issue.number} off you…` : `Assigning #${issue.number} to you…` }]);
-		}
-		// The next state in the order the team gave them; dropping work is not a step along the way.
-		const steps = scheme.states.filter((entry) => entry.kind !== "dropped");
-		const next = steps[(steps.findIndex((entry) => entry.name === issue.state) + 1) % Math.max(1, steps.length)];
-		return next && next.name !== issue.state ? keep(state, [{ do: "run", command: `/lattice issue set ${issue.number} state ${next.name}`, saying: `Moving #${issue.number} to ${next.name}…` }]) : keep(state);
+		if (item.owner !== world.me) return keep(state, [{ do: "say", text: `"${item.name}" is ${item.owner}'s. It is theirs to steer.` }]);
+		return keep({ ...state, typing: { what: "say", label: `to ${tendedBy(world, item)}, about ${cut(item.name, 28)}`, text: "", nodeId: item.node?.id ?? item.id } });
 	}
 	const arrow = ARROWS[key];
 	if (arrow) return go(here ? neighbour(world, plan, here, arrow) : world.root.children[0]?.id);
@@ -231,7 +284,8 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 	}
 	if (key === "enter") {
 		if (state.folded.has(item.id)) return interpret(world, state, "f", width, height);
-		if (item.planned) return keep(state, [{ do: "say", text: item.issue ? `Nobody is on #${item.issue.number} yet. Press s to put the session open here on it.` : `Nobody is on "${item.name}" yet. Press s to put a session on it.` }]);
+		if (item.outside) return keep(state, [{ do: "say", text: `${item.agent?.role ?? "An agent"} holds #${item.issue?.number} from a shell: it is not a session, and there is nothing here to open.` }]);
+		if (item.planned) return keep(state, [{ do: "say", text: item.issue ? `Nobody is on #${item.issue.number} yet. Press space to say what should happen to it, or s to put the session open here on it.` : `Nobody is on "${item.name}" yet. Press s to put a session on it.` }]);
 		// With a server, a teammate's session is known only as the server tells it: there is nothing here to open.
 		if (!item.node && (item.issue || item.agent?.owner)) {
 			return keep(state, [{ do: "say", text: item.agent ? `That is ${item.agent.owner ?? item.owner}'s session, running on their machine.` : `#${item.issue?.number} is finished, and nobody is on it.` }]);
@@ -310,7 +364,7 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 	if (item && item.level >= 0) at = run(grid, at, 1, [[`  ${kindOf(world, item)}${item.issue ? ` #${item.issue.number}` : ""}`, DIM]]);
 	// At the right: how the tree is ordered, and how much of it can go ahead.
 	const tips = tipsOf(world);
-	const flow: Array<[string, Style]> = [[state.order === "dependency" ? "first to last" : "as filed", { fg: COLOR.text }], [" · ", DIM], [`${tips.free.length}`, { fg: COLOR.bright }], [" can start", DIM]];
+	const flow: Array<[string, Style]> = [...(world.changes.length > 0 ? ([[`+${world.changes.length}`, { fg: COLOR.bright, bold: true }], [" changed by agents", DIM], [" · ", DIM]] as Array<[string, Style]>) : []), [state.order === "dependency" ? "first to last" : "as filed", { fg: COLOR.text }], [" · ", DIM], [`${tips.free.length}`, { fg: COLOR.bright }], [" can start", DIM]];
 	if (tips.held.length > 0) flow.push([" · ", DIM], [`⧗${tips.held.length}`, { fg: COLOR.wait }], [" held", DIM]);
 	const long = flow.reduce((sum, [text]) => sum + [...text].length, 0);
 	if (at + 3 + long <= width - 1) run(grid, width - 1 - long, 1, flow);
@@ -320,7 +374,7 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 function footer(world: World, state: CanopyState, width: number, leave?: ReadonlyArray<readonly [string, string]>, away = false, asking?: Asking, banded = false): Grid {
 	const grid = new Grid(width, FOOTER);
 	const item = state.selected ? world.items.get(state.selected) : undefined;
-	if (state.typing?.what === "answer" && banded) {
+	if (state.typing && banded) {
 		// The line itself is in the band, under the question: here are only its keys.
 		run(grid, 1, 0, [[" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]]);
 		return grid;
@@ -328,7 +382,7 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 	if (state.typing) {
 		const room = Math.max(8, width - [...state.typing.label].length - 30);
 		const shown = [...state.typing.text].slice(-room).join("");
-		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], [" ⏎ ", KEYCAP], [state.typing.what === "add" ? " add   " : state.typing.what === "answer" ? " send   " : " comment   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]]);
+		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], [" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]]);
 		return grid;
 	}
 	const named = (leave ?? []).map(([key, does]): [string, string] => [key, does]);
@@ -339,10 +393,12 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 	} else {
 		// In a layout, the keys that lead to the chat are said first: they are what a person arriving
 		// needs, and the canopy may be narrow there. As an overlay, escape goes back and is said last.
-		keys.push(...named, ["←↑↓→", "move"], ["tab", "next that needs someone"]);
+		keys.push(...named, ["←↑↓→", "move"], ["space", "say what you want"]);
+		if (world.changes.length > 0) keys.push(["u", `${world.changes.length} changed by agents`]);
+		keys.push(["tab", "next that needs someone"]);
 		if (item?.issue) {
 			if (item.node) keys.push(["⏎", "open"]);
-			keys.push(["s", "put this session on it"], ["n", "new under it"], ["e", "next state"], ["m", item.issue.assignee === world.me ? "not mine" : "mine"], ["t", "comment"]);
+			keys.push(["s", "put this session on it"]);
 		} else if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
 		else if (item && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
 		if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
@@ -394,6 +450,56 @@ function askingBand(asking: Asking, width: number, away: boolean, typing?: { lab
 	return grid;
 }
 
+/** How long an answer stays at the foot after it came. */
+const ANSWER_MS = 45_000;
+/** How long a line nobody has answered yet stays there. */
+const UNANSWERED_MS = 5 * 60_000;
+
+/** What a person said last that is still being read, or was answered a moment ago. */
+export const steerShown = (world: World, now: number): Steer | undefined => {
+	const last = world.steers.at(-1);
+	if (!last) return undefined;
+	if (last.answer === undefined) return now === 0 || now - last.at < UNANSWERED_MS ? last : undefined;
+	return now === 0 || now - (last.answeredAt ?? last.at) < ANSWER_MS ? last : undefined;
+};
+
+/**
+ * The foot of the tree where a person and the agents speak: the line being said and who it goes
+ * to; what was said and what was answered; or a change an agent made, with why. A band like the
+ * one a question is asked in, in the person's colour and not amber: nothing here needs anyone.
+ */
+function speakingBand(world: World, state: CanopyState, width: number, now: number, tick: number, away: boolean): Grid | undefined {
+	const mine = colorOf(world, world.me);
+	const room = Math.max(10, width - 6);
+	const rows: Array<Array<[string, (Style | undefined)?]>> = [];
+	let edge = mine;
+	if (state.typing?.what === "say") {
+		rows.push([[state.typing.label, { fg: mine, bold: true }]]);
+		rows.push([["› ", { fg: mine, level: 0.6 }], [`${[...state.typing.text].slice(-(room - 3)).join("")}▏`, { fg: COLOR.bright }]]);
+		rows.push([["It changes the work to match, and says here what it did.", DIM]]);
+	} else if (state.viewing) {
+		const event = world.changes.find((entry) => changeKey(entry) === state.viewing);
+		if (!event) return undefined;
+		edge = COLOR.bright;
+		const left = world.changes.filter((entry) => !state.walked.has(changeKey(entry))).length;
+		rows.push([["+ ", { fg: COLOR.bright, bold: true }], [`${event.as ?? "an agent"} `, { fg: COLOR.bright, bold: true }], [cut(describeChange(event), Math.max(8, room - 24)), { fg: COLOR.text }], [now > 0 ? `   ${ago(now - event.at)}` : "", DIM]]);
+		if (event.why) wrap(event.why, room - 5).slice(0, 2).forEach((part, index) => rows.push([[index === 0 ? "why  " : "     ", DIM], [part, { fg: COLOR.text }]]));
+		else rows.push([["It did not say why.", DIM]]);
+		if (!away) rows.push([[" x ", KEYCAP], [" put it back   ", DIM], [" u ", KEYCAP], [left > 0 ? ` next, ${left} more` : " done", DIM]]);
+	} else {
+		const steer = steerShown(world, now);
+		if (!steer) return undefined;
+		rows.push([["you  ", { fg: mine, bold: true }], [cut(steer.text, Math.max(8, room - 40)), { fg: COLOR.text }], [`   about ${cut(steer.about, 30)}`, DIM]]);
+		const who = `${steer.to.role}${steer.to.name && steer.to.name !== steer.to.role ? ` on ${cut(steer.to.name, 20)}` : ""}`;
+		if (steer.answer === undefined) rows.push([[`${spin(tick)} `, { fg: mine }], [`${who} is reading it…`, DIM]]);
+		else wrap(steer.answer, Math.max(10, room - who.length - 2)).slice(0, 3).forEach((part, index) => rows.push([[index === 0 ? `${who}  ` : " ".repeat(who.length + 2), DIM], [part, { fg: COLOR.bright }]]));
+	}
+	const grid = new Grid(width, rows.length + 1);
+	grid.text(0, 0, "─".repeat(width), { fg: edge, level: 0.45 });
+	rows.forEach((parts, index) => run(grid, 2, index + 1, parts));
+	return grid;
+}
+
 function inspector(world: World, state: CanopyState, width: number, height: number, tick: number): Grid {
 	const grid = new Grid(width, height);
 	const item = state.selected ? world.items.get(state.selected) : undefined;
@@ -428,6 +534,23 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 		line([[full, { fg: color }], [rest, { fg: COLOR.faint }], [` ${item.landed} of ${item.leaves} done`, DIM]]);
 		if (item.done && item.landed < item.leaves) line([["reported done, with work still open", { fg: COLOR.attention }]]);
 	}
+	if (item.directions && item.directions.length > 0) {
+		row++;
+		line([["DIRECTIONS", DIM]]);
+		for (const direction of item.directions.slice(0, 3)) {
+			const parts = wrap(direction.text, inner - 2).slice(0, 2);
+			parts.forEach((part, index) => line([[index === 0 ? "⚑ " : "  ", { fg: colorOf(world, direction.who) }], [part, { fg: COLOR.text }]]));
+			const on = world.items.get(direction.on);
+			line([[`  @${direction.who}, ${on === item || !on ? "here" : `on ${cut(on.name, Math.max(4, inner - direction.who.length - 9))}`}`, DIM]]);
+		}
+		if (item.directions.length > 3) line([[`  and ${item.directions.length - 3} more`, DIM]]);
+	}
+	if (item.issue?.result && !item.done) {
+		row++;
+		line([["RESULT", DIM], [`  from ${cut(item.issue.result.by, Math.max(4, inner - 14))}`, DIM]]);
+		for (const part of wrap(item.issue.result.summary.split("\n")[0] ?? "", inner).slice(0, 3)) line([[part, { fg: COLOR.text }]]);
+		if (item.issue.result.checks) for (const part of wrap(`checked  ${item.issue.result.checks}`, inner).slice(0, 2)) line([[part, DIM]]);
+	}
 	row++;
 	line([["SITTING HERE", DIM]]);
 	if (item.agent) {
@@ -440,6 +563,10 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 		if (item.agent.activity) line([[`  ${cut(item.agent.activity, inner - 2)}`, DIM]]);
 		if (item.agent.open) line([["  ▸ open in a terminal", DIM]]);
 	} else line([["  nobody: ", DIM], [item.issue ? (item.done ? "it is finished" : "it has not been started") : item.planned ? "it is planned" : "it never started", DIM]]);
+	if (item.issue && !item.done) {
+		const on = item.tender ? world.items.get(item.tender.on) : undefined;
+		line([["  tended by ", DIM], item.tender ? [`${item.tender.owner === world.me ? "" : `${item.tender.owner}'s `}${item.tender.role}`, { fg: colorOf(world, item.tender.owner) }] : ["nothing yet", DIM], [item.tender ? (on && on !== item ? `, on ${cut(on.name, Math.max(4, inner - 30))}` : ", here") : "", DIM]]);
+	}
 	if (item.asks > 0) {
 		row++;
 		line([[`● ${item.asks} ${item.asks === 1 ? "thing waits" : "things wait"} for someone here`, { fg: COLOR.attention, bold: true }]]);
@@ -480,6 +607,15 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 				line([[`${branch} `, { fg: COLOR.faint }], held ? ["⧗ ", { fg: COLOR.wait }] : [`${glyphOf(child, tick)} `, glyphStyle(world, child)], [name.padEnd(16), child.done || held ? DIM : undefined], [cut(what, inner - 21), DIM]]);
 			}
 		});
+	}
+	if (item.events && item.events.length > 0 && row < height - 3) {
+		row++;
+		line([["WHAT HAPPENED", DIM]]);
+		for (const event of item.events.slice(0, 3)) {
+			if (row >= height - 1) break;
+			line([[event.as ?? event.who, { fg: event.as ? COLOR.text : colorOf(world, event.who) }], [` ${cut(describeChange(event), Math.max(4, inner - (event.as ?? event.who).length - 1))}`, DIM]]);
+			if (event.why && row < height - 1) line([[`  ${cut(event.why, inner - 2)}`, DIM]]);
+		}
 	}
 	return grid;
 }
@@ -559,7 +695,9 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const blink = tick === 0 || tick % BEAT < BEAT / 2;
 	for (const edge of morph ? [] : edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
 	// What is asked takes the foot of the tree's window. The rows it takes are the ones the selection is not in.
-	const band = moving?.asking && win.height > 16 ? lines(askingBand(moving.asking, win.width, moving.away === true, view.typing?.what === "answer" ? view.typing : undefined)) : [];
+	// What is being said, or a change being looked at, comes before a question: the person is in the middle of it.
+	const speaking = win.height > 16 && (view.typing?.what === "say" || view.viewing || !moving?.asking) ? speakingBand(world, view, win.width, moving?.now ?? 0, tick, moving?.away === true) : undefined;
+	const band = speaking ? lines(speaking) : moving?.asking && win.height > 16 ? lines(askingBand(moving.asking, win.width, moving.away === true, view.typing?.what === "answer" ? view.typing : undefined)) : [];
 	const left = win.height - band.length;
 	const selected = view.selected ? plan.places.get(view.selected) : undefined;
 	const hidden = selected !== undefined && selected.row - view.camera.row + 2 >= left;

@@ -71,7 +71,8 @@ const chipWidth = (item: Item): number => {
 	return [chip.agent ? chip.agent.length + 2 : 0, chip.progress.length, chip.owner.length].filter((n) => n > 0).reduce((sum, n) => sum + n + 3, -3);
 };
 /** The marks after a name: what needs someone, how many wait on it, how many it holds when folded. */
-const marksWidth = (item: Item, behind: number, folded = false): number => (item.asks > 0 ? 2 + String(item.asks).length : 0) + (behind > 0 ? 2 + String(behind).length : 0) + (folded ? 2 + String(under(item)).length : 0);
+const marksWidth = (item: Item, behind: number, folded = false): number =>
+	(item.asks > 0 ? 2 + String(item.asks).length : 0) + (behind > 0 ? 2 + String(behind).length : 0) + (folded ? 2 + String(under(item)).length : 0) + ((item.issue?.directions ?? []).length > 0 ? 2 : 0) + (item.fresh ? 2 : 0);
 /** How many items are under one: what a folded item says it holds. */
 export const under = (item: Item): number => item.children.reduce((sum, child) => sum + 1 + under(child), item.buds.length);
 const labelWidth = (item: Item, behind: number, folded = false): number => 2 + Math.max([...cut(item.name)].length + marksWidth(item, behind, folded), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + [...cut(bud.name, 16)].length));

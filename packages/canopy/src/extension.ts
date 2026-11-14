@@ -105,7 +105,7 @@ export default function (pi: ExtensionAPI) {
 		const timer = setInterval(() => {
 			if (!context) return;
 			frames++;
-			const busy = motion !== "off" && (moving.length > 0 || [...world.items.values()].some((item) => item.agent?.state === "working" || item.asks > 0 || item.agent?.state === "asking"));
+			const busy = motion !== "off" && (moving.length > 0 || world.steers.some((steer) => steer.answer === undefined) || [...world.items.values()].some((item) => item.agent?.state === "working" || item.asks > 0 || item.agent?.state === "asking"));
 			if (said && Date.now() > said.until) said = undefined;
 			if (busy || frames % LOOK_EVERY === 0) tui.requestRender();
 		}, FRAME_MS);
@@ -177,10 +177,13 @@ export default function (pi: ExtensionAPI) {
 					}
 					if (action.do === "say") said = { text: action.text, until: Date.now() + SAY_MS };
 					if (action.do === "open") return place.open(action.id);
-					if (action.do === "run") {
-						said = { text: action.saying, until: Date.now() + SAY_MS };
-						run(action.command);
+					if (action.do === "steer") {
+						// The pane has the connection to the host; what is answered comes back in the state and is drawn at the foot.
+						const request: LatticeEvents["lattice:steer"] = { text: action.text, ...(action.number !== undefined ? { number: action.number } : {}), ...(action.nodeId !== undefined ? { nodeId: action.nodeId } : {}) };
+						emitEvent(pi.events, "lattice:steer", request);
+						if (!request.done) said = { text: "That could not be said from here: the pane is not there to carry it.", until: Date.now() + SAY_MS };
 					}
+					if (action.do === "seen") emitEvent(pi.events, "lattice:seen", {} satisfies LatticeEvents["lattice:seen"]);
 					if (action.do === "on") {
 						said = { text: `Putting this session on #${action.number}…`, until: Date.now() + SAY_MS };
 						run(`/lattice on ${action.number}`);

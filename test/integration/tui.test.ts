@@ -242,22 +242,24 @@ describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 			await sam.refresh();
 			await eventually(async () => (await sam.refresh(), sam.state().sessions.some((session) => session.owner === "tester" && session.issue === 2)), "sam to see the session on #2");
 
-			// Work is added and moved along from the canopy itself.
-			pi.press("n");
-			await pi.see("New story under #2:");
-			pi.press("Enter a card", KEY.enter);
-			await eventually(async () => (await sam.refresh(), sam.issue(3)?.title === "Enter a card" && sam.issue(3)?.type === "story" && sam.issue(3)?.parent === 2), "the story to be added");
-			await pi.see(/Enter a card/);
-			pi.press("m");
-			await eventually(async () => (await sam.refresh(), sam.issue(2)?.assignee === "tester"), "the feature to be assigned");
+			// A person changes the work by saying what they want, on the tree. Nothing tends this branch yet, so a session is started for it.
+			pi.press(" ");
+			await pi.see("to a session that is started to tend it, about Pay by card");
+			pi.press(`!tool work_add ${JSON.stringify({ title: "Enter a card", parent: 2, why: "asked for on the tree" })}`, KEY.enter);
+			// The line is kept on the issue in the person's words, and what the session did is the agent's, with why.
+			await eventually(async () => (await sam.read(2)).said.some((line) => line.who === "tester" && line.text.includes("!tool work_add")), "what was said to be kept on the feature");
+			await eventually(async () => (await sam.refresh(), sam.issue(3)?.title === "Enter a card" && sam.issue(3)?.type === "story" && sam.issue(3)?.parent === 2), "the story to be added by the session that tends it");
+			expect((await sam.read(3)).history[0]).toMatchObject({ who: "tester", as: "coordinator", what: "created", why: "asked for on the tree" });
+			// What it did is answered at the foot of the tree, and the new story is drawn, marked as changed by an agent.
+			await pi.see(/coordinator on checkout {2}tool-result: Added #3 story Enter a card/, 30_000);
+			await pi.see(/\+\d+ changed by agents/);
 			pi.press(KEY.escape);
-			// The last thing done from the canopy is said in the chat it gives back.
-			await pi.see(/#2 {2}feature {2}Pay by card {2}\[doing\] {2}@tester/);
+			await pi.waitFor((screen) => !screen.includes("changed by agents"), "the canopy to close");
 
-			await pi.submit("/lattice issue 2");
-			await pi.see("/lattice issue 2");
+			await pi.submit("/lattice issue 3");
+			await pi.see("/lattice issue 3");
 			pi.press(KEY.enter);
-			await pi.see(/tester {2}assignee: sam -> tester/);
+			await pi.see(/coordinator \(tester\) {2}created {2}because asked for on the tree/);
 			await pi.submit("/lattice scheme");
 			await pi.see("/lattice scheme");
 			pi.press(KEY.enter);

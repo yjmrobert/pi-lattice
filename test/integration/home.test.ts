@@ -199,7 +199,7 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		await first.stop();
 
 		const pi = open({ cols: 100, rows: 30 });
-		const tree = await pi.see("next that needs someone");
+		const tree = await pi.see("say what you want");
 		expect(tree[0]).toMatch(/^ ◆ work/);
 		expect(tree.join("\n")).not.toContain("[Extensions]");
 		// Nothing of the chat is drawn: the canopy has every column, with its own panel on the right.
@@ -208,10 +208,10 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 
 		pi.press(KEY.altL);
 		const chat = await pi.see("[Extensions]");
-		expect(chat.join("\n")).not.toContain("next that needs someone");
+		expect(chat.join("\n")).not.toContain("say what you want");
 		await pi.submit("hello");
 		await pi.see(/echo\[user\] roles=\[.*\] hello/);
 		pi.press(KEY.altL);
-		await pi.see("next that needs someone");
+		await pi.see("say what you want");
 	}, 90_000);
 });

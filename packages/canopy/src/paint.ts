@@ -198,6 +198,17 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 				grid.text(at, row, `⧗${behind}`, { fg: grey(item, COLOR.wait) });
 				at += 2 + String(behind).length;
 			}
+			// A direction stands here, in the colour of whoever gave it.
+			const stands = item.issue?.directions?.[0];
+			if (stands) {
+				grid.text(at, row, "⚑", { fg: grey(item, colorOf(world, stands.who)) });
+				at += 2;
+			}
+			// An agent changed it since this person last looked.
+			if (item.fresh) {
+				grid.text(at, row, "+", { fg: grey(item, COLOR.bright), bold: true });
+				at += 2;
+			}
 			return at;
 		};
 

@@ -53,6 +53,10 @@ interface Link {
 interface Shared {
 	/** One per repository with a running host, by state directory. */
 	links: Map<string, Link>;
+	/** What the host has for the session open here is being typed into it. */
+	telling?: boolean;
+	/** The last thing the session open here said in words. */
+	said?: string | undefined;
 	/** The state directory of the repository this terminal's session is in. */
 	home: string | undefined;
 	/** Trees of other repositories whose host is not running. */
@@ -495,12 +499,34 @@ async function fetchDetails(client: HostClient, state: UiState): Promise<InboxDe
 	return { dialogs: Object.fromEntries(dialogs), mail };
 }
 
+/**
+ * Type into the session open here what its host has for it: the host cannot type into a terminal.
+ * This is how a person's line said on the tree, or a result to check, reaches a session that is open.
+ */
+async function typeWhatIsTold(link: Link): Promise<void> {
+	const nodeId = shared.current;
+	if (!nodeId || !(link.state?.told?.[nodeId] ?? 0) || shared.telling) return;
+	shared.telling = true;
+	try {
+		const { messages } = await link.client.ui("told", { nodeId });
+		for (const message of messages) {
+			if (shared.ctx?.isIdle()) shared.pi?.sendUserMessage(message);
+			else shared.pi?.sendUserMessage(message, { deliverAs: "steer" });
+		}
+	} catch {
+		// The session ended, or the host went away: what was not taken is still there to take.
+	} finally {
+		shared.telling = false;
+	}
+}
+
 async function refreshLink(link: Link): Promise<void> {
 	link.refreshing ??= link.client
 		.ui("state", {})
 		.then(async (state) => {
 			link.details = await fetchDetails(link.client, state);
 			link.state = state;
+			void typeWhatIsTold(link);
 		})
 		.catch(() => {})
 		.finally(() => {
@@ -945,6 +971,26 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		if (shared.current) request.current = shared.current;
 	});
 
+	// The canopy carries what a person says about an item to the host that has it: it has no connection of its own.
+	const steer = async (about: { number?: number; nodeId?: string }, text: string): Promise<void> => {
+		const link = about.nodeId ? linkOf(about.nodeId) : (homeLink() ?? [...shared.links.values()].find((candidate) => candidate.state?.work));
+		if (!link) throw new Error("Its host cannot be reached.");
+		await link.client.ui("steer", { ...about, text });
+		await refreshLink(link);
+	};
+	onEvent(pi.events, "lattice:steer", (request) => {
+		if (shared.pi !== pi || request.done) return;
+		request.done = true;
+		steer({ ...(request.number !== undefined ? { number: request.number } : {}), ...(request.nodeId !== undefined ? { nodeId: request.nodeId } : {}) }, request.text).catch((error: unknown) => tell(error instanceof Error ? error.message : String(error), "error"));
+	});
+	onEvent(pi.events, "lattice:seen", (request) => {
+		if (shared.pi !== pi || request.done) return;
+		const link = homeLink() ?? [...shared.links.values()].find((candidate) => candidate.state?.work);
+		if (!link) return;
+		request.done = true;
+		void link.client.ui("work", { request: { do: "seen" } }).then(() => refreshLink(link)).catch(() => {});
+	});
+
 	// The other extensions ask what the settings are; the files are ours to read.
 	onEvent(pi.events, "lattice:settings:query", (request) => {
 		if (shared.pi === pi) request.values = { ...settings().settings.values };
@@ -1066,12 +1112,21 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		if (shared.current) await currentLink()?.client.ui("status", { nodeId: shared.current, streaming: true }).catch(() => {});
 	});
 	pi.on("agent_settled", async () => {
-		if (shared.current) await currentLink()?.client.ui("status", { nodeId: shared.current, streaming: false }).catch(() => {});
+		const [nodeId, link] = [shared.current, currentLink()];
+		if (!nodeId || !link) return;
+		await link.client.ui("status", { nodeId, streaming: false }).catch(() => {});
+		// A person steered this session from the tree: what it said last is its answer, and only this terminal heard it.
+		if (shared.said && link.state?.steers?.some((steer) => steer.to.nodeId === nodeId && steer.answer === undefined)) await link.client.ui("said", { nodeId, text: shared.said }).catch(() => {});
+		shared.said = undefined;
 	});
 
 	// The host sees what its background sessions use; the one open here has to be reported.
 	pi.on("message_end", async (event) => {
-		const message = event.message as { role?: string; usage?: { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } } };
+		const message = event.message as { role?: string; content?: unknown; usage?: { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } } };
+		if (message.role === "assistant") {
+			const said = (typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.filter((part: { type?: string }) => part?.type === "text").map((part: { text?: string }) => part.text ?? "").join("") : "").trim();
+			if (said) shared.said = said;
+		}
 		if (!shared.current || message.role !== "assistant" || !message.usage) return;
 		const tokens = message.usage.totalTokens ?? (message.usage.input ?? 0) + (message.usage.output ?? 0);
 		void currentLink()?.client.ui("usage", { nodeId: shared.current, tokens, cost: message.usage.cost?.total ?? 0 }).catch(() => {});
@@ -1418,9 +1473,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 					[
 						issueLine(read.issue),
 						...(read.issue.body.trim() ? ["", read.issue.body.trim()] : []),
+						...(read.issue.result ? ["", `Result, from ${read.issue.result.by}: ${read.issue.result.summary}`, ...(read.issue.result.checks ? [`Checked: ${read.issue.result.checks}`] : []), ...(read.issue.result.url ? [`Where: ${read.issue.result.url}`] : [])] : []),
+						...((read.said ?? []).length > 0 ? ["", ...(read.said ?? []).map((line) => `${line.stands ? "⚑" : " "} ${line.who}, ${when(line.at)}: ${line.text}${line.stands ? "  (stands; line " + line.id + ")" : `  (line ${line.id})`}`)] : []),
 						...((read.comments ?? []).length > 0 ? ["", ...(read.comments ?? []).map((comment) => `${comment.author}, ${when(comment.at)}: ${comment.body}`)] : []),
 						"",
-						...(read.history ?? []).map((event) => `${when(event.at)}  ${event.who}  ${event.what}${event.from !== undefined || event.to !== undefined ? `: ${event.from ?? "nothing"} -> ${event.to ?? "nothing"}` : ""}`),
+						...(read.history ?? []).map((event) => `${when(event.at)}  ${event.as ? `${event.as} (${event.who})` : event.who}  ${event.what}${event.from !== undefined || event.to !== undefined ? `: ${event.from ?? "nothing"} -> ${event.to ?? "nothing"}` : ""}${event.why ? `  because ${event.why}` : ""}`),
 					].join("\n"),
 					"info",
 				);
@@ -2065,6 +2122,22 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		{ name: "approvals", does: "review messages waiting for approval", run: (ctx) => approvals(ctx) },
 		{ name: "server", usage: "server [start | share [off] | address [your name] | leave]", does: "where the work is tracked: start a board on this machine, share it with teammates, or join theirs by its address; with nothing, say which one you are on", run: (ctx, arg) => server(ctx, arg) },
 		{ name: "issue", usage: "issue <number> | add <parent | top> <title> | set <number> <field> <value> | comment <number> <text>", does: "look at one of the team's issues, add one, change one, or comment on one", run: (ctx, arg) => issue(ctx, arg) },
+		{
+			name: "say", usage: "say <issue | session> <what you want>", does: "say something about an issue or a session to whatever tends it: it changes the work and answers in a sentence. space on the canopy does the same",
+			run: async (ctx, arg) => {
+				await refresh();
+				const [first = "", ...rest] = arg.trim().split(/\s+/);
+				const text = rest.join(" ");
+				if (first === "" || text === "") return ctx.ui.notify("Say what, about what: /lattice say 12 this first", "warning");
+				if (/^#?\d+$/.test(first)) await steer({ number: Number(first.replace("#", "")) }, text);
+				else {
+					const node = named(ctx, first);
+					if (!node) return;
+					await steer({ nodeId: node.id }, text);
+				}
+				ctx.ui.notify("Said. What it did is written at the foot of the canopy, and in /lattice status.", "info");
+			},
+		},
 		{ name: "scheme", usage: "scheme [edit]", does: "how the team structures its work: the types, states and fields; edit changes them for everyone", run: (ctx, arg) => scheme(ctx, arg) },
 		{ name: "on", usage: "on <issue | none>", does: "say which of the team's issues this session is working on", run: (ctx, arg) => workOn(ctx, arg) },
 		{ name: "team", does: "the people on your server: who is here, what is being handed over, and a teammate's changed key", run: (ctx) => team(ctx) },

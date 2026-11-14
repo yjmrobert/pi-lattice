@@ -2,7 +2,7 @@
  * The work of a team as the canopy sees it: items on levels, who owns each, and the agent
  * sitting on it. Built from the same state the pane reads. No Pi, no terminal.
  */
-import { type Issue, isPlanned, misfit, type NodeMeta, roleOf, type Scheme, stateKind, type UiState, type WorkState, waitingOn } from "@pi-lattice/protocol";
+import { type Direction, directionsFor, type Issue, type IssueEvent, isPlanned, misfit, type NodeMeta, roleOf, type Scheme, type Steer, stateKind, type UiState, type WorkState, waitingOn } from "@pi-lattice/protocol";
 import { type Flow, flowOf } from "./order.ts";
 
 /** One host's tree, or what a teammate has in a repository that is not on this machine. */
@@ -64,6 +64,16 @@ export interface Item {
 	issue?: Issue;
 	/** Why the issue does not fit the team's scheme as it is now. */
 	misfit?: string;
+	/** What people said that stands here: on this item, then on everything above it, nearest first. `on` is the id of the item each stands on. */
+	directions?: Array<Direction & { on: string }>;
+	/** The newest thing an agent did to it since this person last looked. */
+	fresh?: IssueEvent;
+	/** The last things done to it, newest first. */
+	events?: IssueEvent[];
+	/** The session that tends it: the nearest coordinator on it or above it. `on` is the id of the item that session sits on. */
+	tender?: { role: string; owner: string; on: string };
+	/** An agent that is not a session of any host holds it, from a shell. */
+	outside?: boolean;
 }
 
 export interface Person {
@@ -90,6 +100,10 @@ export interface World {
 	scheme?: Scheme;
 	/** Why nothing on the server can be changed right now. */
 	stale?: string;
+	/** What agents changed since this person last looked, newest first: one for each item and moment. */
+	changes: IssueEvent[];
+	/** What this person said on the tree lately, and what was answered, oldest first. */
+	steers: Steer[];
 }
 
 export const ROOT_ID = "canopy:root";
@@ -194,7 +208,8 @@ function finish(root: Item, items: Map<string, Item>, names: string[], online: R
 		if (item.asks > 0 || item.agent?.state === "asking") runner.asking++;
 	}
 	const traffic = sources.flatMap((source) => source.state.traffic ?? []);
-	return { root, items, people, levels: [...levels], me, traffic, flow: flowOf(root, items) };
+	const steers = sources.flatMap((source) => source.state.steers ?? []).sort((a, b) => a.at - b.at);
+	return { root, items, people, levels: [...levels], me, traffic, flow: flowOf(root, items), changes: [], steers };
 }
 
 /** A session as the canopy seats it: one of this person's, with everything the host knows, or a teammate's as the server tells it. */
@@ -266,7 +281,10 @@ function buildFromWork(sources: readonly TreeSource[], work: WorkState, rootName
 		const parent = above && shown(above) ? above.number : undefined;
 		kids.set(parent, [...(kids.get(parent) ?? []), issue]);
 	}
+	// Under each item, in the order the work is to be done: the rank the agents keep, then as filed.
+	for (const list of kids.values()) list.sort((a, b) => (a.rank ?? a.number) - (b.rank ?? b.number) || a.number - b.number);
 	const seated = new Set<string>();
+	const coordinators = new Map<string, { role: string; owner: string }>();
 	const sessionItem = (sitter: Sitter, parent: Item, level: number): Item => ({
 		id: sitter.id, name: sitter.name, kind: sitter.agent.role, level, owner: sitter.owner, away: false, repo: sitter.repo, tree: sitter.tree,
 		parent, children: [], buds: [], agent: sitter.agent, planned: false, done: sitter.node?.done === true, failed: sitter.agent.state === "failed",
@@ -278,14 +296,20 @@ function buildFromWork(sources: readonly TreeSource[], work: WorkState, rootName
 		const bud = helping || (parent !== root && at <= parent.level);
 		const on = sitters.filter((sitter) => sitter.issue === issue.number).sort((a, b) => URGENCY[a.agent.state] - URGENCY[b.agent.state]);
 		for (const sitter of on) seated.add(sitter.id);
-		const lead = on[0];
 		const kind = stateKind(scheme, issue.state);
+		// An agent that took it from a shell is on it as much as a session is; only no host says so.
+		const outside = on.length === 0 && issue.agent !== undefined && kind !== "done";
+		const lead: Pick<Sitter, "owner" | "repo" | "tree" | "agent" | "node"> | undefined = on[0] ?? (outside ? { owner: issue.assignee ?? "", repo: issue.repo ?? "", tree: "", agent: { role: issue.agent as string, state: "working", open: false, ...(issue.assignee ? { owner: issue.assignee } : {}) }, node: undefined } : undefined);
+		const tends = on.find((sitter) => sitter.agent.role === "coordinator");
 		const why = misfit(scheme, issue, byNumber);
 		const item: Item = {
 			id: `#${issue.number}`, name: issue.title, kind: issue.type, level: parent === root ? Math.max(at, 0) : bud ? parent.level : at, owner: issue.assignee ?? lead?.owner ?? "", away: false,
 			repo: lead?.repo ?? "", tree: lead?.tree ?? "", parent, children: [], buds: [], agent: lead?.agent, planned: !lead && kind !== "done", done: kind === "done", failed: lead?.agent.state === "failed",
-			leaves: 0, landed: 0, asks: on.reduce((sum, sitter) => sum + sitter.asks, 0), waitsOn: waitingOn(scheme, issue, byNumber).map((number) => `#${number}`), node: lead?.node, issue, ...(why ? { misfit: why } : {}),
+			leaves: 0, landed: 0, asks: on.reduce((sum, sitter) => sum + sitter.asks, 0), waitsOn: waitingOn(scheme, issue, byNumber).map((number) => `#${number}`), node: lead?.node, issue, ...(why ? { misfit: why } : {}), ...(outside ? { outside: true } : {}),
 		};
+		const directions = directionsFor(issue, byNumber).map((direction) => ({ id: direction.id, who: direction.who, text: direction.text, at: direction.at, on: `#${direction.on}` }));
+		if (directions.length > 0) item.directions = directions;
+		if (tends) coordinators.set(item.id, { role: tends.agent.role, owner: tends.owner });
 		items.set(item.id, item);
 		(bud ? parent.buds : parent.children).push(item);
 		// More than one session on an issue: the others sit beside it.
@@ -305,10 +329,38 @@ function buildFromWork(sources: readonly TreeSource[], work: WorkState, rootName
 		root.children.push(item);
 	}
 
+	// A coordinator on no issue, at the top of this person's own tree, tends what nothing else does.
+	const loose = sitters.find((sitter) => sitter.owner === me && sitter.issue === undefined && sitter.agent.role === "coordinator" && sitter.node?.parentId === null);
+	for (const item of items.values()) {
+		if (!item.issue) continue;
+		for (let at: Item | undefined = item; at && at !== root; at = at.parent) {
+			const tends = coordinators.get(at.id);
+			if (tends) {
+				item.tender = { ...tends, on: at.id };
+				break;
+			}
+		}
+		if (!item.tender && loose) item.tender = { role: loose.agent.role, owner: me, on: loose.id };
+	}
+	// What was done to each issue, newest first; and of that, what an agent did since this person last looked.
+	const changes: IssueEvent[] = [];
+	const marked = new Set<string>();
+	for (const event of [...work.recent].reverse()) {
+		const item = items.get(`#${event.issue}`);
+		if (!item) continue;
+		item.events = [...(item.events ?? []), event];
+		if (event.rev <= work.seen || !event.as) continue;
+		item.fresh ??= event;
+		// One change may touch several things at once: it is walked once.
+		if (marked.has(`${event.rev}:${event.issue}`)) continue;
+		marked.add(`${event.rev}:${event.issue}`);
+		changes.push(event);
+	}
+
 	const online = new Map(work.people.map((person) => [person.name, person.online]));
 	const names = new Set<string>([me, ...work.people.map((person) => person.name)]);
 	for (const item of items.values()) if (item !== root && item.owner) names.add(item.owner);
-	return { ...finish(root, items, [me, ...[...names].filter((name) => name !== me).sort()], online, levels, me, sources), scheme, ...(work.connected ? {} : { stale: work.problem ?? "The server has not been reached yet." }) };
+	return { ...finish(root, items, [me, ...[...names].filter((name) => name !== me).sort()], online, levels, me, sources), changes, scheme, ...(work.connected ? {} : { stale: work.problem ?? "The server has not been reached yet." }) };
 }
 
 /** Every item under one, itself first, parents before children; helpers after the item they serve. */
