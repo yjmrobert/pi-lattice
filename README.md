@@ -12,7 +12,11 @@ pi install npm:pi-lattice
 
 From a checkout of this repository, `pi install /path/to/pi-lattice` does the same from source.
 
-Then open `pi` in a project as you always do. A pane on the left lists the project's sessions:
+Then open `pi` in a project as you always do. Where the project has sessions, Pi opens on the canopy: all the work as a tree, with the session you open sliding in beside it.
+
+- `enter` on a session opens its chat on the right, with all of Pi, and the tree stays on the left. `alt+l` moves the keyboard between the two; `esc` in the tree slides the chat away. The session carries on either way.
+- Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. `tab` goes to the next thing that does.
+- `p` lists the sessions in a pane instead, where they are made, stopped, archived and answered:
 
 ```
  ◆ shop                3 sessions
@@ -23,6 +27,7 @@ Then open `pi` in a project as you always do. A pane on the left lists the proje
  alt+l to answer        1 waiting
 ```
 
+- To open on the chat with that pane always on its left, as before, set `pane.home` to `chat` (`,` in the pane, or `/lattice config`). Then `alt+l` gives the pane the keyboard and `c` opens the canopy.
 - In a git repository there is nothing to set up: your first message starts the tree, and each new session joins with its first message. Elsewhere, run `/lattice` once.
 - What needs you is listed above the tree: questions a background session is stuck on, messages to approve. `alt+l` gives the pane the keyboard, and you answer them where they are (`y`/`n`, `a`/`x`).
 - With the keyboard, the chat steps aside to show the selected session in full. `enter` opens it in this terminal, with all of Pi. You can switch at any time, even mid-turn: the work you leave carries on in the background.

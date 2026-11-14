@@ -105,6 +105,8 @@ Check:
 
 ## 3. Focus and the inspector
 
+Sections 3 onwards are about the pane beside the chat: set `pane.home` to `chat` first, or reach the same screen with `alt+l` then `p`. The canopy as what Pi opens on is section 3a.
+
 1. Press `alt+l`.
 
 - [ ] The chat is replaced by an inspector for the session under the cursor: state and how long, place in the tree, brief, roles, workspace, directory.
@@ -124,6 +126,32 @@ Check:
 5. Press `alt+l` then `esc`.
 
 - [ ] The chat is back exactly as it was and the editor accepts typing.
+
+## 3a. Pi opens on the canopy
+
+With `pane.home` at its default, in a terminal at least 120 columns wide, in a project that already has sessions:
+
+1. Start `pi`.
+
+- [ ] The canopy has the whole screen. Its last line starts with `alt+l chat` and `p sessions`.
+
+2. Move to a session and press `enter`.
+
+- [ ] Its chat slides in from the right and the editor accepts typing. The tree stays on the left, and its last line says only `alt+l tree`.
+- [ ] The divider between the two is dim.
+
+3. Send a message, then press `alt+l` while the agent works.
+
+- [ ] The divider lights up and the arrows move in the tree. The chat keeps showing what the agent does.
+- [ ] Pressing and letting go of `alt+l` once moves the keyboard once. This is the check for terminals that report key releases (kitty, ghostty, wezterm).
+
+4. Press `esc`.
+
+- [ ] The chat slides away; the session's ring keeps turning in the tree.
+
+5. Narrow the terminal below 120 columns and press `alt+l` a few times.
+
+- [ ] The chat and the tree take turns with the whole width.
 
 ## 4. Messages to approve
 

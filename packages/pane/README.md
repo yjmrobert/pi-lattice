@@ -23,7 +23,7 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 
 | Key or command | Does |
 |---|---|
-| `alt+l` | Give the pane the keyboard, and back |
+| `alt+l` | Give the pane the keyboard, and back. Where Pi opens on the canopy (`pane.home`, the default), it moves between the tree and the chat, and `p` in the tree gives the pane the keyboard |
 | `↑` `↓` | Move through what is waiting on you, then the sessions |
 | `1`–`9` | Jump to a waiting item |
 | `enter` | Open the selected session here; on a question, answer it with Pi's prompt |
