@@ -8,8 +8,24 @@ import { runBoard } from "./board.ts";
 import { runDaemon } from "./daemon.ts";
 import { WorkServer } from "@pi-lattice/server";
 import { runPlain } from "./plain.ts";
+import { workCommand } from "./workcli.ts";
 
 async function main(): Promise<number> {
+	// The team's work from a shell, for agents that are not Pi sessions: it starts nothing and has its own options.
+	if (process.argv[2] === "work") {
+		return workCommand(process.argv.slice(3), {
+			home: latticeHome(process.env, homedir()),
+			cwd: process.cwd(),
+			env: process.env,
+			out: (text) => void process.stdout.write(text),
+			err: (text) => void process.stderr.write(`${text}\n`),
+			stdin: async () => {
+				const chunks: Buffer[] = [];
+				for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+				return Buffer.concat(chunks).toString("utf8");
+			},
+		});
+	}
 	let options: ReturnType<typeof parseArgs>;
 	try {
 		options = parseArgs(process.argv.slice(2), process.cwd());

@@ -40,6 +40,8 @@ pi in a project and run /lattice. Pi starts the host in the background as needed
                       <lattice home>/server/work.db) and --url <address teammates reach it at>.
                       For a machine that is always on. To keep the work on your own machine
                       instead, there is nothing to run: /lattice server start, in pi.
+  pi-lattice work     The team's work from a shell, for agents that are not Pi sessions: take the
+                      next issue, note what was learned, report the result. pi-lattice work --help.
   pi-lattice daemon   Run the background host for a project in the foreground.
   pi-lattice          A line-based interface to a host, for scripting and debugging.
 
