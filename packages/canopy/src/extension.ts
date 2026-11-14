@@ -11,7 +11,7 @@ import { type Animation, advance, happenings, type Motion } from "./animate.ts";
 import type { Shape } from "./layout.ts";
 import { buildWorld, type World } from "./model.ts";
 import { BEAT } from "./paint.ts";
-import { type CanopyKey, type CanopyState, initial, interpret, render } from "./screen.ts";
+import { type Asking, type CanopyKey, type CanopyState, initial, interpret, render } from "./screen.ts";
 
 /**
  * How often the canopy is drawn while something moves. A frame costs about a millisecond to make,
@@ -66,6 +66,16 @@ export default function (pi: ExtensionAPI) {
 		memory?: { state?: unknown };
 	}
 
+	/** What the selected item's session waits on a person for: the first thing, and how many follow. Asked of the pane, which can answer it. */
+	const askingOf = (world: World, selected: string | undefined): Asking | undefined => {
+		const item = selected ? world.items.get(selected) : undefined;
+		if (!item || !(item.asks > 0 || item.agent?.state === "asking")) return undefined;
+		const request: LatticeEvents["lattice:waiting:query"] = { nodeId: item.node?.id ?? item.id };
+		emitEvent(pi.events, "lattice:waiting:query", request);
+		const first = request.items?.[0];
+		return first ? { ...first, more: (request.items?.length ?? 1) - 1 } : undefined;
+	};
+
 	function screen(tui: TUI, on: string | undefined, place: Place): { render(width: number): string[]; key(data: string): void; dispose(): void } {
 		let { world, current } = look();
 		const chosen = settings();
@@ -82,6 +92,7 @@ export default function (pi: ExtensionAPI) {
 		let said: { text: string; until: number } | undefined;
 		/** What was drawn last. Once this session has ended there is nobody to ask, and it is drawn again as it was. */
 		let drawn: string[] = [];
+		let asking: Asking | undefined;
 		const timer = setInterval(() => {
 			if (!context) return;
 			frames++;
@@ -108,8 +119,9 @@ export default function (pi: ExtensionAPI) {
 					const selected = current && world.items.has(current) ? current : world.root.children[0]?.id;
 					if (selected !== state.selected) state = { ...state, selected, framed: false };
 				}
+				asking = askingOf(world, state.selected);
 				const leave = place.keys?.().map((entry) => [entry.key, entry.does] as const);
-				const lines = render(world, state, width, place.height(), motion === "off" ? 0 : beat(), { animations: moving, now, ...(leave ? { leave } : {}), ...(place.away?.() ? { away: true } : {}) });
+				const lines = render(world, state, width, place.height(), motion === "off" ? 0 : beat(), { animations: moving, now, ...(leave ? { leave } : {}), ...(place.away?.() ? { away: true } : {}), ...(asking ? { asking } : {}) });
 				if (said && lines.length > 0) {
 					const text = said.text.slice(0, Math.max(0, width - 2));
 					lines[lines.length - 1] = ` \x1b[38;2;243;246;251m${text}\x1b[0m${" ".repeat(Math.max(0, width - 1 - text.length))}`;
@@ -127,11 +139,16 @@ export default function (pi: ExtensionAPI) {
 					tui.requestRender();
 					return;
 				}
-				const next = interpret(world, state, key, width, place.height());
+				const next = interpret(world, state, key, width, place.height(), asking);
 				state = next.state;
 				if (place.memory) place.memory.state = state;
 				for (const action of next.actions) {
 					if (action.do === "close") return place.back();
+					if (action.do === "answer") {
+						const request: LatticeEvents["lattice:waiting:answer"] = { id: action.id, key: action.key };
+						emitEvent(pi.events, "lattice:waiting:answer", request);
+						if (!request.done) said = { text: "That could not be answered from here. Open the session to answer it.", until: Date.now() + SAY_MS };
+					}
 					if (action.do === "say") said = { text: action.text, until: Date.now() + SAY_MS };
 					if (action.do === "open") return place.open(action.id);
 					if (action.do === "run") {

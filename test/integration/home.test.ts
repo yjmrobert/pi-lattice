@@ -30,22 +30,24 @@ afterEach(async () => {
 });
 
 const fauxArgs = ["-e", extensionPaths.faux, "--provider", "lattice-faux", "--model", "scripted", "--no-skills", "--no-context-files"];
-const open = (options: { cols?: number; rows?: number } = {}): PiTui => {
+const open = (options: { cols?: number; rows?: number; env?: Record<string, string> } = {}): PiTui => {
+	const { env, ...size } = options;
 	tui = PiTui.start(sandbox, {
-		...options,
+		...size,
 		extensions: [extensionPaths.launcher, extensionPaths.pane, extensionPaths.canopy, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
 		env: {
 			LATTICE_STATE_DIR: stateDir,
 			LATTICE_PI_COMMAND: JSON.stringify([process.execPath, piCli]),
 			LATTICE_PI_ARGS: JSON.stringify(fauxArgs),
 			LATTICE_EXTENSION_PATHS: JSON.stringify([extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]),
+			...env,
 		},
 	});
 	return tui;
 };
 
 /** A terminal with a tree whose first session is the one open in it. */
-const withTree = async (options: { cols?: number; rows?: number } = {}): Promise<PiTui> => {
+const withTree = async (options: { cols?: number; rows?: number; env?: Record<string, string> } = {}): Promise<PiTui> => {
 	const pi = open(options);
 	await pi.see("[Extensions]");
 	await pi.submit("hello");
@@ -121,6 +123,35 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		const opened = await pi.see("heliotrope");
 		expect(opened.some((row) => split(row)[1].includes("heliotrope"))).toBe(true);
 		expect(split(opened[0] as string)[0]).toMatch(/^ ◆ work/);
+	}, 120_000);
+
+	it("shows a message waiting for approval under the tree, and approves it there with a", async () => {
+		const pi = await withTree({ cols: 160, rows: 40, env: { LATTICE_APPROVAL: "always" } });
+		await pi.see(/alt\+l\s+tree/);
+		pi.press(KEY.altL);
+		await pi.see("close chat");
+		pi.press("p");
+		await pi.see(/owner\s+you/);
+		pi.press("n");
+		await pi.see("New session under work");
+		pi.press("kid", KEY.tab, KEY.tab, KEY.tab, KEY.tab, KEY.tab);
+		await pi.see("what it should do; it sees only this");
+		pi.press(`!tool send_message ${JSON.stringify({ to: "parent", text: "needs approval" })}`);
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		pi.press("\x13"); // ctrl+s
+		await pi.see(/roles\s+protocol · reporting · worker/);
+		pi.press(KEY.escape);
+
+		// The session open here is the one selected, and the message is for it: it is drawn in full, with its keys.
+		const asked = await pi.waitFor((_screen, rows) => rows.some((row) => split(row)[0].includes("? kid → work")), "what waits, under the tree", 30_000);
+		const tree = asked.map((row) => split(row)[0]);
+		expect(tree.join("\n")).toContain("needs approval");
+		expect(tree.join("\n")).toMatch(/ a {2}approve {4}x {2}reject/);
+
+		pi.press("a");
+		// Approved: nothing waits, and the message reaches the session.
+		await pi.waitFor((_screen, rows) => !rows.some((row) => split(row)[0].includes("? kid → work")), "nothing waiting under the tree", 30_000);
+		await pi.see("delivered to the agent", 30_000);
 	}, 120_000);
 
 	it("opens on the tree when there already is one, and in a narrow terminal gives an open chat the whole width", async () => {

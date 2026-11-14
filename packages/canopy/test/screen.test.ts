@@ -112,6 +112,29 @@ describe("acting", () => {
 		expect(interpret(w, initial(w, "cards"), "enter", W, H).actions).toEqual([{ do: "say", text: 'Nobody is on "cards" yet. Press s to put a session on it.' }]);
 	});
 
+	it("shows what the selected session asks under the tree, and answers it with the keys it is shown with", () => {
+		const w = harbor();
+		const asking = { id: "q:copy:1", title: "copy asks", text: "Run `stripe listen` against the live account?\nIt forwards webhooks to this machine.", keys: [{ key: "y", does: "yes" }, { key: "n", does: "no" }], more: 1 };
+		const lines = renderPlain(w, initial(w, "copy"), W, H, 0, { animations: [], now: 0, asking });
+		expect(lines).toHaveLength(H);
+		const at = lines.findIndex((line) => line.includes("? copy asks"));
+		expect(at).toBeGreaterThan(0);
+		expect(lines[at]).toContain("+1 more");
+		expect(lines[at + 1]).toContain("Run `stripe listen` against the live account?");
+		expect(lines[at + 2]).toContain("It forwards webhooks to this machine.");
+		expect(lines[at + 3]).toMatch(/ y {2}yes {4}n {2}no/);
+		// What is selected is still drawn, above what it asks.
+		expect(lines.slice(0, at).join("\n")).toContain("copy");
+		// While the keyboard is elsewhere the question is read, and its keys are not offered.
+		expect(renderPlain(w, initial(w, "copy"), W, H, 0, { animations: [], now: 0, asking, away: true }).join("\n")).not.toMatch(/ y {2}yes/);
+
+		expect(interpret(w, initial(w, "copy"), "y", W, H, asking).actions).toEqual([{ do: "answer", id: "q:copy:1", key: "y" }]);
+		// `n` is "no" here, not a new item; a key the question does not have keeps its own meaning.
+		expect(interpret(w, initial(w, "copy"), "n", W, H, asking).actions).toEqual([{ do: "answer", id: "q:copy:1", key: "n" }]);
+		expect(interpret(w, initial(w, "copy"), "enter", W, H, asking).actions).toEqual([{ do: "open", id: "copy", tree: "/shop/.lattice" }]);
+		expect(interpret(w, initial(w, "copy"), "y", W, H).actions).toEqual([]);
+	});
+
 	it("puts a session on a planned item of one's own with s", () => {
 		const w = harbor();
 		expect(interpret(w, initial(w, "cards"), "s", W, H).actions).toEqual([{ do: "start", id: "cards", tree: "/shop/.lattice" }]);

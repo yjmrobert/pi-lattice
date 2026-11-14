@@ -32,8 +32,21 @@ export interface CanopyState {
 
 export type CanopyKey = "up" | "down" | "left" | "right" | "shift+up" | "shift+down" | "shift+left" | "shift+right" | "home" | "tab" | "enter" | "escape" | (string & {});
 
+/** What the selected session waits on a person for, in full, and the keys that answer it there. */
+export interface Asking {
+	id: string;
+	title: string;
+	text: string;
+	/** A key as the canopy names it (`y`, `enter`), and what it does. */
+	keys: ReadonlyArray<{ key: string; does: string }>;
+	/** How many more things the session waits on after this one. */
+	more: number;
+}
+
 export type CanopyAction =
 	| { do: "close" }
+	/** Answer what the selected session asks, with one of the keys it was shown with. */
+	| { do: "answer"; id: string; key: string }
 	| { do: "open"; id: string; tree: string }
 	| { do: "start"; id: string; tree: string }
 	/** Put the session open in this terminal on an issue. */
@@ -124,7 +137,7 @@ function neighbour(world: World, plan: Layout, from: Place, key: "up" | "down" |
 const ARROWS: Record<string, "up" | "down" | "left" | "right"> = { up: "up", down: "down", left: "left", right: "right", k: "up", j: "down", h: "left", l: "right" };
 
 /** What a key does. Returns the next state and what the host of the screen must do. */
-export function interpret(world: World, state: CanopyState, key: CanopyKey, width: number, height: number): { state: CanopyState; actions: CanopyAction[] } {
+export function interpret(world: World, state: CanopyState, key: CanopyKey, width: number, height: number, asking?: Asking): { state: CanopyState; actions: CanopyAction[] } {
 	const plan = planOf(world, state);
 	const here = state.selected ? plan.places.get(state.selected) : undefined;
 	const item = here?.item;
@@ -149,6 +162,8 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 		return [...key].length === 1 ? keep({ ...state, typing: { ...typing, text: typing.text + key } }) : keep(state);
 	}
 	if (key === "escape" || key === "q") return keep(state, [{ do: "close" }]);
+	// While the selected session asks something, the keys that answer it mean that and nothing else.
+	if (asking?.keys.some((entry) => entry.key === key)) return keep(state, [{ do: "answer", id: asking.id, key }]);
 	const scheme = world.scheme;
 	if (scheme && (key === "n" || key === "N" || key === "e" || key === "m" || key === "t")) {
 		if (world.stale) return keep(state, [{ do: "say", text: `Nothing can be changed: ${world.stale}` }]);
@@ -332,6 +347,32 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 	return grid;
 }
 
+const keyName = (key: string): string => (key === "enter" ? "⏎" : key);
+/** The most lines of a question that are drawn; the rest is read in the session's chat. */
+const ASKING_LINES = 8;
+
+/** What the selected session asks, in full, with the keys that answer it: a band under the tree, as wide as the tree's window. */
+function askingBand(asking: Asking, width: number, away: boolean): Grid {
+	const amber: Style = { fg: COLOR.attention, bold: true };
+	const room = Math.max(10, width - 5);
+	const all = asking.text.split("\n").flatMap((line) => (line.trim() === "" ? [""] : wrap(line, room)));
+	const text = all.length > ASKING_LINES ? [...all.slice(0, ASKING_LINES - 1), "…"] : all;
+	const grid = new Grid(width, text.length + 3);
+	grid.text(0, 0, "─".repeat(width), { fg: COLOR.attention, level: 0.5 });
+	const more = asking.more > 0 ? `+${asking.more} more` : "";
+	run(grid, 1, 1, [["? ", amber], [cut(asking.title, Math.max(8, width - 6 - more.length)), { fg: COLOR.bright, bold: true }]]);
+	if (more) grid.text(Math.max(1, width - 1 - more.length), 1, more, DIM);
+	text.forEach((line, index) => grid.text(3, 2 + index, line, { fg: COLOR.text }));
+	// The keys are not the canopy's while the keyboard is elsewhere: then the band only says what is asked.
+	let at = 2;
+	for (const { key, does } of away ? [] : asking.keys) {
+		const name = keyName(key);
+		if (at + name.length + does.length + 5 > width) break;
+		at = run(grid, at, 2 + text.length, [[` ${name} `, KEYCAP], [` ${does}   `, DIM]]);
+	}
+	return grid;
+}
+
 function inspector(world: World, state: CanopyState, width: number, height: number, tick: number): Grid {
 	const grid = new Grid(width, height);
 	const item = state.selected ? world.items.get(state.selected) : undefined;
@@ -467,6 +508,8 @@ export interface Moving {
 	leave?: ReadonlyArray<readonly [string, string]>;
 	/** Whether the keyboard is somewhere else: then only the keys that lead here are listed. */
 	away?: boolean;
+	/** What the selected session waits on a person for, drawn in full under the tree. */
+	asking?: Asking;
 }
 
 function compose(world: World, state: CanopyState, width: number, height: number, tick: number, moving: Moving | undefined, lines: (grid: Grid, col?: number, row?: number, width?: number, height?: number) => string[]): string[] {
@@ -483,7 +526,12 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const tree = paint(world, plan, { frame: tick, letters: view.letters, folded: view.folded, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
 	const blink = tick === 0 || tick % BEAT < BEAT / 2;
 	for (const edge of edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
-	const canvas = lines(tree, view.camera.col, view.camera.row, win.width, win.height);
+	// What is asked takes the foot of the tree's window. The rows it takes are the ones the selection is not in.
+	const band = moving?.asking && win.height > 16 ? lines(askingBand(moving.asking, win.width, moving.away === true)) : [];
+	const left = win.height - band.length;
+	const selected = view.selected ? plan.places.get(view.selected) : undefined;
+	const hidden = selected !== undefined && selected.row - view.camera.row + 2 >= left;
+	const canvas = [...lines(tree, view.camera.col, view.camera.row + (hidden ? band.length : 0), win.width, left), ...band];
 	const panel = side > 0 ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick)) : [];
 	return [...lines(header(world, view, width, tick)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away))];
 }

@@ -376,9 +376,6 @@ function mountCanopy(): void {
 		tui,
 		memory: shared.canopyMemory,
 		open: (nodeId) => {
-			// Something this session waits on is answered where it is; anything else is talked to in its chat.
-			const waiting = nodeId === shared.current ? undefined : paneInbox(view()).find(({ item }) => item.nodeId === nodeId);
-			if (waiting) return toPane(itemKey(waiting.item.id));
 			toChat();
 			if (nodeId !== shared.current) dispatch(`/lattice open ${nodeId}`);
 		},
@@ -851,6 +848,32 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		shared.assignment = result.assignment;
 		return { sessionFile: result.sessionFile, wasWorking: result.wasWorking };
 	};
+
+	// The canopy shows what a session waits on and answers it with the pane's own keys, so the two cannot differ.
+	const waitingAt = (id: string): PaneView => ({ ...view(), cursor: itemKey(id), focused: true, help: false });
+	const keyNamed = (key: string): string => (key === "⏎" ? "enter" : key);
+	onEvent(pi.events, "lattice:waiting:query", (request) => {
+		if (shared.pi !== pi) return;
+		request.items = paneInbox(view())
+			.filter(({ item }) => item.nodeId === request.nodeId)
+			.map(({ item }) => {
+				const at = waitingAt(item.id);
+				const dialog = item.dialog;
+				const text = dialog ? [dialog.title, dialog.message, ...(dialog.options ?? []).map((option, index) => `${index + 1}. ${option}`)].filter((line) => line !== undefined && line !== "").join("\n") : (item.envelope?.payload.text ?? item.text);
+				return { id: item.id, title: item.kind === "question" ? `${item.title} asks` : item.title, text, keys: cursorKeys({ ...at, keys: [] }).map(([key, does]) => ({ key: keyNamed(key), does })) };
+			});
+	});
+	onEvent(pi.events, "lattice:waiting:answer", (request) => {
+		if (shared.pi !== pi) return;
+		const at = waitingAt(request.id);
+		// Only the keys the item was shown with: anything else would be a key of the pane's, not an answer.
+		if (!cursorKeys({ ...at, keys: [] }).some(([key]) => keyNamed(key) === request.key)) return;
+		const actions = interpretKey(at, request.key).filter((action) => action.do !== "leave");
+		if (actions.length === 0) return;
+		for (const action of actions) perform(action);
+		request.done = true;
+		redraw();
+	});
 
 	// The canopy asks what there is to draw; the connections to the hosts are ours.
 	onEvent(pi.events, "lattice:trees:query", (request) => {
