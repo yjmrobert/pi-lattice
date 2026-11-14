@@ -1221,6 +1221,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				this.answerDialog(nodeId, dialogId, answer);
 				return {};
 			}
+			case "instead": {
+				const { nodeId, text, dialogId, envelopeId } = call("instead");
+				await this.instead(nodeId, text, { dialogId, envelopeId });
+				return {};
+			}
 			case "sleep":
 				await this.sleep(call("sleep").nodeId);
 				return {};
@@ -1403,6 +1408,25 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		runtime.dialogs.delete(dialogId);
 		this.refresh(id, runtime);
 		this.emit("dialog", id);
+	}
+
+	/**
+	 * Say something else to a background node instead of answering what it waits on. The dialog is
+	 * cancelled, or the mail rejected, and the node is told what the person typed at its next step.
+	 */
+	async instead(id: string, text: string, about: { dialogId?: string | undefined; envelopeId?: string | undefined } = {}): Promise<void> {
+		const node = this.must(id);
+		const runtime = this.runtimes.get(id);
+		if (runtime && !runtime.proc) throw new Error(`"${node.name}" is open in a terminal. Say it there.`);
+		if (text.trim() === "") throw new Error("There is nothing to say.");
+		const dialog = about.dialogId ? runtime?.dialogs.get(about.dialogId) : undefined;
+		if (about.dialogId && !dialog) throw new Error(`No open dialog ${about.dialogId} on session ${id}.`);
+		const mail = about.envelopeId ? this.pendingMail().find((record) => record.recipient === id && record.envelope.id === about.envelopeId) : undefined;
+		if (about.envelopeId && !mail) throw new Error(`No message ${about.envelopeId} is waiting on session ${id}.`);
+		if (dialog) this.answerDialog(id, dialog.id, { cancelled: true });
+		if (mail) await this.decideMail(id, mail.envelope.id, "reject");
+		const from = mail ? (this.store.getNode(mail.envelope.from)?.name ?? mail.envelope.from) : undefined;
+		await this.prompt(id, this.template("instead", { asked: dialog ? [dialog.title, dialog.message].filter(Boolean).join(" ") : undefined, from, text: text.trim() }), "steer");
 	}
 
 	/** Approve or reject mail that is waiting in a node's inbox. Wakes the node if it is dormant. */

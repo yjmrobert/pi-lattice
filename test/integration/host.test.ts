@@ -166,6 +166,38 @@ describe("host supervision", () => {
 		expect(h.pendingMail()).toHaveLength(0);
 	});
 
+	it("closes a question and tells the session what the person said instead", async () => {
+		const h = await startHost({ env: { ...hostOptionsFor(sandbox).env, LATTICE_APPROVAL: "always" } });
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		await h.spawnChild(root.id, { name: "kid", brief: sendTool("parent", "needs approval") });
+		await eventually(() => h.pendingMail()[0], "pending mail on the root");
+		void h.prompt(root.id, "/inbox").catch(() => {});
+		await eventually(() => h.node(root.id)?.status === "blocked", "root to be blocked");
+		const dialog = h.dialogs(root.id)[0];
+
+		await h.instead(root.id, "say the word heliotrope", { dialogId: dialog?.id });
+		// The question is gone, unanswered: the mail still waits. The session reads what was said, and what it was said instead of.
+		expect(h.dialogs(root.id)).toHaveLength(0);
+		await eventually(async () => (await assistantTexts(h, root.id)).includes("heliotrope"), "what was said to reach the model");
+		const said = await assistantTexts(h, root.id);
+		expect(said).toContain("You asked the user:");
+		expect(h.pendingMail()).toHaveLength(1);
+		await expect(h.instead(root.id, "again", { dialogId: dialog?.id })).rejects.toThrow("No open dialog");
+	});
+
+	it("rejects pending mail and tells the session why", async () => {
+		const h = await startHost({ env: { ...hostOptionsFor(sandbox).env, LATTICE_APPROVAL: "always" } });
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		await h.spawnChild(root.id, { name: "kid", brief: sendTool("parent", "reject me") });
+		const pending = await eventually(() => h.pendingMail()[0], "pending mail");
+		await h.instead(root.id, "carry on without the kid", { envelopeId: pending.envelope.id });
+		await eventually(() => h.traffic().find((r) => r.envelope.id === pending.envelope.id)?.mailState === "rejected", "rejected state");
+		await eventually(async () => (await assistantTexts(h, root.id)).includes("carry on without the kid"), "what was said to reach the model");
+		const said = await assistantTexts(h, root.id);
+		expect(said).toContain('A message to you from "kid" was rejected');
+		expect(said).not.toContain("reject me");
+	});
+
 	it("approves pending mail from the host without opening a dialog", async () => {
 		const h = await startHost({ env: { ...hostOptionsFor(sandbox).env, LATTICE_APPROVAL: "always" } });
 		const root = await h.createRoot({ name: "root", cwd: sandbox.work });

@@ -90,6 +90,7 @@ What a session is told is made of files, and each can be replaced. `/lattice pro
 |---|---|---|
 | `brief` | The first thing a child session is told: who created it, then the brief. | `{{parent.name}}` `{{parent.id}}` `{{name}}` `{{kind}}` `{{branch}}` `{{waited}}` `{{brief}}` |
 | `handover` | What an agent is told when its session moved between the background and a terminal mid-turn. |  |
+| `instead` | What an agent is told when the person says something else instead of answering its question or approving a message. | `{{asked}}` `{{from}}` `{{text}}` |
 | `reminder` | What a child is told when it ends its turn without reporting to its parent. | `{{parent.name}}` |
 | `child-stopped` | What a parent is told when a child stops without reporting. | `{{name}}` `{{id}}` `{{reason}}` `{{last}}` `{{held}}` |
 

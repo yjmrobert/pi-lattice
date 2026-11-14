@@ -15,7 +15,7 @@ From a checkout of this repository, `pi install /path/to/pi-lattice` does the sa
 Then open `pi` in a project as you always do. Where the project has sessions, Pi opens on the canopy: all the work as a tree, with the session you open sliding in beside it.
 
 - `enter` on a session opens its chat on the right, with all of Pi, and the tree stays on the left. `alt+l` moves the keyboard between the two; `esc` in the tree slides the chat away. The session carries on either way.
-- Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. `tab` goes to the next thing that does, and what it asks is drawn under the tree with the keys that answer it (`y`/`n`, `a`/`x`).
+- Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. `tab` goes to the next thing that does, and what it asks is drawn under the tree with the keys that answer it (`y`/`n`, `a`/`x`). `o` is always among them: type something else instead, and the session reads that rather than an answer.
 - `p` lists the sessions in a pane instead, where they are made, stopped, archived and answered:
 
 ```
@@ -29,7 +29,7 @@ Then open `pi` in a project as you always do. Where the project has sessions, Pi
 
 - To open on the chat with that pane always on its left, as before, set `pane.home` to `chat` (`,` in the pane, or `/lattice config`). Then `alt+l` gives the pane the keyboard and `c` opens the canopy.
 - In a git repository there is nothing to set up: your first message starts the tree, and each new session joins with its first message. Elsewhere, run `/lattice` once.
-- What needs you is listed above the tree: questions a background session is stuck on, messages to approve. `alt+l` gives the pane the keyboard, and you answer them where they are (`y`/`n`, `a`/`x`).
+- What needs you is listed above the tree: questions a background session is stuck on, messages to approve. `alt+l` gives the pane the keyboard, and you answer them where they are (`y`/`n`, `a`/`x`, or `o` to say something else instead).
 - With the keyboard, the chat steps aside to show the selected session in full. `enter` opens it in this terminal, with all of Pi. You can switch at any time, even mid-turn: the work you leave carries on in the background.
 - `n` creates a child session from one form. Agents can also delegate on their own. Children run in the background, each on the model you choose. A child can be told to wait on others: it shows in the tree at once and starts by itself when they have finished.
 - `c` opens the canopy: all the work as a tree, the team at the root and tasks at the tips. Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. Work can be planned before anyone is on it; `s` puts a session on a planned item.

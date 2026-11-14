@@ -648,6 +648,28 @@ function dispatch(command: string): void {
 	}
 }
 
+/**
+ * Say something else to a session instead of answering what it waits on. A background session is
+ * told by its host, which closes the question or rejects the message first. The session open here
+ * has only messages waiting, never questions: the message is rejected and the line goes to its chat as typed.
+ */
+async function sayInstead(nodeId: string, text: string, about: { dialogId?: string; envelopeId?: string }): Promise<void> {
+	const client = linkOf(nodeId)?.client;
+	if (!client) throw new Error("That session's host cannot be reached.");
+	if (nodeId !== shared.current) {
+		await client.ui("instead", { nodeId, text, ...about });
+		return;
+	}
+	if (about.envelopeId) await client.ui("decideMail", { nodeId, envelopeId: about.envelopeId, action: "reject" });
+	try {
+		const ctx = shared.ctx;
+		if (ctx?.isIdle()) shared.pi?.sendUserMessage(text);
+		else shared.pi?.sendUserMessage(text, { deliverAs: "steer" });
+	} catch {
+		// The session ended meanwhile; there is nobody left to tell.
+	}
+}
+
 /** A key press as the form sees it. Anything that is not a key it acts on is text, pasted text included. */
 function formKeyOf(data: string): FormKey | undefined {
 	const named = (["tab", "up", "down", "left", "right", "home", "end", "enter", "space", "backspace", "delete", "escape"] as const).find((key) => matchesKey(data, key));
@@ -860,7 +882,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 				const at = waitingAt(item.id);
 				const dialog = item.dialog;
 				const text = dialog ? [dialog.title, dialog.message, ...(dialog.options ?? []).map((option, index) => `${index + 1}. ${option}`)].filter((line) => line !== undefined && line !== "").join("\n") : (item.envelope?.payload.text ?? item.text);
-				return { id: item.id, title: item.kind === "question" ? `${item.title} asks` : item.title, text, keys: cursorKeys({ ...at, keys: [] }).map(([key, does]) => ({ key: keyNamed(key), does })) };
+				return { id: item.id, title: item.kind === "question" ? `${item.title} asks` : item.title, text, keys: cursorKeys({ ...at, keys: [] }).map(([key, does]) => ({ key: keyNamed(key), does, ...(key === "o" ? { line: `${item.envelope ? "Reject, and tell" : "Instead, tell"} ${item.nodeId ? name(item.nodeId) : "it"}` } : {}) })) };
 			});
 	});
 	onEvent(pi.events, "lattice:waiting:answer", (request) => {
@@ -868,6 +890,18 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		const at = waitingAt(request.id);
 		// Only the keys the item was shown with: anything else would be a key of the pane's, not an answer.
 		if (!cursorKeys({ ...at, keys: [] }).some(([key]) => keyNamed(key) === request.key)) return;
+		// A typed line instead of an answer goes to the host as it is; no dialog of Pi's is needed.
+		if (request.key === "o") {
+			const found = paneInbox(at).find(({ item }) => item.id === request.id);
+			const text = request.text?.trim() ?? "";
+			if (!found?.item.nodeId || text === "") return;
+			const { item } = found;
+			sayInstead(found.item.nodeId, text, { ...(item.dialog ? { dialogId: item.dialog.id } : {}), ...(item.envelope ? { envelopeId: item.envelope.id } : {}) })
+				.catch((error: unknown) => tell(error instanceof Error ? error.message : String(error), "error"))
+				.finally(() => void refresh());
+			request.done = true;
+			return;
+		}
 		const actions = interpretKey(at, request.key).filter((action) => action.do !== "leave");
 		if (actions.length === 0) return;
 		for (const action of actions) perform(action);
@@ -1164,16 +1198,49 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		await ctx.ui.editor(`${node.name} (owned by ${node.owner}, read-only; changes here are not saved)`, text || "(no conversation yet)");
 	};
 
-	const answer = async (ctx: ExtensionCommandContext, node: NodeMeta): Promise<void> => {
+	/** Say something else to a session instead of answering what it waits on. Whether anything was said. */
+	const instead = async (ctx: ExtensionCommandContext, node: NodeMeta, about: { dialogId?: string; envelopeId?: string }, title: string): Promise<boolean> => {
+		const text = (await ctx.ui.input(title, "what to do instead"))?.trim();
+		if (!text) return false;
+		await sayInstead(node.id, text, about);
+		ctx.ui.notify(about.envelopeId ? `Rejected, and told "${node.name}" why.` : `Told "${node.name}". Its question is closed.`, "info");
+		return true;
+	};
+
+	/** The last choice in every question: none of the answers, something else. */
+	const OTHER = "Something else…";
+
+	const answer = async (ctx: ExtensionCommandContext, node: NodeMeta, other?: { envelopeId?: string }): Promise<void> => {
 		const client = linkOf(node.id)?.client;
 		if (!client) return;
+		if (other?.envelopeId) {
+			await instead(ctx, node, { envelopeId: other.envelopeId }, `Reject the message to ${node.name}, and tell it:`);
+			return;
+		}
 		const { dialogs } = await client.ui("dialogs", { nodeId: node.id });
 		for (const dialog of dialogs) {
 			const title = `${node.name} asks: ${dialog.title}${dialog.message ? `\n${dialog.message}` : ""}`;
+			const say = (): Promise<boolean> => instead(ctx, node, { dialogId: dialog.id }, `${title}\nTell ${node.name} instead:`);
+			if (other) {
+				await say();
+				return;
+			}
 			let reply: { value?: string; confirmed?: boolean; cancelled?: boolean };
-			if (dialog.method === "confirm") reply = { confirmed: await ctx.ui.confirm(`${node.name} asks: ${dialog.title}`, dialog.message ?? "") };
-			else if (dialog.method === "select") {
-				const choice = await ctx.ui.select(title, dialog.options ?? []);
+			if (dialog.method === "confirm") {
+				const choice = await ctx.ui.select(title, ["Yes", "No", OTHER]);
+				// Leaving the list answers nothing: the question waits.
+				if (choice === undefined) return;
+				if (choice === OTHER) {
+					if (!(await say())) return;
+					continue;
+				}
+				reply = { confirmed: choice === "Yes" };
+			} else if (dialog.method === "select") {
+				const choice = await ctx.ui.select(title, [...(dialog.options ?? []), OTHER]);
+				if (choice === OTHER) {
+					if (!(await say())) return;
+					continue;
+				}
 				reply = choice === undefined ? { cancelled: true } : { value: choice };
 			} else {
 				const value = await ctx.ui.input(title, dialog.placeholder ?? "");
@@ -1954,14 +2021,17 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		{ name: "archive", usage: "archive <session>", does: "hide a session and everything under it", run: (ctx, arg) => archive(ctx, arg) },
 		{ name: "restore", usage: "restore [session]", does: "bring archived sessions back", run: (ctx, arg) => restore(ctx, arg) },
 		{
-			name: "answer", usage: "answer <session>", does: "answer the questions a session is waiting on",
+			name: "answer", usage: "answer <session> [other]", does: "answer the questions a session is waiting on; with other, say something else instead of answering",
 			run: async (ctx, arg) => {
 				await refresh();
-				const node = named(ctx, arg);
+				// `<session> other [message]`: a session's name may hold spaces, so the words are taken from the end.
+				const said = /^(.*?)\s+other(?:\s+(\S+))?$/.exec(arg.trim());
+				const node = named(ctx, said ? (said[1] ?? "") : arg);
 				if (!node) return;
+				if (said?.[2]) return answer(ctx, node, { envelopeId: said[2] });
 				const waiting = linkOf(node.id)?.state?.attention[node.id]?.dialogs ?? 0;
 				if (waiting === 0) ctx.ui.notify(`"${node.name}" is not waiting on a question.`, "info");
-				else await answer(ctx, node);
+				else await answer(ctx, node, said ? {} : undefined);
 			},
 		},
 		{ name: "approvals", does: "review messages waiting for approval", run: (ctx) => approvals(ctx) },

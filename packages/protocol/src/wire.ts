@@ -165,6 +165,11 @@ export interface UiApi {
 	decideMail: { params: { nodeId: string; envelopeId: string; action: "approve" | "reject" }; result: Record<string, never> };
 	dialogs: { params: { nodeId: string }; result: { dialogs: DialogInfo[] } };
 	answerDialog: { params: { nodeId: string; dialogId: string; answer: { value?: string; confirmed?: boolean; cancelled?: boolean } }; result: Record<string, never> };
+	/**
+	 * Say something else to a background session instead of answering what it waits on: the
+	 * question is cancelled, or the message rejected, and the session is told what the person typed.
+	 */
+	instead: { params: { nodeId: string; text: string; dialogId?: string; envelopeId?: string }; result: Record<string, never> };
 	sleep: { params: { nodeId: string }; result: Record<string, never> };
 	/** A node's conversation, for reading. Fetched from its owner when it is someone else's, in this repository or another. */
 	messages: { params: { nodeId: string }; result: { messages: unknown[] } };

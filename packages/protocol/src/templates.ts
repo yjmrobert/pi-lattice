@@ -45,6 +45,18 @@ export const TEMPLATES = {
 		vars: [],
 		text: HANDOVER_NOTE,
 	},
+	instead: {
+		name: "instead",
+		summary: "What an agent is told when the person says something else instead of answering its question or approving a message.",
+		vars: ["asked", "from", "text"],
+		text: [
+			'{{#asked}}[pi-lattice] You asked the user: "{{asked}}". They chose none of the answers and the question is closed; do not ask it again. They say instead:',
+			"{{/asked}}",
+			'{{#from}}[pi-lattice] A message to you from "{{from}}" was rejected by the user and you will not receive it. They say instead:',
+			"{{/from}}",
+			"{{text}}",
+		].join("\n"),
+	},
 	reminder: {
 		name: "reminder",
 		summary: "What a child is told when it ends its turn without reporting to its parent.",

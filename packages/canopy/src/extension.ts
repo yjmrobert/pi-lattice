@@ -145,8 +145,9 @@ export default function (pi: ExtensionAPI) {
 				for (const action of next.actions) {
 					if (action.do === "close") return place.back();
 					if (action.do === "answer") {
-						const request: LatticeEvents["lattice:waiting:answer"] = { id: action.id, key: action.key };
+						const request: LatticeEvents["lattice:waiting:answer"] = { id: action.id, key: action.key, ...(action.text !== undefined ? { text: action.text } : {}) };
 						emitEvent(pi.events, "lattice:waiting:answer", request);
+						if (request.done && action.text !== undefined) said = { text: "Told it instead.", until: Date.now() + SAY_MS };
 						if (!request.done) said = { text: "That could not be answered from here. Open the session to answer it.", until: Date.now() + SAY_MS };
 					}
 					if (action.do === "say") said = { text: action.text, until: Date.now() + SAY_MS };

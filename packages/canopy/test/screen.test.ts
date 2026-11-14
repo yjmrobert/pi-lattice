@@ -135,6 +135,24 @@ describe("acting", () => {
 		expect(interpret(w, initial(w, "copy"), "y", W, H).actions).toEqual([]);
 	});
 
+	it("takes a typed line for a key that says something else instead, and sends it as the answer", () => {
+		const w = harbor();
+		const asking = { id: "q:copy:1", title: "copy asks", text: "Run it against the live account?", keys: [{ key: "y", does: "yes" }, { key: "n", does: "no" }, { key: "o", does: "other", line: "Instead, tell copy" }], more: 0 };
+		// `o` is the order of the tree anywhere else; here it opens the line.
+		let step = interpret(w, initial(w, "copy"), "o", W, H, asking);
+		expect(step.actions).toEqual([]);
+		expect(step.state.order).toBe(initial(w, "copy").order);
+		// While it is typed every key is text, the question's own keys included, and the question stays on the screen.
+		for (const key of "say no") step = interpret(w, step.state, key, W, H, asking);
+		const lines = renderPlain(w, step.state, W, H, 0, { animations: [], now: 0, asking });
+		expect(lines.join("\n")).toContain("Run it against the live account?");
+		expect(lines.join("\n")).toMatch(/Instead, tell copy: say no▏ +⏎ +send +esc +cancel/);
+		expect(interpret(w, step.state, "escape", W, H, asking).state.typing).toBeUndefined();
+		step = interpret(w, step.state, "enter", W, H, asking);
+		expect(step.actions).toEqual([{ do: "answer", id: "q:copy:1", key: "o", text: "say no" }]);
+		expect(step.state.typing).toBeUndefined();
+	});
+
 	it("puts a session on a planned item of one's own with s", () => {
 		const w = harbor();
 		expect(interpret(w, initial(w, "cards"), "s", W, H).actions).toEqual([{ do: "start", id: "cards", tree: "/shop/.lattice" }]);

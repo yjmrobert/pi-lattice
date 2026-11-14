@@ -86,9 +86,9 @@ export interface LatticeEvents {
 	 * Ask what a session is waiting on a person for: each thing in full, with the keys that answer it.
 	 * Whoever holds the connections to the hosts fills in `items`, first to answer first.
 	 */
-	"lattice:waiting:query": { nodeId: string; items?: Array<{ id: string; title: string; text: string; keys: Array<{ key: string; does: string }> }> };
-	/** Answer one of those things with one of its keys. Whoever carries it out sets `done`. */
-	"lattice:waiting:answer": { id: string; key: string; done?: boolean };
+	"lattice:waiting:query": { nodeId: string; items?: Array<{ id: string; title: string; text: string; keys: Array<{ key: string; does: string; line?: string }> }> };
+	/** Answer one of those things with one of its keys, and with the line typed for a key that takes one (`line` is its label). Whoever carries it out sets `done`. */
+	"lattice:waiting:answer": { id: string; key: string; text?: string; done?: boolean };
 	/** Ask the roles extension to replace the applied fragments. */
 	"lattice:roles:set": { fragments: string[] };
 }

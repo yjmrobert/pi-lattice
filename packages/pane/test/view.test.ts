@@ -342,6 +342,14 @@ describe("keys while the pane has the keyboard", () => {
 		expect(interpretKey(at(itemKey("q:a:d2")), "y")).toEqual([]);
 	});
 
+	it("offers something else instead of any answer, on every question and every message to approve", () => {
+		expect(cursorKeys(at(itemKey("q:a:d1")))).toEqual([["y", "yes"], ["n", "no"], ["o", "other"]]);
+		expect(cursorKeys(at(itemKey("q:a:d2")))).toEqual([["⏎", "answer"], ["o", "other"]]);
+		expect(cursorKeys(at(itemKey("m:a:e1")))).toEqual([["a", "approve"], ["x", "reject"], ["o", "reject, say why"]]);
+		expect(interpretKey(at(itemKey("q:a:d1")), "o")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice answer a other" }]);
+		expect(interpretKey(at(itemKey("m:a:e1")), "o")).toEqual([{ do: "leave" }, { do: "command", text: "/lattice answer a other e1" }]);
+	});
+
 	it("approves or rejects a message where it is", () => {
 		expect(interpretKey(at(itemKey("m:a:e1")), "a")).toEqual([{ do: "decide", repo: "/shop/.lattice", nodeId: "a", envelopeId: "e1", action: "approve" }]);
 		expect(interpretKey(at(itemKey("m:a:e1")), "x")).toEqual([{ do: "decide", repo: "/shop/.lattice", nodeId: "a", envelopeId: "e1", action: "reject" }]);
@@ -430,16 +438,17 @@ describe("keys while the pane has the keyboard", () => {
 	});
 
 	it("shows in the footer exactly the keys that act on what the cursor is on", () => {
-		expect(cursorKeys(at(itemKey("q:a:d1")))).toEqual([["y", "yes"], ["n", "no"]]);
-		expect(cursorKeys(at(itemKey("q:a:d2")))).toEqual([["⏎", "answer"]]);
-		expect(cursorKeys(at(itemKey("m:a:e1")))).toEqual([["a", "approve"], ["x", "reject"]]);
+		expect(cursorKeys(at(itemKey("q:a:d1")))).toEqual([["y", "yes"], ["n", "no"], ["o", "other"]]);
+		expect(cursorKeys(at(itemKey("q:a:d2")))).toEqual([["⏎", "answer"], ["o", "other"]]);
+		expect(cursorKeys(at(itemKey("m:a:e1")))).toEqual([["a", "approve"], ["x", "reject"], ["o", "reject, say why"]]);
 		// A working session of yours that is not the one open here can be renamed, stopped and archived.
 		expect(cursorKeys(at(nodeKey("a")))).toEqual([["⏎", "open"], ["n", "new"], ["r", "rename"], ["s", "stop"], ["d", "archive"], ["o", "offer"], [",", "settings"], ["?", "keys"]]);
 		// The one open here cannot be archived from under you; someone else's can be opened and asked for.
 		expect(cursorKeys(at(nodeKey("r")))).toEqual([["n", "new"], ["r", "rename"], ["o", "offer"], [",", "settings"], ["?", "keys"]]);
 		expect(cursorKeys(at(nodeKey("b")))).toEqual([["⏎", "open"], ["n", "new"], ["t", "take"], [",", "settings"], ["?", "keys"]]);
 		const v = at(itemKey("q:a:d1"));
-		expect(renderPane({ ...v, keys: cursorKeys(v) }, 34).at(-1)).toBe(" y yes  n no  ↑↓ move  esc close");
+		// Too many for one line of the pane: they run on to a second.
+		expect(renderPane({ ...v, keys: cursorKeys(v) }, 34).slice(-2)).toEqual([" y yes  n no  o other  ↑↓ move", " esc close"]);
 	});
 
 	it("shows all of an item's text under the cursor, wrapped, and one line otherwise", () => {
@@ -498,7 +507,7 @@ describe("the inspector", () => {
 			" │ It forwards webhooks to localhost:3000.",
 		]);
 		expect(lines).toContain(" THE SESSION ASKING");
-		expect(lines.at(-1)).toBe(" y yes  n no");
+		expect(lines.at(-1)).toBe(" y yes  n no  o other");
 	});
 
 	it("shows the model, what has been used, and the last things the session said and did", () => {

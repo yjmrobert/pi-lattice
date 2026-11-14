@@ -68,7 +68,7 @@ function handKey(at: ReturnType<typeof cursorSession>): readonly [key: string, d
 export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyArray<readonly [key: string, does: string]>]> = [
 	["Moving", [["↑ ↓  j k", "move through what is waiting, then the sessions"], ["1-9", "jump to a waiting item"], ["esc  alt+l", "give the keyboard back to Pi"], ["c", "the canopy: all the work as a tree"], [",", "settings"], ["?", "show or hide this list"]]],
 	["A session", [["enter", "open it in this terminal"], ["-", "go back to the session you were in before"], ["n", "create a session under it"], ["r", "rename it"], ["s", "stop what its agent is doing (press twice); start one that is waiting on others"], ["d", "archive it and everything under it"], ["o", "offer it to a teammate; before that, create or join a network"], ["t", "ask a teammate for theirs, or take the request back; in a repository you do not have, it is cloned first"]]],
-	["Something waiting", [["y  n", "answer a yes/no question"], ["a  x", "approve or reject a message; accept or decline an offer; hand over or keep a session someone asks for"], ["enter", "answer or review it with Pi's prompts"]]],
+	["Something waiting", [["y  n", "answer a yes/no question"], ["a  x", "approve or reject a message; accept or decline an offer; hand over or keep a session someone asks for"], ["enter", "answer or review it with Pi's prompts"], ["o", "say something else instead: the question is closed, or the message rejected, and the session is told what you type"]]],
 	["A sleeping repository", [["enter", "start its host"]]],
 ];
 
@@ -110,9 +110,10 @@ export function cursorKeys(view: PaneView): Array<readonly [key: string, does: s
 		return keys;
 	}
 	const { item } = found;
-	if (yesNo(item)) return [["y", "yes"], ["n", "no"]];
-	if (item.kind === "question") return [["⏎", "answer"]];
-	if (item.kind === "message") return item.envelope ? [["a", "approve"], ["x", "reject"]] : [["⏎", "review"]];
+	// `o` is always there: say something else instead of any of the answers.
+	if (yesNo(item)) return [["y", "yes"], ["n", "no"], ["o", "other"]];
+	if (item.kind === "question") return item.dialog ? [["⏎", "answer"], ["o", "other"]] : [["⏎", "answer"]];
+	if (item.kind === "message") return item.envelope ? [["a", "approve"], ["x", "reject"], ["o", "reject, say why"]] : [["⏎", "review"]];
 	if (item.kind === "offer") return [["a", "accept"], ["x", "decline"]];
 	if (item.kind === "request") return [["a", "hand over"], ["x", "keep"]];
 	if (item.kind === "release") return [["⏎", "send now"], ["x", "cancel"]];
@@ -146,6 +147,8 @@ export function interpretKey(view: PaneView, key: PaneKey): PaneAction[] {
 		const { item, repo } = found;
 		const nodeId = item.nodeId ?? "";
 		if (yesNo(item) && item.dialog && (key === "y" || key === "n")) return [{ do: "answer", repo, nodeId, dialogId: item.dialog.id, confirmed: key === "y" }];
+		if (item.kind === "question" && item.dialog && key === "o") return [{ do: "leave" }, { do: "command", text: `/lattice answer ${nodeId} other` }];
+		if (item.kind === "message" && item.envelope && key === "o") return [{ do: "leave" }, { do: "command", text: `/lattice answer ${nodeId} other ${item.envelope.id}` }];
 		if (item.kind === "question" && key === "enter") return [{ do: "leave" }, { do: "command", text: `/lattice answer ${nodeId}` }];
 		if (item.kind === "message" && item.envelope && (key === "a" || key === "x")) return [{ do: "decide", repo, nodeId, envelopeId: item.envelope.id, action: key === "a" ? "approve" : "reject" }];
 		if (item.kind === "message" && key === "enter") return [{ do: "leave" }, { do: "command", text: "/lattice approvals" }];

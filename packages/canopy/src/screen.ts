@@ -26,8 +26,8 @@ export interface CanopyState {
 	shape: Shape;
 	/** What must come first on the left, or everything as it was filed. */
 	order: Order;
-	/** A line being typed at the foot: the title of a new issue, or a comment. */
-	typing?: { what: "add" | "comment"; label: string; text: string; number: number | undefined };
+	/** A line being typed at the foot: the title of a new issue, a comment, or what to say instead of answering. */
+	typing?: { what: "add" | "comment"; label: string; text: string; number: number | undefined } | { what: "answer"; label: string; text: string; id: string; key: string };
 }
 
 export type CanopyKey = "up" | "down" | "left" | "right" | "shift+up" | "shift+down" | "shift+left" | "shift+right" | "home" | "tab" | "enter" | "escape" | (string & {});
@@ -37,8 +37,8 @@ export interface Asking {
 	id: string;
 	title: string;
 	text: string;
-	/** A key as the canopy names it (`y`, `enter`), and what it does. */
-	keys: ReadonlyArray<{ key: string; does: string }>;
+	/** A key as the canopy names it (`y`, `enter`), and what it does. One with `line` takes a typed line, labelled so. */
+	keys: ReadonlyArray<{ key: string; does: string; line?: string }>;
 	/** How many more things the session waits on after this one. */
 	more: number;
 }
@@ -46,7 +46,7 @@ export interface Asking {
 export type CanopyAction =
 	| { do: "close" }
 	/** Answer what the selected session asks, with one of the keys it was shown with. */
-	| { do: "answer"; id: string; key: string }
+	| { do: "answer"; id: string; key: string; text?: string }
 	| { do: "open"; id: string; tree: string }
 	| { do: "start"; id: string; tree: string }
 	/** Put the session open in this terminal on an issue. */
@@ -155,6 +155,7 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 		if (key === "enter") {
 			const text = typing.text.trim().replace(/\s+/g, " ");
 			if (text === "") return keep(rest);
+			if (typing.what === "answer") return keep(rest, [{ do: "answer", id: typing.id, key: typing.key, text }]);
 			return typing.what === "add"
 				? keep(rest, [{ do: "run", command: `/lattice issue add ${typing.number ?? "top"} ${text}`, saying: "Adding it…" }])
 				: keep(rest, [{ do: "run", command: `/lattice issue comment ${typing.number} ${text}`, saying: "Commenting…" }]);
@@ -163,7 +164,8 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 	}
 	if (key === "escape" || key === "q") return keep(state, [{ do: "close" }]);
 	// While the selected session asks something, the keys that answer it mean that and nothing else.
-	if (asking?.keys.some((entry) => entry.key === key)) return keep(state, [{ do: "answer", id: asking.id, key }]);
+	const answers = asking?.keys.find((entry) => entry.key === key);
+	if (asking && answers) return answers.line ? keep({ ...state, typing: { what: "answer", label: answers.line, text: "", id: asking.id, key } }) : keep(state, [{ do: "answer", id: asking.id, key }]);
 	const scheme = world.scheme;
 	if (scheme && (key === "n" || key === "N" || key === "e" || key === "m" || key === "t")) {
 		if (world.stale) return keep(state, [{ do: "say", text: `Nothing can be changed: ${world.stale}` }]);
@@ -318,7 +320,7 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 	if (state.typing) {
 		const room = Math.max(8, width - [...state.typing.label].length - 30);
 		const shown = [...state.typing.text].slice(-room).join("");
-		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], [" ⏎ ", KEYCAP], [state.typing.what === "add" ? " add   " : " comment   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]]);
+		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], [" ⏎ ", KEYCAP], [state.typing.what === "add" ? " add   " : state.typing.what === "answer" ? " send   " : " comment   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]]);
 		return grid;
 	}
 	const named = (leave ?? []).map(([key, does]): [string, string] => [key, does]);

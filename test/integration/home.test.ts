@@ -154,6 +154,37 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		await pi.see("delivered to the agent", 30_000);
 	}, 120_000);
 
+	it("rejects a waiting message with a typed line instead, which the session reads", async () => {
+		const pi = await withTree({ cols: 160, rows: 40, env: { LATTICE_APPROVAL: "always" } });
+		await pi.see(/alt\+l\s+tree/);
+		pi.press(KEY.altL);
+		await pi.see("close chat");
+		pi.press("p");
+		await pi.see(/owner\s+you/);
+		pi.press("n");
+		await pi.see("New session under work");
+		pi.press("kid", KEY.tab, KEY.tab, KEY.tab, KEY.tab, KEY.tab);
+		await pi.see("what it should do; it sees only this");
+		pi.press(`!tool send_message ${JSON.stringify({ to: "parent", text: "needs approval" })}`);
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		pi.press("\x13"); // ctrl+s
+		await pi.see(/roles\s+protocol · reporting · worker/);
+		pi.press(KEY.escape);
+
+		const asked = await pi.waitFor((_screen, rows) => rows.some((row) => split(row)[0].includes("? kid → work")), "what waits, under the tree", 30_000);
+		expect(asked.map((row) => split(row)[0]).join("\n")).toMatch(/ o {2}reject, say why/);
+		pi.press("o");
+		await pi.see("Reject, and tell work:");
+		// Every key is text while the line is typed: `a` does not approve.
+		pi.press("say mangosteen");
+		await pi.see("say mangosteen▏");
+		pi.press(KEY.enter);
+		await pi.waitFor((_screen, rows) => !rows.some((row) => split(row)[0].includes("? kid → work")), "nothing waiting under the tree", 30_000);
+		// The session open here reads the line as its own prompt; the message never reaches it.
+		const told = await pi.see(/echo\[user\].*say mangosteen/, 30_000);
+		expect(told.join("\n")).not.toContain("delivered to the agent");
+	}, 120_000);
+
 	it("opens on the tree when there already is one, and in a narrow terminal gives an open chat the whole width", async () => {
 		const first = await withTree({ cols: 160, rows: 40 });
 		await first.see(/alt\+l\s+tree/);
