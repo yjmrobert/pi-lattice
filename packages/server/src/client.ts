@@ -5,6 +5,9 @@
  */
 import type { Issue, IssueChange, IssueComment, IssueEvent, NextFilter, Note, SaidLine, Scheme, WorkSession, WorkState } from "@pi-lattice/protocol";
 import { DEFAULT_SCHEME } from "@pi-lattice/protocol";
+import { Agent, request as httpsRequest } from "node:https";
+import { connect } from "node:tls";
+import { matchesPin } from "./cert.ts";
 import type { Changes, Signal } from "./http.ts";
 
 /** What a host that can be connected to says of itself, along with what it runs. */
@@ -20,6 +23,8 @@ export interface ServerAccount {
 	url: string;
 	name: string;
 	token: string;
+	/** The fingerprint of the server's own certificate, when it encrypts by itself. Every request is made to that certificate and no other. */
+	pin?: string;
 }
 
 export interface ClientOptions {
@@ -29,9 +34,14 @@ export interface ClientOptions {
 	retryMs?: number;
 }
 
-/** A server's address as it is passed around: the URL, with the team's code after `#`. */
-export function parseAddress(text: string): { url: string; code: string } {
-	const [url = "", code = ""] = text.trim().split("#");
+/**
+ * A server's address as it is passed around: the URL, with the team's code after `#`. A
+ * server that encrypts by itself adds the fingerprint of its certificate after the code and a
+ * dot, which is how whoever is given the address knows the server they reach is that one.
+ */
+export function parseAddress(text: string): { url: string; code: string; pin?: string } {
+	const [url = "", secret = ""] = text.trim().split("#");
+	const [code = "", pin] = secret.split(".");
 	let parsed: URL | undefined;
 	try {
 		parsed = new URL(url);
@@ -39,38 +49,113 @@ export function parseAddress(text: string): { url: string; code: string } {
 		parsed = undefined;
 	}
 	if (!parsed || !/^https?:$/.test(parsed.protocol) || code === "") throw new Error("A server's address looks like https://lattice.example.com/#code. Whoever runs the server has it.");
-	return { url: parsed.href.replace(/\/+$/, ""), code };
+	if (pin !== undefined && (pin === "" || parsed.protocol !== "https:")) throw new Error("That address is not whole: copy all of it, from https:// to the end of the line.");
+	return { url: parsed.href.replace(/\/+$/, ""), code, ...(pin !== undefined ? { pin } : {}) };
 }
 
-async function call<T>(url: string, method: string, path: string, token: string | undefined, body?: unknown, signal?: AbortSignal): Promise<T> {
-	let response: Response;
-	try {
-		response = await fetch(`${url}${path}`, {
-			method,
-			headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { "content-type": "application/json" } : {}) },
-			...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-			...(signal ? { signal } : {}),
+/** A server's address as it is passed around. */
+export function formatAddress(url: string, code: string, pin?: string): string {
+	return `${url.replace(/\/+$/, "")}/#${code}${pin !== undefined ? `.${pin}` : ""}`;
+}
+
+/** The certificate of each pinned server, once it has been seen to be the one its pin was made from. */
+const anchors = new Map<string, Promise<string>>();
+const pinned = new Agent({ keepAlive: true });
+
+class PinError extends Error {}
+
+/**
+ * Reach a pinned server far enough to see its certificate, and take it only if it is the one
+ * the pin was made from. Nothing is sent before that: not the code, not a token.
+ */
+function anchor(url: URL, pin: string): Promise<string> {
+	const key = `${url.origin}#${pin}`;
+	const known = anchors.get(key);
+	if (known) return known;
+	const found = new Promise<string>((resolve, reject) => {
+		const socket = connect({ host: url.hostname.replace(/^\[|\]$/g, ""), port: Number(url.port) || 443, rejectUnauthorized: false });
+		socket.setTimeout(15_000, () => socket.destroy(new Error("timed out")));
+		socket.once("error", reject);
+		socket.once("secureConnect", () => {
+			const cert = socket.getPeerX509Certificate();
+			socket.destroy();
+			if (cert && matchesPin(cert, pin)) resolve(cert.toString());
+			else reject(new PinError());
 		});
+	});
+	anchors.set(key, found);
+	found.catch(() => anchors.delete(key));
+	return found;
+}
+
+interface Answer {
+	status: number;
+	text: string;
+}
+
+/** Ask a pinned server: over TLS, to that certificate and no other. */
+async function askPinned(url: URL, pin: string, method: string, headers: Record<string, string>, body: string | undefined, signal: AbortSignal | undefined): Promise<Answer> {
+	const ca = await anchor(url, pin);
+	return new Promise<Answer>((resolve, reject) => {
+		const request = httpsRequest(
+			// The certificate names nobody. That it is the pinned one is the whole check, and `ca` makes it.
+			{ host: url.hostname.replace(/^\[|\]$/g, ""), port: Number(url.port) || 443, path: `${url.pathname}${url.search}`, method, headers, ca, checkServerIdentity: () => undefined, agent: pinned, ...(signal ? { signal } : {}) },
+			(response) => {
+				const chunks: Buffer[] = [];
+				response.on("data", (chunk: Buffer) => chunks.push(chunk));
+				response.on("end", () => resolve({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
+				response.on("error", reject);
+			},
+		);
+		request.on("error", (error: NodeJS.ErrnoException) => {
+			// It answered with another certificate than a moment ago: look again, and judge it by the pin.
+			if (/CERT|SELF_SIGNED|UNABLE_TO_VERIFY/.test(error.code ?? "")) anchors.delete(`${url.origin}#${pin}`);
+			reject(error);
+		});
+		request.end(body);
+	});
+}
+
+async function call<T>(target: { url: string; pin?: string }, method: string, path: string, token: string | undefined, body?: unknown, signal?: AbortSignal): Promise<T> {
+	const { url, pin } = target;
+	const headers: Record<string, string> = { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { "content-type": "application/json" } : {}) };
+	const sent = body !== undefined ? JSON.stringify(body) : undefined;
+	let answer: Answer;
+	try {
+		if (pin !== undefined) {
+			const where = new URL(`${url}${path}`);
+			if (where.protocol !== "https:") throw new PinError();
+			answer = await askPinned(where, pin, method, headers, sent, signal).catch((error: NodeJS.ErrnoException) => {
+				// Once more when its certificate changed under us: the pin decides whether that is still the server.
+				if (signal?.aborted || error instanceof PinError || !/CERT|SELF_SIGNED|UNABLE_TO_VERIFY/.test(error.code ?? "")) throw error;
+				return askPinned(where, pin, method, headers, sent, signal);
+			});
+		} else {
+			const response = await fetch(`${url}${path}`, { method, headers, ...(sent !== undefined ? { body: sent } : {}), ...(signal ? { signal } : {}) });
+			answer = { status: response.status, text: await response.text() };
+		}
 	} catch (error) {
 		if (signal?.aborted) throw error;
+		if (error instanceof PinError) {
+			throw new Error(`What answers at ${url} is not the server this address was given for, so nothing was sent to it. If the server was set up again, ask whoever runs it for its address again.`);
+		}
 		throw new Error(`The server at ${url} cannot be reached.`);
 	}
-	const text = await response.text();
 	let value: unknown;
 	try {
-		value = JSON.parse(text);
+		value = JSON.parse(answer.text);
 	} catch {
-		throw new Error(`${url} did not answer like a lattice server (HTTP ${response.status}).`);
+		throw new Error(`${url} did not answer like a lattice server (HTTP ${answer.status}).`);
 	}
-	if (!response.ok) throw new Error((value as { error?: string }).error ?? `The server refused (HTTP ${response.status}).`);
+	if (answer.status < 200 || answer.status >= 300) throw new Error((value as { error?: string }).error ?? `The server refused (HTTP ${answer.status}).`);
 	return value as T;
 }
 
 /** Take a name on a server. */
 export async function joinServer(address: string, name: string): Promise<ServerAccount> {
-	const { url, code } = parseAddress(address);
-	const { token, name: taken } = await call<{ name: string; token: string }>(url, "POST", "/join", undefined, { code, name });
-	return { url, name: taken, token };
+	const { url, code, pin } = parseAddress(address);
+	const { token, name: taken } = await call<{ name: string; token: string }>({ url, ...(pin !== undefined ? { pin } : {}) }, "POST", "/join", undefined, { code, name });
+	return { url, name: taken, token, ...(pin !== undefined ? { pin } : {}) };
 }
 
 /** How many of the last things done to the work a host keeps. */
@@ -115,7 +200,7 @@ export class WorkClient {
 	}
 
 	private request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-		return call<T>(this.account.url, method, path, this.account.token, body, signal);
+		return call<T>(this.account, method, path, this.account.token, body, signal);
 	}
 
 	private take(changes: Changes): void {

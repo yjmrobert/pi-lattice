@@ -1,7 +1,12 @@
 /** The server as a client meets it: a real one on a local port, with nothing kept after the test. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_SCHEME, type Issue, issueLine, type Scheme } from "@pi-lattice/protocol";
-import { joinServer, parseAddress, WorkClient, WorkServer } from "../src/index.ts";
+import { X509Certificate } from "node:crypto";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { connect } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createCertificate, formatAddress, joinServer, loadOrCreateCertificate, parseAddress, pinOf, WorkClient, WorkServer } from "../src/index.ts";
 
 let server: WorkServer;
 let address: string;
@@ -436,5 +441,99 @@ describe("work that agents keep", () => {
 		expect(yan.state().scheme.rules.review).toEqual(["epic", "feature", "story"]);
 		expect(await refused(yan.setScheme({ ...DEFAULT_SCHEME, rules: { ...DEFAULT_SCHEME.rules, review: ["chore"] } }))).toBe('"rules.review" names "chore", which is not a type.');
 		expect((await yan.setScheme({ ...DEFAULT_SCHEME, rules: { onStart: "doing", onReport: "review", review: [] } })).rules.review).toEqual([]);
+	});
+});
+
+describe("a server that encrypts by itself", () => {
+	let secure: WorkServer;
+	let where: string;
+	const started: WorkServer[] = [];
+	const start = async (options: Partial<ConstructorParameters<typeof WorkServer>[0]> = {}): Promise<WorkServer> => {
+		const made = new WorkServer({ file: ":memory:", host: "127.0.0.1", tls: createCertificate(), ...options });
+		started.push(made);
+		return made;
+	};
+	beforeEach(async () => {
+		secure = await start();
+		where = formatAddress(`https://127.0.0.1:${await secure.start()}`, secure.tracker.code, secure.pin);
+	});
+	afterEach(async () => {
+		for (const made of started.splice(0)) await made.stop().catch(() => {});
+	});
+
+	it("makes a certificate that is its own, and a different one each time", () => {
+		const [one, two] = [createCertificate(), createCertificate()];
+		const parsed = new X509Certificate(one.cert);
+		expect(parsed.verify(parsed.publicKey)).toBe(true);
+		expect(parsed.subject).toBe("CN=pi-lattice");
+		expect(pinOf(one.cert)).toMatch(/^[\w-]{43}$/);
+		expect(pinOf(one.cert)).not.toBe(pinOf(two.cert));
+	});
+
+	it("keeps the certificate it made, so its address stays the same", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-lattice-cert-"));
+		try {
+			const first = loadOrCreateCertificate(dir);
+			expect(loadOrCreateCertificate(dir)).toEqual(first);
+			expect(statSync(join(dir, "tls.key")).mode & 0o077).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("carries the certificate's fingerprint in the address, after the code", () => {
+		expect(parseAddress("https://10.0.0.5:7420/#abc.PIN_x-1")).toEqual({ url: "https://10.0.0.5:7420", code: "abc", pin: "PIN_x-1" });
+		expect(parseAddress(where)).toMatchObject({ code: secure.tracker.code, pin: secure.pin });
+		expect(() => parseAddress("http://10.0.0.5:7420/#abc.PIN")).toThrow(/not whole/);
+		expect(() => parseAddress("https://10.0.0.5:7420/#abc.")).toThrow(/not whole/);
+	});
+
+	it("is joined and used over TLS, with nothing to set up", async () => {
+		const account = await joinServer(where, "yan");
+		expect(account).toMatchObject({ name: "yan", pin: secure.pin });
+		const client = new WorkClient(account, { waitSeconds: 1, retryMs: 50 });
+		clients.push(client);
+		await client.refresh();
+		expect((await client.create({ title: "Encrypted" })).title).toBe("Encrypted");
+		expect(client.state().connected).toBe(true);
+	});
+
+	it("sends nothing to a server that is not the one the address was given for", async () => {
+		const impostor = await start();
+		const port = await impostor.start();
+		// The impostor answers where the real one was expected, knowing the code but holding another key.
+		const fake = formatAddress(`https://127.0.0.1:${port}`, impostor.tracker.code, secure.pin);
+		expect(await refused(joinServer(fake, "yan"))).toMatch(/not the server this address was given for, so nothing was sent/);
+		expect(impostor.tracker.people()).toEqual([]);
+	});
+
+	it("turns away a member whose server was replaced by another", async () => {
+		const account = await joinServer(where, "yan");
+		const impostor = await start();
+		const client = new WorkClient({ ...account, url: `https://127.0.0.1:${await impostor.start()}` }, { waitSeconds: 1, retryMs: 50 });
+		clients.push(client);
+		expect(await refused(client.refresh())).toMatch(/not the server this address was given for/);
+	});
+
+	it("still answers plain HTTP from this machine, and not from anywhere else", async () => {
+		const local = `http://127.0.0.1:${new URL(parseAddress(where).url).port}`;
+		expect((await joinServer(`${local}/#${secure.tracker.code}`, "yan")).name).toBe("yan");
+
+		const strict = await start({ tls: { ...createCertificate(), plainFrom: () => false } });
+		const port = await strict.start();
+		expect(await refused(joinServer(`http://127.0.0.1:${port}/#${strict.tracker.code}`, "sam"))).toMatch(/encrypts its connections now/);
+		expect(strict.tracker.people()).toEqual([]);
+		// What it is can still be asked in the clear: nothing secret is said.
+		expect(((await (await fetch(`http://127.0.0.1:${port}/`)).json()) as { service: string }).service).toBe("pi-lattice");
+		expect((await joinServer(formatAddress(`https://127.0.0.1:${port}`, strict.tracker.code, strict.pin), "sam")).name).toBe("sam");
+	});
+
+	it("lets go of a connection that never says anything, when it stops", async () => {
+		const port = Number(new URL(parseAddress(where).url).port);
+		const idle = connect(port, "127.0.0.1");
+		await new Promise((resolve) => idle.once("connect", resolve));
+		const closed = new Promise((resolve) => idle.once("close", resolve));
+		await secure.stop();
+		await closed;
 	});
 });
