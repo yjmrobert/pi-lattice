@@ -530,6 +530,8 @@ export interface Moving {
 	away?: boolean;
 	/** What the selected session waits on a person for, drawn in full under the tree. */
 	asking?: Asking;
+	/** How bright everything is, from 0 to 1: less while something is open over the canopy. */
+	dim?: number;
 }
 
 function compose(world: World, state: CanopyState, width: number, height: number, tick: number, moving: Moving | undefined, lines: (grid: Grid, col?: number, row?: number, width?: number, height?: number) => string[]): string[] {
@@ -558,7 +560,48 @@ function compose(world: World, state: CanopyState, width: number, height: number
 
 /** The screen as terminal lines, exactly `height` of them and `width` cells wide. */
 export const render = (world: World, state: CanopyState, width: number, height: number, tick = 0, moving?: Moving): string[] =>
-	compose(world, state, width, height, tick, moving, (grid, col, row, w, h) => grid.lines(col, row, w, h));
+	compose(world, state, width, height, tick, moving, (grid, col, row, w, h) => grid.lines(col, row, w, h, moving?.dim ?? 1));
+
+/** Where what is selected is drawn on the screen, in cells: where something opened from it starts. */
+export function anchorOf(world: World, state: CanopyState, width: number, height: number): { col: number; row: number } | undefined {
+	if (width < FLOOR.cols || height < FLOOR.rows) return undefined;
+	const plan = planOf(world, state);
+	const view = state.framed ? state : frame(state, plan, width, height, true);
+	const place = view.selected ? plan.places.get(view.selected) : undefined;
+	if (!place) return undefined;
+	const win = windowOf(view, width, height);
+	return { col: Math.max(0, Math.min(win.width - 1, place.col - view.camera.col)), row: HEADER + Math.max(0, Math.min(win.height - 1, place.row - view.camera.row)) };
+}
+
+/**
+ * The frame of a session opened over the canopy: a box, empty inside, whose top edge says whose
+ * session it is and what it is doing, in that person's colour. Amber when it waits on someone.
+ */
+export function sessionFrame(world: World, id: string | undefined, width: number, height: number, leave: readonly [key: string, does: string], tick = 0): string[] {
+	const grid = new Grid(width, height);
+	const item = id ? (world.items.get(id) ?? [...world.items.values()].find((other) => other.node?.id === id)) : undefined;
+	const asking = item !== undefined && (item.asks > 0 || item.agent?.state === "asking");
+	const edge: Style = { fg: asking ? COLOR.attention : item ? colorOf(world, item.owner) : COLOR.dim, level: 0.7 };
+	if (width < 4 || height < 2) return grid.lines();
+	grid.text(0, 0, `╭${"─".repeat(width - 2)}╮`, edge);
+	grid.text(0, height - 1, `╰${"─".repeat(width - 2)}╯`, edge);
+	for (let row = 1; row < height - 1; row++) {
+		grid.text(0, row, "│", edge);
+		grid.text(width - 1, row, "│", edge);
+	}
+	const hint = [...` ${leave[0]}  ${leave[1]} `].length;
+	const room = width - 8 - hint;
+	if (item && room > 12) {
+		const mine = item.owner === world.me;
+		const state = item.failed ? "failed" : item.done ? "done" : asking ? "needs you" : item.agent ? stateWord[item.agent.state] : item.planned ? "not started" : "idle";
+		const at = run(grid, 2, 0, [[" "], [glyphOf(item, tick), glyphStyle(world, item)], [" "], [cut(item.name, Math.max(6, room - 30)), { fg: COLOR.bright, bold: true }], [" "]]);
+		// Whose it is comes before what it is doing: with several people in a tree that is the first thing to know.
+		const rest: Array<[string, Style | undefined]> = [[" ", DIM], [`@${item.owner}`, { fg: colorOf(world, item.owner), bold: true }], [mine ? " (you)" : "", DIM], [" · ", DIM], [state, asking ? { fg: COLOR.attention, bold: true } : item.failed ? { fg: COLOR.failed } : DIM], [" ", DIM]];
+		if (at + rest.reduce((sum, [text]) => sum + [...text].length, 0) < width - hint - 4) run(grid, at, 0, rest);
+	}
+	if (width > hint + 8) run(grid, width - 2 - hint, 0, [[" "], [` ${leave[0]} `, KEYCAP], [` ${leave[1]} `, DIM]]);
+	return grid.lines();
+}
 
 /** The screen as text with no colour: what a test compares. */
 export const renderPlain = (world: World, state: CanopyState, width: number, height: number, tick = 0, moving?: Moving): string[] =>

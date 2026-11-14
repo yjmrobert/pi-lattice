@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Component, HStack, isKeyRelease, matchesKey, type StackEntry, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, HStack, isKeyRelease, matchesKey, type StackEntry, truncateToWidth, type TUI, visibleWidth, VStack } from "@earendil-works/pi-tui";
 import { describeScheme, emitEvent, type IssueChange, issueLine, type Scheme, schemeProblems, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState, type LatticeEvents } from "@pi-lattice/protocol";
 import { type ChildForm, type FormKey, formKey, newChildForm, renderForm, waitChoices } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
@@ -101,21 +101,21 @@ interface Shared {
 	canopyMemory: { state?: unknown };
 	/** Where the keyboard is while the canopy is what Pi opens on. Not set until the first session has started. */
 	at: "tree" | "chat" | undefined;
-	/** Whether the chat is showing beside the tree. */
-	drawerOpen: boolean;
-	/** How many columns of the chat are showing now: it slides to where it belongs. */
-	drawer: number;
+	/** How far the session's chat has opened over the tree, from 0 (closed) to 1: it grows out of what was selected. */
+	grow: number;
+	/** The cell it grows out of and closes back into. */
+	growFrom: { col: number; row: number } | undefined;
 	slider: ReturnType<typeof setInterval> | undefined;
 	/** Whether the canopy is what Pi opens on, read from the settings a moment ago. */
 	homeChosen: { value: boolean; at: number } | undefined;
 }
-const KEY = Symbol.for("pi-lattice.pane.5");
+const KEY = Symbol.for("pi-lattice.pane.6");
 const globals = globalThis as { [KEY]?: Shared };
 const shared: Shared = (globals[KEY] ??= {
 	links: new Map(), home: undefined, asleep: [], current: undefined, currentDir: undefined, previous: undefined, assignment: undefined, cursor: undefined, focused: false, form: undefined, screen: undefined, screenLeaves: false,
 	confirm: undefined, help: false, tail: undefined, waiting: 0, titled: 0, starting: false,
 	ticker: undefined, scanner: undefined, scanning: false, paint: PLAIN, tui: undefined, wrapped: false, strip: undefined, pi: undefined, ctx: undefined,
-	canopy: undefined, canopyMemory: {}, at: undefined, drawerOpen: false, drawer: 0, slider: undefined, homeChosen: undefined,
+	canopy: undefined, canopyMemory: {}, at: undefined, grow: 0, growFrom: undefined, slider: undefined, homeChosen: undefined,
 });
 
 /** The link to the repository this terminal is in, if it has a tree with a running host. */
@@ -302,38 +302,56 @@ function home(): boolean {
 	return !shared.focused && homeAble();
 }
 
-/** How many columns the chat takes once it has slid in. */
-function drawerWidth(): number {
-	const columns = shared.tui?.terminal.columns ?? 0;
-	if (!shared.drawerOpen) return 0;
-	// Too narrow for both: whichever has the keyboard has the screen.
-	if (columns < BESIDE_WIDTH) return shared.at === "chat" ? columns : 0;
-	// The tree keeps its floor, and the column that divides the two.
-	return Math.max(50, Math.min(columns - HOME_FLOOR.cols - 2, Math.round(columns * 0.55)));
+interface Rect {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
 }
 
-/** Move the chat towards where it belongs, a few steps at a time, and stop when it is there. */
+/** Where a session opened over the tree is drawn once it is open. Too narrow for the tree to show around it: the whole screen. */
+function modalRect(): Rect {
+	const columns = shared.tui?.terminal.columns ?? 0;
+	const rows = shared.tui?.terminal.rows ?? 0;
+	if (columns < BESIDE_WIDTH) return { x: 0, y: 0, w: columns, h: rows };
+	const w = Math.min(columns - 8, Math.max(100, Math.round(columns * 0.7)));
+	return { x: Math.floor((columns - w) / 2), y: 2, w, h: rows - 4 };
+}
+
+/** Where it is drawn now: growing out of what was selected, or closing back into it. Nothing while it is closed. */
+function modalNow(): Rect | undefined {
+	if (!homeAble() || shared.grow <= 0) return undefined;
+	const to = modalRect();
+	if (shared.grow >= 1) return to;
+	const from = shared.growFrom ?? { col: to.x + Math.floor(to.w / 2), row: to.y + Math.floor(to.h / 2) };
+	const mix = (a: number, b: number): number => Math.round(a + (b - a) * shared.grow);
+	const w = Math.max(4, mix(14, to.w));
+	const h = Math.max(2, mix(1, to.h));
+	return { x: Math.max(0, Math.min(mix(from.col, to.x), (shared.tui?.terminal.columns ?? w) - w)), y: Math.max(0, Math.min(mix(from.row, to.y), (shared.tui?.terminal.rows ?? h) - h)), w, h };
+}
+
+/** The columns the chat has inside the frame. */
+function modalInner(): number {
+	return Math.max(20, modalRect().w - 4);
+}
+
+/** Open the chat towards where it belongs, or close it, a few steps at a time, and stop when it is there. */
 function slide(): void {
-	// Until the canopy is showing the chat has the whole width, and narrows from there when the tree arrives.
-	if (!homeAble()) shared.drawer = shared.drawerOpen ? (shared.tui?.terminal.columns ?? 0) : 0;
+	const target = shared.at === "chat" ? 1 : 0;
 	const still = (): boolean => !homeAble() || process.env.NO_COLOR !== undefined || settings().settings.values["canopy.motion"] === "off";
-	const step = (): boolean => {
-		const target = drawerWidth();
-		const left = target - shared.drawer;
-		if (left === 0) return false;
-		// Most of the way at once, then the rest: it reads as arriving, and the chat is wrapped only a few times.
-		shared.drawer = Math.abs(left) <= 6 ? target : shared.drawer + Math.round(left * 0.6);
-		return true;
-	};
 	if (still()) {
-		shared.drawer = drawerWidth();
+		shared.grow = target;
 		if (shared.slider) clearInterval(shared.slider);
 		shared.slider = undefined;
 		return;
 	}
-	if (shared.slider || shared.drawer === drawerWidth()) return;
+	if (shared.slider || shared.grow === target) return;
 	shared.slider = setInterval(() => {
-		if (!step() && shared.slider) {
+		const to = shared.at === "chat" ? 1 : 0;
+		const left = to - shared.grow;
+		// Most of the way at once, then the rest: it reads as arriving, and the chat is wrapped only a few times.
+		shared.grow = Math.abs(left) < 0.08 ? to : shared.grow + left * 0.5;
+		if (shared.grow === to && shared.slider) {
 			clearInterval(shared.slider);
 			shared.slider = undefined;
 		}
@@ -342,16 +360,16 @@ function slide(): void {
 	shared.slider.unref?.();
 }
 
-/** Give the keyboard to the tree. The chat stays beside it, so what the session does can still be read. */
+/** Close the session's chat and give the keyboard to the tree. The session carries on with what it was doing. */
 function toTree(): void {
 	shared.at = "tree";
 	redraw();
 }
 
-/** Slide the chat in and give it the keyboard. */
+/** Open the session's chat over the tree, out of what is selected there, and give it the keyboard. */
 function toChat(): void {
+	if (shared.at !== "chat") shared.growFrom = shared.canopy?.view.anchor?.();
 	shared.at = "chat";
-	shared.drawerOpen = true;
 	redraw();
 }
 
@@ -379,20 +397,12 @@ function mountCanopy(): void {
 			toChat();
 			if (nodeId !== shared.current) dispatch(`/lattice open ${nodeId}`);
 		},
-		back: () => {
-			if (!shared.drawerOpen) return;
-			shared.drawerOpen = false;
-			redraw();
-		},
-		keys: () =>
-			shared.at === "chat"
-				? [{ key: "alt+l", does: "tree" }]
-				: [
-						{ key: "alt+l", does: "chat" },
-						...(drawerWidth() > 0 ? [{ key: "esc", does: "close chat" }] : []),
-						{ key: "p", does: "sessions", run: () => toPane() },
-					],
+		// Escape has nothing to close: the tree is what there is.
+		back: () => {},
+		keys: () => (shared.at === "chat" ? [{ key: "alt+l", does: "tree" }] : [{ key: "alt+l", does: "chat" }, { key: "p", does: "sessions", run: () => toPane() }]),
 		away: () => shared.at === "chat",
+		// Behind an open session the tree is still read, and does not compete with it.
+		dim: () => 1 - 0.62 * shared.grow,
 	};
 	emitEvent(pi.events, "lattice:canopy:mount", request);
 	if (!request.view) return; // the canopy has not started in this session yet, or is not installed
@@ -442,7 +452,7 @@ function redraw(): void {
 		// Where the pane cannot sit beside Pi (a narrow terminal, or a Pi it cannot be installed in),
 		// two rows above the editor carry the same information.
 		// Beside the canopy the chat has no pane next to it either, and says the same in its own width.
-		const lines = (roomy() && !homeAble()) || shared.focused ? [] : renderStrip(view(), (homeAble() ? Math.max(HOME_FLOOR.cols, drawerWidth()) : (shared.tui?.terminal.columns ?? 80)) - 2, shared.paint);
+		const lines = (roomy() && !homeAble()) || shared.focused ? [] : renderStrip(view(), (homeAble() ? modalInner() : (shared.tui?.terminal.columns ?? 80)) - 2, shared.paint);
 		const strip = lines.length > 0 ? lines.join("\n") : undefined;
 		if (strip !== shared.strip) {
 			ctx.ui.setWidget("lattice", strip === undefined ? undefined : lines);
@@ -578,35 +588,53 @@ function installPane(tui: Hooked): void {
 				: shared.form ? renderForm(shared.form, width, shared.paint, shared.tui?.terminal.rows) : renderInspector(view(), width, shared.paint, shared.tui?.terminal.rows)).map((line) => truncateToWidth(line, width)),
 		invalidate() {},
 	};
-	// Where the canopy is what Pi opens on, it takes the pane's place and the chat slides in on its right.
-	const tree: Component = {
+	// Where the canopy is what Pi opens on, it is the whole screen, and a session's chat opens over it.
+	const tree: Component = { render: (width) => shared.canopy?.view.render(width) ?? [], invalidate() {} };
+	const nothing: Component = { render: () => [], invalidate() {} };
+	/** The box the chat is in: opaque, so the tree does not show through where Pi draws nothing, and titled with whose session it is. */
+	const frame: Component = {
 		render: (width) => {
-			// The divider and a column of air: Pi writes some of its lines from the first column.
-			const lines = shared.canopy?.view.render(shared.drawer > 0 ? width - 2 : width) ?? [];
-			if (shared.drawer === 0) return lines;
-			// The divider says which side has the keyboard: heavy and lit on the tree's, thin and dim on the chat's.
-			const divider = shared.at === "tree" ? shared.paint.accent("┃") : shared.paint.dim("│");
-			return lines.map((line) => `${line}${divider} `);
+			const rect = modalNow();
+			return rect ? (shared.canopy?.view.frame?.(shared.current, width, rect.h, ["alt+l", "tree"]) ?? Array.from({ length: rect.h }, () => " ".repeat(width))) : [];
 		},
 		invalidate() {},
 	};
 	const wrap = (inner: Component): Component => {
+		// Pi lays its screen out in rows and columns that do not overlap. A gap that is negative puts one
+		// thing over another: the frame over the tree, and Pi's chat over the frame, inside its border.
+		const body = new HStack([{ component: nothing, basis: 2, shrink: 0 }, { component: inner, basis: 0, grow: 1, minSize: 1 }, { component: nothing, basis: 2, shrink: 0 }]);
+		const inside = new VStack([{ component: nothing, basis: 1, shrink: 0 }, { component: body, basis: 1, shrink: 0 }]);
+		const box = new HStack([{ component: frame, basis: 1, shrink: 0 }, { component: inside, basis: 1, shrink: 0, visible: () => (modalNow()?.w ?? 0) >= 44 && (modalNow()?.h ?? 0) >= 10 }]);
+		const over = new VStack([{ component: nothing, basis: 0, shrink: 0 }, { component: box, basis: 1, shrink: 0 }]);
 		const stack = new HStack([
 			// Always there, so opening pi shows the sessions without typing anything.
 			// In a narrow terminal it appears only while it has the keyboard.
 			{ component: pane, basis: numberSetting(settings().settings, "pane.width", 34), shrink: 0, visible: (viewport) => (arrange(), !home() && (viewport.width >= MIN_TERMINAL_WIDTH || shared.focused)) },
 			{ component: inspector, basis: 0, grow: 1, minSize: 20, visible: () => inspecting() },
-			{ component: tree, basis: 0, grow: 1, minSize: 0, visible: (viewport) => home() && shared.drawer < viewport.width },
-			{ component: inner, basis: 0, grow: 1, minSize: 20, visible: () => !inspecting() && (!home() || shared.drawer > 0) },
+			{ component: tree, basis: 0, grow: 1, minSize: 0, visible: () => home() },
+			{ component: over, basis: 1, shrink: 0, visible: () => home() && modalNow() !== undefined },
+			{ component: inner, basis: 0, grow: 1, minSize: 20, visible: () => !inspecting() && !home() },
 		]);
-		const chat = (stack as unknown as { entries: StackEntry[] }).entries.find((entry) => entry.component === inner);
-		/** Beside the tree the chat is as wide as it has slid; anywhere else it takes what is left. Run before each layout. */
+		const entriesOf = (of: HStack | VStack): StackEntry[] => (of as unknown as { entries: StackEntry[] }).entries;
+		const size = (of: HStack | VStack, index: number, basis: number): void => {
+			const entry = entriesOf(of)[index];
+			if (entry) entry.basis = basis;
+		};
+		/** Put everything where the open session is now. Run before each layout. */
 		const arrange = (): void => {
-			if (!chat) return;
+			const rect = modalNow();
 			const columns = shared.tui?.terminal.columns ?? 0;
-			if (shared.drawer > columns) shared.drawer = columns;
-			const beside = home() && shared.drawer < columns;
-			Object.assign(chat, beside ? { basis: shared.drawer, grow: 0, shrink: 0, minSize: 0 } : { basis: 0, grow: 1, shrink: 1, minSize: 20 });
+			const treeEntry = entriesOf(stack).find((entry) => entry.component === tree);
+			if (treeEntry) Object.assign(treeEntry, rect ? { basis: columns, grow: 0, shrink: 0 } : { basis: 0, grow: 1, shrink: 1 });
+			(stack as unknown as { gap: number }).gap = rect && home() ? rect.x - columns : 0;
+			if (!rect) return;
+			size(stack, 3, rect.w);
+			size(over, 0, rect.y);
+			size(over, 1, rect.h);
+			size(box, 0, rect.w);
+			size(box, 1, rect.w);
+			(box as unknown as { gap: number }).gap = -rect.w;
+			size(inside, 1, Math.max(1, rect.h - 2));
 		};
 		return stack;
 	};
@@ -637,9 +665,9 @@ function dispatch(command: string): void {
 	const ctx = shared.ctx;
 	if (!pi || !ctx) return;
 	// A command may ask something with Pi's own dialogs, and says what it did in the chat: show it.
-	if (homeAble()) {
+	if (homeAble() && shared.at !== "chat") {
+		shared.growFrom = shared.canopy?.view.anchor?.();
 		shared.at = "chat";
-		shared.drawerOpen = true;
 	}
 	try {
 		// While the agent is working the input path needs to be told how to take this; a command runs at once either way.
@@ -967,7 +995,6 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		// With a tree already here, Pi opens on it. Without one it opens on the chat, and the tree joins it when there is one.
 		if (shared.at === undefined) {
 			shared.at = shared.links.size > 0 ? "tree" : "chat";
-			shared.drawerOpen = shared.at === "chat";
 		}
 		if (ctx.mode === "tui") {
 			ctx.ui.setWidget("lattice-pane-anchor", (tui, theme) => {

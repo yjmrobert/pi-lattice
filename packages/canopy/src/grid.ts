@@ -36,11 +36,12 @@ const scale = (hex: string, level: number): [number, number, number] => {
 	return [Math.round(((value >> 16) & 255) * k), Math.round(((value >> 8) & 255) * k), Math.round((value & 255) * k)];
 };
 
-const sgr = (style: Style): string => {
+/** `fade` darkens everything by the same share: what is behind something else is still read, and does not compete. */
+const sgr = (style: Style, fade = 1): string => {
 	const parts: string[] = [];
-	if (style.bold) parts.push("1");
-	if (style.fg) parts.push(`38;2;${scale(style.fg, style.level ?? 1).join(";")}`);
-	if (style.bg) parts.push(`48;2;${scale(style.bg, 1).join(";")}`);
+	if (style.bold && fade === 1) parts.push("1");
+	if (style.fg) parts.push(`38;2;${scale(style.fg, (style.level ?? 1) * fade).join(";")}`);
+	if (style.bg) parts.push(`48;2;${scale(style.bg, fade).join(";")}`);
 	return parts.length > 0 ? `\x1b[${parts.join(";")}m` : "";
 };
 
@@ -102,7 +103,7 @@ export class Grid {
 	}
 
 	/** A window on the grid as terminal lines. Colour is written once for each run of cells that share it. */
-	lines(col = 0, row = 0, width = this.width, height = this.height): string[] {
+	lines(col = 0, row = 0, width = this.width, height = this.height, fade = 1): string[] {
 		return Array.from({ length: height }, (_unused, r) => {
 			let line = "";
 			let open = "";
@@ -110,7 +111,7 @@ export class Grid {
 				const cell = this.at(col + c, row + r);
 				const text = cell?.text ?? (cell && cell.dots > 0 ? String.fromCodePoint(0x2800 + cell.dots) : " ");
 				// A blank carries on whatever colour is open, unless it has a background of its own to draw or to end.
-				const code = cell?.text !== undefined ? sgr(cell.style) : cell && cell.dots > 0 ? sgr(cell.dotStyle) : open.includes("48;2") ? "" : open;
+				const code = cell?.text !== undefined ? sgr(cell.style, fade) : cell && cell.dots > 0 ? sgr(cell.dotStyle, fade) : open.includes("48;2") ? "" : open;
 				if (code !== open) {
 					line += open === "" ? code : `\x1b[0m${code}`;
 					open = code;

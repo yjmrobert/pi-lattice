@@ -57,54 +57,51 @@ const withTree = async (options: { cols?: number; rows?: number; env?: Record<st
 	return pi;
 };
 /** The tree's part of a row and the chat's, split at the divider between them. */
-const split = (row: string): [string, string] => {
-	// Thin while the chat has the keyboard, heavy while the tree does.
-	const at = row.search(/[│┃]/);
-	return at < 0 ? [row, ""] : [row.slice(0, at), row.slice(at + 1)];
-};
+/** A session's chat is open over the tree: its box, with the key that closes it on its top edge. */
+const OPEN = /╭─.*alt\+l\s+tree/;
+/** The tree with nothing over it, and the keyboard. */
+const alone = (pi: PiTui): Promise<string[]> => pi.waitFor((screen) => /p\s+sessions/.test(screen) && !screen.includes("╭"), "the tree alone");
 const ALT_L_RELEASED = "\x1b[108;3:3u";
 
 describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
-	it("draws the tree beside the chat once there is one, and moves the keyboard between them with alt+l", async () => {
+	it("opens the session's chat over the tree once there is one, and closes it with alt+l", async () => {
 		const pi = await withTree({ cols: 160, rows: 40 });
-		// The chat was the whole screen; the tree takes the left of it and the chat keeps the keyboard.
-		const beside = await pi.see(/alt\+l\s+tree/);
-		expect(split(beside[0] as string)[0]).toMatch(/^ ◆ work\s+1 @tester/);
-		expect(beside.some((row) => split(row)[0].includes("◉ work"))).toBe(true);
-		expect(beside.some((row) => split(row)[1].includes("alt+l moves to the tree"))).toBe(true);
-		expect(split(beside.at(-1) as string)[0]).not.toContain("move");
-		// The line between them says which side has the keyboard: thin for the chat's.
-		expect(beside.join("")).not.toContain("┃");
+		// The chat was the whole screen; now it is a box over the tree, titled with whose session it is and what it is doing.
+		const over = await pi.see(OPEN);
+		expect(over.find((row) => row.includes("╭"))).toMatch(/work\s+@tester \(you\) · \S+.*alt\+l\s+tree/);
+		expect(over[0]).toMatch(/^ ◆ work\s+1 @tester/);
+		expect(over.some((row) => /│.*alt\+l moves to the tree/.test(row))).toBe(true);
 
 		pi.press(KEY.altL);
 		// A terminal that reports releases says the key was let go; that is not a second press.
 		pi.press(ALT_L_RELEASED);
-		const tree = await pi.see("close chat");
-		expect(split(tree.at(-1) as string)[0]).toContain("move");
-		expect(tree.every((row) => row.includes("┃"))).toBe(true);
+		const tree = await alone(pi);
+		expect(tree.at(-1)).toMatch(/alt\+l\s+chat.*move/);
+		expect(tree.some((row) => row.includes("◉ work"))).toBe(true);
+		expect(tree.join("\n")).not.toContain("echo[user]");
 		// The keys are the tree's now: nothing is typed into Pi's editor.
 		pi.press("zzz");
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		expect((await pi.screen()).join("\n")).not.toContain("zzz");
-
+		// Escape has nothing to close.
 		pi.press(KEY.escape);
-		// The chat slides away and the tree has the whole width.
-		const alone = await pi.waitFor((screen) => screen.includes("sessions") && !screen.includes("echo[user]"), "the tree alone");
-		expect(alone.at(-1)).toMatch(/alt\+l\s+chat/);
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		expect((await pi.screen()).join("\n")).not.toContain("╭");
 
 		pi.press(KEY.enter);
-		// Enter on the session open here brings its chat back, with the keyboard.
+		// Enter on the session open here opens its chat again, with the keyboard.
 		await pi.see("echo[user] roles=[] hello");
 		await pi.submit("again");
 		const answered = await pi.see(/echo\[user\] roles=\[.*\] again/);
-		expect(answered.some((row) => split(row)[0].includes("◉ work"))).toBe(true);
+		expect(answered.some((row) => row.includes("╭"))).toBe(true);
+		expect(answered[0]).toMatch(/^ ◆ work/);
 	}, 90_000);
 
-	it("opens a background session's chat beside the tree, and lists the sessions with p", async () => {
+	it("opens a background session over the tree, and lists the sessions with p", async () => {
 		const pi = await withTree({ cols: 160, rows: 40 });
-		await pi.see(/alt\+l\s+tree/);
+		await pi.see(OPEN);
 		pi.press(KEY.altL);
-		await pi.see("close chat");
+		await alone(pi);
 		pi.press("p");
 		// The pane and what its cursor is on, as before: this is where a session is made, stopped or archived.
 		await pi.see(/owner\s+you/);
@@ -118,22 +115,22 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		await pi.see(/roles\s+protocol · reporting · worker/);
 		pi.press(KEY.escape);
 
-		const tree = await pi.see("close chat");
-		expect(tree.some((row) => split(row)[0].includes("payments"))).toBe(true);
+		const tree = await alone(pi);
+		expect(tree.some((row) => row.includes("payments"))).toBe(true);
 		pi.press(KEY.up);
 		await pi.see(/work ▸ payments/);
 		pi.press(KEY.enter);
-		// The terminal moves to that session, in the chat beside the tree.
-		const opened = await pi.see("heliotrope");
-		expect(opened.some((row) => split(row)[1].includes("heliotrope"))).toBe(true);
-		expect(split(opened[0] as string)[0]).toMatch(/^ ◆ work/);
+		// The terminal moves to that session, in a box over the tree that names it.
+		const opened = await pi.see(/│.*heliotrope/);
+		expect(opened.find((row) => row.includes("╭"))).toMatch(/payments\s+@tester/);
+		expect(opened[0]).toMatch(/^ ◆ work/);
 	}, 120_000);
 
 	it("shows a message waiting for approval under the tree, and approves it there with a", async () => {
 		const pi = await withTree({ cols: 160, rows: 40, env: { LATTICE_APPROVAL: "always" } });
-		await pi.see(/alt\+l\s+tree/);
+		await pi.see(OPEN);
 		pi.press(KEY.altL);
-		await pi.see("close chat");
+		await alone(pi);
 		pi.press("p");
 		await pi.see(/owner\s+you/);
 		pi.press("n");
@@ -147,22 +144,23 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		pi.press(KEY.escape);
 
 		// The session open here is the one selected, and the message is for it: it is drawn in full, with its keys.
-		const asked = await pi.waitFor((_screen, rows) => rows.some((row) => split(row)[0].includes("? kid → work")), "what waits, under the tree", 30_000);
-		const tree = asked.map((row) => split(row)[0]);
+		const asked = await pi.waitFor((_screen, rows) => rows.some((row) => row.includes("? kid → work")), "what waits, under the tree", 30_000);
+		const tree = asked;
 		expect(tree.join("\n")).toContain("needs approval");
 		expect(tree.join("\n")).toMatch(/ a {2}approve {4}x {2}reject/);
 
 		pi.press("a");
 		// Approved: nothing waits, and the message reaches the session.
-		await pi.waitFor((_screen, rows) => !rows.some((row) => split(row)[0].includes("? kid → work")), "nothing waiting under the tree", 30_000);
+		await pi.waitFor((_screen, rows) => !rows.some((row) => row.includes("? kid → work")), "nothing waiting under the tree", 30_000);
+		pi.press(KEY.enter);
 		await pi.see("delivered to the agent", 30_000);
 	}, 120_000);
 
 	it("rejects a waiting message with a typed line instead, which the session reads", async () => {
 		const pi = await withTree({ cols: 160, rows: 40, env: { LATTICE_APPROVAL: "always" } });
-		await pi.see(/alt\+l\s+tree/);
+		await pi.see(OPEN);
 		pi.press(KEY.altL);
-		await pi.see("close chat");
+		await alone(pi);
 		pi.press("p");
 		await pi.see(/owner\s+you/);
 		pi.press("n");
@@ -175,16 +173,17 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		await pi.see(/roles\s+protocol · reporting · worker/);
 		pi.press(KEY.escape);
 
-		const asked = await pi.waitFor((_screen, rows) => rows.some((row) => split(row)[0].includes("? kid → work")), "what waits, under the tree", 30_000);
-		expect(asked.map((row) => split(row)[0]).join("\n")).toMatch(/ o {2}reject, say why/);
+		const asked = await pi.waitFor((_screen, rows) => rows.some((row) => row.includes("? kid → work")), "what waits, under the tree", 30_000);
+		expect(asked.join("\n")).toMatch(/ o {2}reject, say why/);
 		pi.press("o");
 		await pi.see("Reject, and tell work ›");
 		// Every key is text while the line is typed: `a` does not approve.
 		pi.press("say mangosteen");
 		await pi.see("say mangosteen▏");
 		pi.press(KEY.enter);
-		await pi.waitFor((_screen, rows) => !rows.some((row) => split(row)[0].includes("? kid → work")), "nothing waiting under the tree", 30_000);
-		// The session open here reads the line as its own prompt; the message never reaches it.
+		await pi.waitFor((_screen, rows) => !rows.some((row) => row.includes("? kid → work")), "nothing waiting under the tree", 30_000);
+		// The session open here reads the line as its own prompt; the message never reaches it. Its chat stays closed until it is opened.
+		pi.press(KEY.enter);
 		const told = await pi.see(/echo\[user\].*say mangosteen/, 30_000);
 		expect(told.join("\n")).not.toContain("delivered to the agent");
 	}, 120_000);

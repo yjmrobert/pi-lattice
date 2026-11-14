@@ -72,7 +72,7 @@ export interface LatticeEvents {
 		tui: unknown;
 		/** Kept by the asker from one session to the next, so what was selected survives opening a session. */
 		memory: { state?: unknown };
-		/** Open a session beside the tree. */
+		/** Open a session over the tree. */
 		open(nodeId: string): void;
 		/** Escape, when the canopy has nothing of its own for it to do. */
 		back(): void;
@@ -80,7 +80,17 @@ export interface LatticeEvents {
 		keys(): Array<{ key: string; does: string; run?: () => void }>;
 		/** Whether the keyboard is somewhere else, so the canopy lists only the keys that lead to it. */
 		away(): boolean;
-		view?: { render(width: number): string[]; key(data: string): void; dispose(): void };
+		/** How bright the canopy is drawn, from 0 to 1: less while a session is open over it. */
+		dim?(): number;
+		view?: {
+			render(width: number): string[];
+			key(data: string): void;
+			dispose(): void;
+			/** Where what is selected was last drawn, in cells from the canopy's top left. */
+			anchor?(): { col: number; row: number } | undefined;
+			/** The frame a session opened over the canopy is drawn in: a box, empty inside, that says whose session it is and what it is doing. */
+			frame?(nodeId: string | undefined, width: number, height: number, leave: readonly [key: string, does: string]): string[];
+		};
 	};
 	/**
 	 * Ask what a session is waiting on a person for: each thing in full, with the keys that answer it.

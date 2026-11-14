@@ -11,7 +11,7 @@ import { type Animation, advance, happenings, type Motion } from "./animate.ts";
 import type { Shape } from "./layout.ts";
 import { buildWorld, type World } from "./model.ts";
 import { BEAT } from "./paint.ts";
-import { type Asking, type CanopyKey, type CanopyState, initial, interpret, render } from "./screen.ts";
+import { anchorOf, type Asking, type CanopyKey, type CanopyState, initial, interpret, render, sessionFrame } from "./screen.ts";
 
 /**
  * How often the canopy is drawn while something moves. A frame costs about a millisecond to make,
@@ -63,6 +63,8 @@ export default function (pi: ExtensionAPI) {
 		keys?(): Array<{ key: string; does: string; run?: () => void }>;
 		/** Whether the keyboard is somewhere else. */
 		away?(): boolean;
+		/** How bright it is drawn: less while something is open over it. */
+		dim?(): number;
 		memory?: { state?: unknown };
 	}
 
@@ -76,7 +78,7 @@ export default function (pi: ExtensionAPI) {
 		return first ? { ...first, more: (request.items?.length ?? 1) - 1 } : undefined;
 	};
 
-	function screen(tui: TUI, on: string | undefined, place: Place): { render(width: number): string[]; key(data: string): void; dispose(): void } {
+	function screen(tui: TUI, on: string | undefined, place: Place): NonNullable<LatticeEvents["lattice:canopy:mount"]["view"]> {
 		let { world, current } = look();
 		const chosen = settings();
 		const motion: Motion = chosen["canopy.motion"] === "off" || process.env.NO_COLOR ? "off" : chosen["canopy.motion"] === "calm" ? "calm" : "full";
@@ -121,7 +123,8 @@ export default function (pi: ExtensionAPI) {
 				}
 				asking = askingOf(world, state.selected);
 				const leave = place.keys?.().map((entry) => [entry.key, entry.does] as const);
-				const lines = render(world, state, width, place.height(), motion === "off" ? 0 : beat(), { animations: moving, now, ...(leave ? { leave } : {}), ...(place.away?.() ? { away: true } : {}), ...(asking ? { asking } : {}) });
+				const dim = Math.max(0, Math.min(1, place.dim?.() ?? 1));
+				const lines = render(world, state, width, place.height(), motion === "off" ? 0 : beat(), { animations: moving, now, ...(leave ? { leave } : {}), ...(place.away?.() ? { away: true } : {}), ...(asking ? { asking } : {}), ...(dim < 1 ? { dim } : {}) });
 				if (said && lines.length > 0) {
 					const text = said.text.slice(0, Math.max(0, width - 2));
 					lines[lines.length - 1] = ` \x1b[38;2;243;246;251m${text}\x1b[0m${" ".repeat(Math.max(0, width - 1 - text.length))}`;
@@ -168,6 +171,8 @@ export default function (pi: ExtensionAPI) {
 				tui.requestRender();
 			},
 			dispose,
+			anchor: () => anchorOf(world, state, width, place.height()),
+			frame: (nodeId, columns, rows, leave) => sessionFrame(world, nodeId, columns, rows, leave, motion === "off" ? 0 : beat()),
 		};
 	}
 
@@ -224,8 +229,8 @@ export default function (pi: ExtensionAPI) {
 	// Where the canopy is what Pi opens on, the pane gives it a place in its layout and the keys.
 	onEvent(pi.events, "lattice:canopy:mount", (request) => {
 		if (!context || context.mode !== "tui" || request.view) return;
-		const view = screen(request.tui as TUI, undefined, { height: () => (request.tui as TUI).terminal.rows, back: request.back, open: request.open, keys: request.keys, away: request.away, memory: request.memory });
-		request.view = { render: (width) => view.render(width), key: (data) => view.key(data), dispose: () => view.dispose() };
+		const view = screen(request.tui as TUI, undefined, { height: () => (request.tui as TUI).terminal.rows, back: request.back, open: request.open, keys: request.keys, away: request.away, memory: request.memory, ...(request.dim ? { dim: request.dim } : {}) });
+		request.view = view;
 	});
 
 	onEvent(pi.events, "lattice:canopy:open", (request) => {
