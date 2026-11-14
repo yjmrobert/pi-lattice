@@ -11,7 +11,8 @@ import { type Animation, advance, happenings, type Motion } from "./animate.ts";
 import type { Shape } from "./layout.ts";
 import { buildWorld, type World } from "./model.ts";
 import { BEAT } from "./paint.ts";
-import { anchorOf, type Asking, type CanopyKey, type CanopyState, initial, interpret, render, sessionFrame } from "./screen.ts";
+import type { Layout } from "./layout.ts";
+import { anchorOf, type Asking, type CanopyKey, type CanopyState, initial, interpret, placed, planOf, render, sessionFrame } from "./screen.ts";
 
 /**
  * How often the canopy is drawn while something moves. A frame costs about a millisecond to make,
@@ -23,6 +24,9 @@ const FRAME_MS = Math.round(1000 / FPS);
 /** How often the world is asked for again while nothing moves. */
 const LOOK_EVERY = 10;
 const SAY_MS = 4000;
+/** How long a fold or an unfold takes, and how often it is drawn while it does: as often as Pi draws. */
+const MORPH_MS = 420;
+const MORPH_FRAME_MS = 16;
 const NAMED = ["up", "down", "left", "right", "shift+up", "shift+down", "shift+left", "shift+right", "home", "tab", "enter", "escape", "backspace"] as const;
 const DEFAULT_LEVELS = (SETTINGS.find((setting) => setting.key === "canopy.levels")?.default as string[] | undefined) ?? ["epic", "feature", "story", "task"];
 
@@ -95,6 +99,9 @@ export default function (pi: ExtensionAPI) {
 		/** What was drawn last. Once this session has ended there is nobody to ask, and it is drawn again as it was. */
 		let drawn: string[] = [];
 		let asking: Asking | undefined;
+		/** A fold or unfold under way: the tree as it was drawn when the key was pressed. */
+		let morph: { from: Layout; camera: { col: number; row: number }; start: number } | undefined;
+		let again: ReturnType<typeof setTimeout> | undefined;
 		const timer = setInterval(() => {
 			if (!context) return;
 			frames++;
@@ -103,7 +110,10 @@ export default function (pi: ExtensionAPI) {
 			if (busy || frames % LOOK_EVERY === 0) tui.requestRender();
 		}, FRAME_MS);
 		timer.unref?.();
-		const dispose = (): void => clearInterval(timer);
+		const dispose = (): void => {
+			clearInterval(timer);
+			if (again) clearTimeout(again);
+		};
 		return {
 			render(columns) {
 				// A session being replaced leaves this view on the screen for a moment, with a `pi` that may no longer be used.
@@ -122,9 +132,17 @@ export default function (pi: ExtensionAPI) {
 					if (selected !== state.selected) state = { ...state, selected, framed: false };
 				}
 				asking = askingOf(world, state.selected);
+				if (morph && now - morph.start >= MORPH_MS) morph = undefined;
+				if (morph && !again) {
+					again = setTimeout(() => {
+						again = undefined;
+						tui.requestRender();
+					}, MORPH_FRAME_MS);
+					again.unref?.();
+				}
 				const leave = place.keys?.().map((entry) => [entry.key, entry.does] as const);
 				const dim = Math.max(0, Math.min(1, place.dim?.() ?? 1));
-				const lines = render(world, state, width, place.height(), motion === "off" ? 0 : beat(), { animations: moving, now, ...(leave ? { leave } : {}), ...(place.away?.() ? { away: true } : {}), ...(asking ? { asking } : {}), ...(dim < 1 ? { dim } : {}) });
+				const lines = render(world, state, width, place.height(), motion === "off" ? 0 : beat(), { animations: moving, now, ...(leave ? { leave } : {}), ...(place.away?.() ? { away: true } : {}), ...(asking ? { asking } : {}), ...(dim < 1 ? { dim } : {}), ...(morph ? { morph: { from: morph.from, camera: morph.camera, t: (now - morph.start) / MORPH_MS } } : {}) });
 				if (said && lines.length > 0) {
 					const text = said.text.slice(0, Math.max(0, width - 2));
 					lines[lines.length - 1] = ` \x1b[38;2;243;246;251m${text}\x1b[0m${" ".repeat(Math.max(0, width - 1 - text.length))}`;
@@ -142,8 +160,12 @@ export default function (pi: ExtensionAPI) {
 					tui.requestRender();
 					return;
 				}
+				// What is on the screen now is where a fold starts from.
+				state = placed(world, state, width, place.height());
+				const was = state;
 				const next = interpret(world, state, key, width, place.height(), asking);
 				state = next.state;
+				if (motion !== "off" && state.folded !== was.folded) morph = { from: planOf(world, was), camera: was.camera, start: Date.now() };
 				if (place.memory) place.memory.state = state;
 				for (const action of next.actions) {
 					if (action.do === "close") return place.back();

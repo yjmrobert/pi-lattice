@@ -7,6 +7,7 @@ import type { Animation } from "./animate.ts";
 import { Grid, type Style } from "./grid.ts";
 import { cut, type Layout, layout, type Place, type Shape } from "./layout.ts";
 import { type Item, pathTo, ROOT_ID, walk, type World } from "./model.ts";
+import { blend, ease } from "./morph.ts";
 import { canStart, inOrder, type Order } from "./order.ts";
 import { BEAT, paint, spin } from "./paint.ts";
 import { COLOR, colorOf, letterOf } from "./palette.ts";
@@ -532,7 +533,12 @@ export interface Moving {
 	asking?: Asking;
 	/** How bright everything is, from 0 to 1: less while something is open over the canopy. */
 	dim?: number;
+	/** An item was just folded or unfolded: the tree as it was drawn, where its window was, and how far it has moved to what it is now. */
+	morph?: { from: Layout; camera: { col: number; row: number }; t: number };
 }
+
+/** The state with its window placed on the tree, as it is drawn. */
+export const placed = (world: World, state: CanopyState, width: number, height: number): CanopyState => (state.framed || width < FLOOR.cols || height < FLOOR.rows ? state : frame(state, planOf(world, state), width, height, true));
 
 function compose(world: World, state: CanopyState, width: number, height: number, tick: number, moving: Moving | undefined, lines: (grid: Grid, col?: number, row?: number, width?: number, height?: number) => string[]): string[] {
 	if (width < FLOOR.cols || height < FLOOR.rows) {
@@ -545,15 +551,19 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const view = state.framed ? state : frame(state, plan, width, height, true);
 	const win = windowOf(view, width, height);
 	const side = sideWidth(view, width);
-	const tree = paint(world, plan, { frame: tick, letters: view.letters, folded: view.folded, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(moving?.away ? { away: true } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
+	// Between two shapes of the tree, the window moves with it: what stays is drawn where it was, sliding to where it will be.
+	const morph = moving?.morph;
+	const drawn = morph ? blend(morph.from, plan, morph.t) : plan;
+	const camera = morph ? { col: Math.round(morph.camera.col + (view.camera.col - morph.camera.col) * ease(morph.t)), row: Math.round(morph.camera.row + (view.camera.row - morph.camera.row) * ease(morph.t)) } : view.camera;
+	const tree = paint(world, drawn, { frame: tick, letters: view.letters, folded: view.folded, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(moving?.away ? { away: true } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
 	const blink = tick === 0 || tick % BEAT < BEAT / 2;
-	for (const edge of edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
+	for (const edge of morph ? [] : edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
 	// What is asked takes the foot of the tree's window. The rows it takes are the ones the selection is not in.
 	const band = moving?.asking && win.height > 16 ? lines(askingBand(moving.asking, win.width, moving.away === true, view.typing?.what === "answer" ? view.typing : undefined)) : [];
 	const left = win.height - band.length;
 	const selected = view.selected ? plan.places.get(view.selected) : undefined;
 	const hidden = selected !== undefined && selected.row - view.camera.row + 2 >= left;
-	const canvas = [...lines(tree, view.camera.col, view.camera.row + (hidden ? band.length : 0), win.width, left), ...band];
+	const canvas = [...lines(tree, camera.col, camera.row + (hidden ? band.length : 0), win.width, left), ...band];
 	const panel = side > 0 ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick)) : [];
 	return [...lines(header(world, view, width, tick)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away, moving?.asking, band.length > 0))];
 }

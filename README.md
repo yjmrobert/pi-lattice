@@ -12,9 +12,10 @@ pi install npm:pi-lattice
 
 From a checkout of this repository, `pi install /path/to/pi-lattice` does the same from source.
 
-Then open `pi` in a project as you always do. Where the project has sessions, Pi opens on the canopy: all the work as a tree, with the session you open sliding in beside it.
+Then open `pi` in a project as you always do. Where the project has sessions, Pi opens on the canopy: all the work as a tree, with the session you open in a box over it.
 
-- `enter` on a session opens its chat on the right, with all of Pi, and the tree stays on the left. `alt+l` moves the keyboard between the two; `esc` in the tree slides the chat away. The session carries on either way.
+- `enter` on a session opens its chat over the tree, with all of Pi. The top of the box says whose session it is and what it is doing. `alt+l` closes it back into the tree. The session carries on either way.
+- `f` folds what is under an item into it, and the tree draws in; `f` again unfolds it.
 - Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. `tab` goes to the next thing that does, and what it asks is drawn under the tree with the keys that answer it (`y`/`n`, `a`/`x`). `o` is always among them: type something else instead, and the session reads that rather than an answer.
 - `p` lists the sessions in a pane instead, where they are made, stopped, archived and answered:
 

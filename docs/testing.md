@@ -137,17 +137,18 @@ With `pane.home` at its default, in a terminal at least 120 columns wide, in a p
 
 2. Move to a session and press `enter`.
 
-- [ ] Its chat slides in from the right and the editor accepts typing. The tree stays on the left, and its last line says only `alt+l tree`.
-- [ ] The divider between the two is dim.
+- [ ] Its chat grows out of the node into a box over the tree, and the editor accepts typing. The tree is still drawn behind it, dimmer.
+- [ ] The top edge of the box names the session, its owner in their colour, and what it is doing, and ends with `alt+l tree`.
 
 3. Send a message, then press `alt+l` while the agent works.
 
-- [ ] The divider lights up and the arrows move in the tree. The chat keeps showing what the agent does.
-- [ ] Pressing and letting go of `alt+l` once moves the keyboard once. This is the check for terminals that report key releases (kitty, ghostty, wezterm).
+- [ ] The box closes back into the node and the arrows move in the tree; the session's ring keeps turning.
+- [ ] Pressing and letting go of `alt+l` once closes it once. This is the check for terminals that report key releases (kitty, ghostty, wezterm).
 
-4. Press `esc`.
+4. Move to an item with something under it and press `f`, then `f` again.
 
-- [ ] The chat slides away; the session's ring keeps turning in the tree.
+- [ ] What is under it folds into it and the rest of the tree draws in; the item says how much it holds (`+3`). The second `f` grows it back.
+- [ ] The branches move smoothly, without a jump at the start or the end.
 
 5. Narrow the terminal below 120 columns and press `alt+l` a few times.
 

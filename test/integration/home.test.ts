@@ -117,6 +117,11 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 
 		const tree = await alone(pi);
 		expect(tree.some((row) => row.includes("payments"))).toBe(true);
+		// Folding the session hides what is under it and says how much that is; unfolding brings it back.
+		pi.press("f");
+		await pi.waitFor((screen) => /◉ work \+1/.test(screen) && screen.includes("UNDER IT (folded)"), "the session folded");
+		pi.press("f");
+		await pi.waitFor((screen) => !/◉ work \+1/.test(screen) && !screen.includes("UNDER IT (folded)"), "the session unfolded");
 		pi.press(KEY.up);
 		await pi.see(/work ▸ payments/);
 		pi.press(KEY.enter);

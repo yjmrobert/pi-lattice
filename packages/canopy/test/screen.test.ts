@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildWorld, type CanopyKey, type CanopyState, initial, interpret, planOf, render, renderPlain } from "../src/index.ts";
+import { blend, buildWorld, type CanopyKey, type CanopyState, initial, interpret, planOf, render, renderPlain } from "../src/index.ts";
 import { HARBOR, LEVELS, world } from "./fixture.ts";
 
 const W = 150;
@@ -180,6 +180,38 @@ describe("acting", () => {
 		expect(screen(w, folded)).toContain("◉ checkout-v2 +22");
 		expect(screen(w, folded)).toContain("UNDER IT (folded)");
 		expect(planOf(w, press(w, folded, "enter")).places.has("payments")).toBe(true);
+	});
+
+	it("moves from the tree as it was to the tree as it is while an item folds, and back while it unfolds", () => {
+		const w = harbor();
+		const open = initial(w, "checkout-v2");
+		const shut = press(w, open, "f");
+		const from = planOf(w, open);
+		const to = planOf(w, shut);
+		// At the start it is the tree as it was, at the end the tree as it is.
+		const at = (plan: ReturnType<typeof planOf>, id: string): string => `${plan.places.get(id)?.col},${plan.places.get(id)?.row}`;
+		for (const id of ["checkout-v2", "pricing-migration"]) {
+			expect(at(blend(from, to, 0), id)).toBe(at(from, id));
+			expect(at(blend(from, to, 1), id)).toBe(at(to, id));
+		}
+		expect([...blend(from, to, 1).places.keys()].sort()).toEqual([...to.places.keys()].sort());
+		// Half way: what stays is between where it was and where it will be; what is folded away has lost its name but not yet its branch.
+		const half = blend(from, to, 0.5);
+		const col = (plan: ReturnType<typeof planOf>): number => plan.places.get("pricing-migration")?.col ?? 0;
+		expect(col(half)).toBeGreaterThanOrEqual(Math.min(col(from), col(to)));
+		expect(col(half)).toBeLessThanOrEqual(Math.max(col(from), col(to)));
+		expect(half.places.has("payments")).toBe(false);
+		expect(blend(from, to, 0.1).places.has("payments")).toBe(true);
+		expect(half.branches.some((branch) => branch.to.id === "payments")).toBe(true);
+		// Its branch folds into the item it is under: every dot of it is nearer that item than it was.
+		const into = to.places.get("checkout-v2");
+		const reach = (plan: ReturnType<typeof planOf>): number => Math.max(...plan.branches.filter((branch) => branch.to.id === "payments").flatMap((branch) => branch.points.map(([x, y]) => Math.hypot(x - ((into?.col ?? 0) * 2 + 1), y - ((into?.row ?? 0) * 4 + 1.5)))));
+		expect(reach(blend(from, to, 0.8))).toBeLessThan(reach(blend(from, to, 0.2)));
+		// Unfolding is the same, the other way: a name appears once its branch has mostly grown.
+		expect(blend(to, from, 0.5).places.has("payments")).toBe(false);
+		expect(blend(to, from, 0.9).places.has("payments")).toBe(true);
+		// Every frame of it is a whole screen.
+		for (const t of [0, 0.25, 0.5, 0.75, 1]) expect(renderPlain(w, shut, W, H, 0, { animations: [], now: 0, morph: { from, camera: open.camera, t } })).toHaveLength(H);
 	});
 
 	it("keeps one person's colour and greys the rest with a digit", () => {
