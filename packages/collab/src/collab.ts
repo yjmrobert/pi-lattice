@@ -212,6 +212,10 @@ const git = (cwd: string, ...args: string[]): Promise<string> =>
 		});
 	});
 
+/** Whether a name a teammate's host gave can be a local branch, and cannot be read as an option. */
+const isBranchName = (cwd: string, name: string): Promise<boolean> =>
+	!/^[\w./-]+$/.test(name) || name.startsWith("-") ? Promise.resolve(false) : git(cwd, "check-ref-format", `refs/heads/${name}`).then(() => true, () => false);
+
 const sameLog = (a: NodeRecord, b: NodeRecord, upTo: number): boolean => {
 	if (a.genesis.sig !== b.genesis.sig) return false;
 	for (let i = 0; i < upTo; i++) if (a.events[i]?.sig !== b.events[i]?.sig) return false;
@@ -1558,18 +1562,33 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			let cwd = project;
 			let branch: string | null = null;
 			let workspace: NodeMeta["workspace"] = "shared";
-			if (typeof transfer.bundle === "string" && typeof transfer.branch === "string" && /^[\w./-]+$/.test(transfer.branch)) {
+			if (typeof transfer.bundle === "string" && typeof transfer.branch === "string" && (await isBranchName(project, transfer.branch))) {
 				writeFileSync(bundlePath, Buffer.from(transfer.bundle, "base64"));
 				const common = await git(project, "rev-parse", "--git-common-dir");
 				const mainRoot = dirname(isAbsolute(common) ? common : resolve(project, common));
 				const path = join(mainRoot, ".lattice", "worktrees", id);
-				await git(project, "fetch", "-q", bundlePath, `+refs/heads/${transfer.branch}:refs/heads/${transfer.branch}`);
-				if (!existsSync(path)) {
-					mkdirSync(dirname(path), { recursive: true });
-					await git(project, "worktree", "add", path, transfer.branch);
+				// The sender names the branch. It is fetched to a ref nothing else uses, and given their
+				// name only when that takes nothing of this person's: a branch of that name already here,
+				// at another commit, is left alone, and the session's gets a name of its own.
+				const incoming = `refs/lattice/incoming/${id}`;
+				await git(project, "fetch", "-q", bundlePath, `+refs/heads/${transfer.branch}:${incoming}`);
+				try {
+					const theirs = await git(project, "rev-parse", "--verify", incoming);
+					const ours = await git(project, "rev-parse", "--verify", "-q", `refs/heads/${transfer.branch}`).catch(() => "");
+					branch = ours === "" || ours === theirs ? transfer.branch : `${transfer.branch}-${id}`;
+					if (branch !== transfer.branch) this.emit("log", "notice", `A branch called ${transfer.branch} is already here, so the branch of "${record.meta.body.name}" is ${branch}.`);
+					if (existsSync(path)) {
+						// This session's own worktree, from when it was here before.
+						await git(path, "checkout", "-q", "-B", branch, theirs);
+					} else {
+						if (ours !== theirs) await git(project, "branch", "-q", "-f", branch, theirs);
+						mkdirSync(dirname(path), { recursive: true });
+						await git(project, "worktree", "add", "-q", path, branch);
+					}
+				} finally {
+					await git(project, "update-ref", "-d", incoming).catch(() => {});
 				}
 				cwd = path;
-				branch = transfer.branch;
 				workspace = "worktree";
 			}
 			this.save({ ...record, events: record.events.slice(0, folded.applied) });

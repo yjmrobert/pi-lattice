@@ -159,4 +159,49 @@ describe("two people sharing a tree, machine to machine", () => {
 		expect(existsSync(join(yan.sandbox.work, ".lattice"))).toBe(true);
 		mkdirSync(join(shared.root, "done"), { recursive: true });
 	}, 120_000);
+
+	it("does not move a branch of the new owner's that has the same name as the one handed over", async () => {
+		const origin = join(shared.root, "project.git");
+		git(shared.root, "init", "-q", "--bare", "-b", "main", origin);
+		const yan = await machine("yan", (dir) => {
+			git(dir, "init", "-q", "-b", "main");
+			git(dir, "config", "user.email", "yan@example.com");
+			git(dir, "config", "user.name", "Yan");
+			writeFileSync(join(dir, "README.md"), "project\n");
+			git(dir, "add", ".");
+			git(dir, "commit", "-q", "-m", "init");
+			git(dir, "remote", "add", "origin", origin);
+			git(dir, "push", "-q", "origin", "main");
+		});
+		const sam = await machine("sam", (dir) => {
+			git(dir, "clone", "-q", origin, ".");
+			git(dir, "config", "user.email", "sam@example.com");
+			git(dir, "config", "user.name", "Sam");
+		});
+		const root = await yan.host.createRoot({ name: "checkout", cwd: yan.sandbox.work });
+		const kid = await yan.host.spawnChild(root.id, { name: "impl", fragments: ["worker"], workspace: "worktree", brief: "work" });
+		await eventually(() => yan.host.node(kid.id)?.status === "idle", "yan's child to settle");
+		writeFileSync(join(kid.cwd, "work.txt"), "yan's work\n");
+		git(kid.cwd, "add", ".");
+		git(kid.cwd, "-c", "user.email=yan@example.com", "-c", "user.name=Yan", "commit", "-q", "-m", "wip");
+
+		// Sam happens to have a branch of the same name, with work of sam's own on it.
+		const name = kid.branch as string;
+		const mine = git(sam.sandbox.work, "rev-parse", "HEAD").trim();
+		git(sam.sandbox.work, "branch", name, mine);
+
+		await enter(yan);
+		await enter(sam, yan);
+		await eventually(() => sam.host.nodes().length === 2, "yan's sessions to appear for sam");
+		await sam.collab.ask(kid.id);
+		await eventually(() => yan.collab.requests().length === 1, "sam's request to reach yan");
+		await yan.collab.approve(kid.id, "sam");
+		await eventually(() => sam.host.node(kid.id)?.owner === "sam", "sam to take over");
+
+		const adopted = sam.host.node(kid.id);
+		expect(git(sam.sandbox.work, "rev-parse", name).trim()).toBe(mine); // sam's branch is where sam left it
+		expect(adopted?.branch).toBe(`${name}-${kid.id}`);
+		expect(readFileSync(join(adopted?.cwd ?? "", "work.txt"), "utf8")).toBe("yan's work\n");
+		expect(git(sam.sandbox.work, "for-each-ref", "refs/lattice").trim()).toBe(""); // nothing is left behind
+	}, 120_000);
 });

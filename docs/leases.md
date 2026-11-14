@@ -71,7 +71,7 @@ If the connection drops during the release, the release still stands. The packag
 
 - The node's metadata: name, kind, brief, roles.
 - The session file: the whole conversation, including any file contents and command output in it. You are told this before you offer a session or approve a request for one.
-- The branch, when the node has its own worktree, packed so the new owner can recreate it without a shared code remote.
+- The branch, when the node has its own worktree, packed so the new owner can recreate it without a shared code remote. It keeps its name unless the new owner already has a branch of that name at another commit: that one is left where it is, and the session's branch is named after the session as well.
 
 The new owner's host adopts the session by forking it into their own checkout of the project ([ADR 0007](decisions/0007-session-transfer.md)). The conversation continues; the Pi session id is new; the node id is the same.
 
