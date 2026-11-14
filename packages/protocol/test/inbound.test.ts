@@ -66,12 +66,17 @@ describe("approval policy", () => {
 	});
 
 	it("cross-owner honours deliberately trusted senders", () => {
-		expect(requiresApproval({ ...input, policy: "cross-owner", trustedSenders: ["nd_remote0001"] })).toBe(false);
-		expect(requiresApproval({ ...input, policy: "cross-owner", trustedSenders: ["nd_other00001"] })).toBe(true);
+		expect(requiresApproval({ ...input, policy: "cross-owner", trustedSenders: [{ node: "nd_remote0001", owner: "sam" }] })).toBe(false);
+		expect(requiresApproval({ ...input, policy: "cross-owner", trustedSenders: [{ node: "nd_other00001", owner: "sam" }] })).toBe(true);
+	});
+
+	it("trust in a session does not follow it to another owner", () => {
+		const trustedSenders = [{ node: "nd_remote0001", owner: "sam" }];
+		expect(requiresApproval({ ...input, policy: "cross-owner", senderOwner: "kim", trustedSenders })).toBe(true);
 	});
 
 	it("always and never ignore ownership and trust", () => {
-		expect(requiresApproval({ ...input, policy: "always", senderOwner: "yan", trustedSenders: ["nd_remote0001"] })).toBe(true);
+		expect(requiresApproval({ ...input, policy: "always", senderOwner: "yan", trustedSenders: [{ node: "nd_remote0001", owner: "yan" }] })).toBe(true);
 		expect(requiresApproval({ ...input, policy: "never" })).toBe(false);
 	});
 });

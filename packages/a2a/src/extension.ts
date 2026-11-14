@@ -448,8 +448,20 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 					ctx.ui.notify(`Usage: /inbox ${verb} <node id>`, "warning");
 					return;
 				}
-				state.store.setTrusted(target, verb === "trust");
-				ctx.ui.notify(verb === "trust" ? `Messages from ${target} now skip approval.` : `Messages from ${target} need approval again.`, "info");
+				if (verb === "untrust") {
+					state.store.untrust(target);
+					ctx.ui.notify(`Messages from ${target} need approval again.`, "info");
+					return;
+				}
+				// Trust is in a session as its owner runs it. Whose it is comes from the tree, or from what it last sent here.
+				const peer = (await state.transport.peers().catch(() => [])).find((candidate) => candidate.id === target);
+				const owner = peer?.owner ?? state.store.lastFrom(target)?.fromOwner;
+				if (owner === undefined) {
+					ctx.ui.notify(`No session ${target} is known here, so there is nobody's session to trust. Trust it once it has written to this one.`, "warning");
+					return;
+				}
+				state.store.trust(target, owner);
+				ctx.ui.notify(`Messages from ${target} now skip approval while it is ${owner}'s.`, "info");
 				return;
 			}
 			const pending = state.store.list("pending");

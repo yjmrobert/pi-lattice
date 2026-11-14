@@ -46,13 +46,23 @@ export function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
 	return typeof value === "string" && (APPROVAL_POLICIES as readonly string[]).includes(value);
 }
 
+/**
+ * A session the human has deliberately trusted, while it belongs to the person it belonged to
+ * then. Trust is in a session as run by someone: handed to another person, it is a different
+ * agent with different instructions, and needs approval again.
+ */
+export interface TrustedSender {
+	node: string;
+	owner: string;
+}
+
 export interface ApprovalInput {
 	policy: ApprovalPolicy;
 	senderOwner: string;
 	recipientOwner: string;
 	senderNode: string;
-	/** Node ids the human has deliberately trusted. Only consulted under `cross-owner`. */
-	trustedSenders?: readonly string[];
+	/** Sessions the human has deliberately trusted, each with its owner at the time. Only consulted under `cross-owner`. */
+	trustedSenders?: readonly TrustedSender[];
 }
 
 /** Whether a human must approve this envelope before a model sees it. */
@@ -60,5 +70,5 @@ export function requiresApproval(input: ApprovalInput): boolean {
 	if (input.policy === "always") return true;
 	if (input.policy === "never") return false;
 	if (input.senderOwner === input.recipientOwner) return false;
-	return !(input.trustedSenders ?? []).includes(input.senderNode);
+	return !(input.trustedSenders ?? []).some((trusted) => trusted.node === input.senderNode && trusted.owner === input.senderOwner);
 }

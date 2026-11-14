@@ -59,12 +59,20 @@ describe("MailStore", () => {
 		expect(new MailStore(nodeDir(home, a)).nextSeq(b)).toBe(3);
 	});
 
-	it("records trusted senders", () => {
+	it("records trusted senders with the person they belonged to", () => {
 		const store = new MailStore(nodeDir(home, b));
-		store.setTrusted(a, true);
-		expect(store.trustedSenders()).toEqual([a]);
-		store.setTrusted(a, false);
+		store.trust(a, "sam");
+		expect(store.trustedSenders()).toEqual([{ node: a, owner: "sam" }]);
+		store.trust(a, "kim");
+		expect(store.trustedSenders()).toEqual([{ node: a, owner: "kim" }]);
+		store.untrust(a);
 		expect(store.trustedSenders()).toEqual([]);
+	});
+
+	it("does not keep trust that names no owner", () => {
+		const store = new MailStore(nodeDir(home, b));
+		writeFileSync(join(nodeDir(home, b), "mail", "trusted.json"), JSON.stringify([a, { node: b, owner: "sam" }]));
+		expect(store.trustedSenders()).toEqual([{ node: b, owner: "sam" }]);
 	});
 });
 

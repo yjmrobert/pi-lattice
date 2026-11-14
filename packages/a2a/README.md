@@ -12,7 +12,7 @@ pi install ./packages/a2a        # or: pi -e ./packages/a2a
 |---|---|---|
 | Model | `send_message` | Send text to another session by node id, optionally as a reply |
 | Model | `list_peers` | List sessions it can message |
-| Human | `/inbox` | Review messages waiting for approval; `/inbox approve\|reject <id\|all>`, `/inbox trust\|untrust <node>` |
+| Human | `/inbox` | Review messages waiting for approval; `/inbox approve\|reject <id\|all>`, `/inbox trust\|untrust <node>`. Trust holds while the session stays with the person who has it now |
 | Human | `/peers` | List reachable sessions |
 | Human | `/node` | Show this session's node id, owner, transport and mail counts |
 

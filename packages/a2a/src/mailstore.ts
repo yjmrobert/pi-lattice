@@ -5,7 +5,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import type { Envelope, InboundState } from "@pi-lattice/protocol";
+import type { Envelope, InboundState, TrustedSender } from "@pi-lattice/protocol";
 import { readJson, writeFileAtomic } from "./fsutil.ts";
 
 /** `received` is transient and never stored. `sent` is the outbox. */
@@ -87,16 +87,37 @@ export class MailStore {
 		return seq;
 	}
 
-	/** Senders the human has deliberately trusted to skip cross-owner approval. */
-	trustedSenders(): string[] {
+	/**
+	 * Senders the human has deliberately trusted to skip cross-owner approval, each with the
+	 * person it belonged to then. An entry without an owner is from before trust was tied to
+	 * one: nothing says whose session it was, so it is not kept.
+	 */
+	trustedSenders(): TrustedSender[] {
 		const value = readJson(join(this.dir, "trusted.json"));
-		return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+		if (!Array.isArray(value)) return [];
+		return value.flatMap((entry: unknown) => {
+			const { node, owner } = (entry ?? {}) as Partial<TrustedSender>;
+			return typeof node === "string" && typeof owner === "string" ? [{ node, owner }] : [];
+		});
 	}
 
-	setTrusted(nodeId: string, trusted: boolean): void {
-		const current = new Set(this.trustedSenders());
-		if (trusted) current.add(nodeId);
-		else current.delete(nodeId);
-		writeFileAtomic(join(this.dir, "trusted.json"), JSON.stringify([...current].sort()));
+	/** Trust a session while it is `owner`'s. Trusting it again under someone else replaces that. */
+	trust(nodeId: string, owner: string): void {
+		this.writeTrusted([...this.trustedSenders().filter((entry) => entry.node !== nodeId), { node: nodeId, owner }]);
+	}
+
+	untrust(nodeId: string): void {
+		this.writeTrusted(this.trustedSenders().filter((entry) => entry.node !== nodeId));
+	}
+
+	private writeTrusted(entries: TrustedSender[]): void {
+		writeFileAtomic(join(this.dir, "trusted.json"), JSON.stringify(entries.sort((a, b) => a.node.localeCompare(b.node))));
+	}
+
+	/** The newest inbound message from a session, whatever became of it. */
+	lastFrom(nodeId: string): Envelope | undefined {
+		let last: Envelope | undefined;
+		for (const state of INBOUND) for (const envelope of this.list(state)) if (envelope.from === nodeId && (!last || envelope.id > last.id)) last = envelope;
+		return last;
 	}
 }
