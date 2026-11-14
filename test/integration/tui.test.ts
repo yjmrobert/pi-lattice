@@ -61,6 +61,8 @@ const split = (row: string): [pane: string, rest: string] => {
 	return at < 0 ? [row, ""] : [row.slice(0, at), row.slice(at + 1)];
 };
 
+const ALT_L_RELEASED = "\x1b[108;3:3u";
+
 describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 	it("sits to the left of Pi from the start, and leaves Pi's own screen working beside it", async () => {
 		const pi = open();
@@ -83,6 +85,12 @@ describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 
 		pi.press(KEY.altL);
 		// With the keyboard, the chat steps aside for the session under the cursor, in full.
+		await pi.see(/owner\s+you/);
+		// Kitty-protocol terminals also report the key being let go; that is not a second press.
+		pi.press(ALT_L_RELEASED);
+		pi.press("?");
+		await pi.see("while the pane has the keyboard");
+		pi.press("?");
 		const inspecting = await pi.see(/owner\s+you/);
 		expect(inspecting.join("\n")).toMatch(/roles\s+protocol/);
 		expect(inspecting.join("\n")).not.toContain("echo[user] roles=[] hello\n");
