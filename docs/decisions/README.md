@@ -35,4 +35,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0028 | The server introduces; the machines carry | built: on a server, hosts find each other and pass offers and requests through it; sessions go directly between the two machines, both online |
 | 0029 | Networks joined by a code are gone | built: sessions are shared with the people on your server; join codes, beacons and the shared ports are removed |
 | 0030 | The canopy in order | built: what must come first is on the left; held work is dim; `o` puts it back as filed |
-| 0031 | Pi opens on the canopy | built: the tree where the chat was, a session's chat sliding in beside it, `alt+l` between them; `pane.home` puts it back |
+| 0031 | Pi opens on the canopy | built: the tree where the chat was, a session's chat sliding in beside it, `alt+l` between them, what a session waits on answered on the tree; `pane.home` puts it back |

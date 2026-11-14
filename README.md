@@ -15,7 +15,7 @@ From a checkout of this repository, `pi install /path/to/pi-lattice` does the sa
 Then open `pi` in a project as you always do. Where the project has sessions, Pi opens on the canopy: all the work as a tree, with the session you open sliding in beside it.
 
 - `enter` on a session opens its chat on the right, with all of Pi, and the tree stays on the left. `alt+l` moves the keyboard between the two; `esc` in the tree slides the chat away. The session carries on either way.
-- Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. `tab` goes to the next thing that does.
+- Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. `tab` goes to the next thing that does, and what it asks is drawn under the tree with the keys that answer it (`y`/`n`, `a`/`x`).
 - `p` lists the sessions in a pane instead, where they are made, stopped, archived and answered:
 
 ```
