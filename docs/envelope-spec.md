@@ -21,6 +21,7 @@ The envelope is the one message shape every transport, session and host agree on
 | `payload.data` | any | no | Structured data. Untrusted. |
 | `payload.refs` | string[] | no | File paths for content too large to inline. |
 | `createdAt` | ISO 8601 | yes | Creation time. |
+| `via` | string | no | Who handed the message on, when a session changed hands with mail still waiting for it. Written only by the receiving host, from who the connection is with. |
 | `sig` | string | no | Signature. Reserved for cross-owner mail. |
 
 Ids match `^[a-z]{2,8}_[0-9a-z]{8,40}$`. They are used as file names, so a receiver must reject anything else.
@@ -31,4 +32,5 @@ Ids match `^[a-z]{2,8}_[0-9a-z]{8,40}$`. They are used as file names, so a recei
 - **Delivery.** At-least-once. Ordered per sender-recipient pair by `seq`. No global order.
 - **Hops.** A send made while handling an inbound envelope carries that envelope's `hops + 1`. A human prompt resets the chain to 0. Envelopes above the limit (default 8) are refused by the sender and rejected by receivers.
 - **Size.** The serialized payload is at most 64 KiB by default.
+- **Handed on.** Mail that had not reached a session when it changed hands travels with it. The new owner's host marks each such envelope with `via`, the previous owner, who is the only one vouching for it: approval is decided as if they had sent it, whatever `fromOwner` says. A `via` on an envelope a session sends, or on one arriving as ordinary mail, is dropped.
 - **Trust.** Everything in an envelope is untrusted input. It is validated before use, delivered to a model only as delimited, attributed text, and never executed.

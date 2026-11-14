@@ -79,7 +79,9 @@ What does not travel: uncommitted changes in a shared (non-worktree) workspace. 
 
 ## Mail between owners
 
-An agent can message a node another person owns. It is delivered directly when that person is online; otherwise it waits on the sender's machine and goes when they reconnect. The receiving host checks that the sending session really belongs to the person who sent it, then holds the message in the inbox until the human approves it. Approval is per message unless the human has deliberately trusted that sender.
+An agent can message a node another person owns. It is delivered directly when that person is online; otherwise it waits on the sender's machine and goes when they reconnect. The receiving host checks that the sending session really belongs to the person who sent it, then holds the message in the inbox until the human approves it. Approval is per message unless the human has deliberately trusted that sender. Trust is in a session as the person who has it runs it: when it changes hands, its mail needs approval again.
+
+Mail follows a session that changes hands. What it had not had yet, whether undelivered or waiting for approval, travels with it; the new owner's host marks each such message as handed on by the previous owner, on whose word alone it arrives, so it waits for the new owner's approval whoever it says it is from. A message still waiting on a sender's machine goes to whoever has the session when it is sent: a host asked for a session it has handed on answers with the signed record of who has it now. A message a host keeps turning away is tried a few more times as more is learnt, then given up on, and the sender's host says so.
 
 ## Where the rules live
 

@@ -50,6 +50,13 @@ export const EnvelopeSchema = Type.Object({
 	payload: PayloadSchema,
 	/** ISO 8601 creation time. */
 	createdAt: Type.String({ minLength: 1 }),
+	/**
+	 * Who handed this on, when it did not come from its sender's own host: the previous owner of
+	 * a session that changed hands with mail still waiting. Only a host writes it, on receipt,
+	 * from who the connection is with; a sender's own value is dropped. Whoever is named is the
+	 * one vouching for the message, so approval goes by them and not by `fromOwner`.
+	 */
+	via: Type.Optional(Type.String({ minLength: 1 })),
 	/** Signature over the envelope, required for cross-owner mail once collab identity is in use. */
 	sig: Type.Optional(Type.String()),
 });

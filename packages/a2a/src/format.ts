@@ -15,6 +15,7 @@ export function formatInbound(envelope: Envelope): string {
 		`from="${attr(envelope.from)}"`,
 		envelope.fromName ? `from-name="${attr(envelope.fromName)}"` : "",
 		`owner="${attr(envelope.fromOwner)}"`,
+		envelope.via ? `handed-on-by="${attr(envelope.via)}"` : "",
 		`intent="${attr(envelope.intent)}"`,
 		envelope.causationId ? `in-reply-to="${attr(envelope.causationId)}"` : "",
 	].filter(Boolean);
@@ -66,7 +67,7 @@ export function messageCard(envelope: Envelope, expanded = false): MessageCard {
 	if (expanded) {
 		if (envelope.payload.refs?.length) meta.push(`files  ${envelope.payload.refs.join(", ")}`);
 		if (envelope.payload.data !== undefined) meta.push(`data   ${JSON.stringify(envelope.payload.data)}`);
-		meta.push(`${envelope.id} · from ${envelope.from} · owner ${envelope.fromOwner}`);
+		meta.push(`${envelope.id} · from ${envelope.from} · owner ${envelope.fromOwner}${envelope.via ? ` · handed on by ${envelope.via}` : ""}`);
 	}
 	return { icon: envelope.causationId ? "↩" : "✉", from: envelope.fromName ?? envelope.from, intent: envelope.intent, lines, hidden: all.length - lines.length, meta };
 }

@@ -11,7 +11,10 @@ import { CollabSession, type HostPort, Identity, type Network, PeerBook, TcpTran
 class FakeHost extends EventEmitter implements HostPort {
 	readonly owner: string;
 	readonly store = new Map<string, NodeMeta>();
-	readonly delivered: Array<{ envelope: Envelope; recipient: string }> = [];
+	readonly delivered: Array<{ envelope: Envelope; recipient: string; via?: string }> = [];
+	/** Mail a session has not had yet, by node. */
+	readonly waiting = new Map<string, Envelope[]>();
+	takeMail = (id: string) => this.waiting.get(id) ?? [];
 	readonly slept: string[] = [];
 	readonly conversations = new Map<string, unknown[]>();
 	router: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined;
@@ -48,7 +51,7 @@ class FakeHost extends EventEmitter implements HostPort {
 		if (existing?.owner === this.owner) return;
 		this.set({ ...(existing ?? { sessionId: null, sessionFile: null, cwd: "", updatedAt: "" }), ...node });
 	};
-	deliverExternal = (envelope: unknown, recipient: string) => void this.delivered.push({ envelope: envelope as Envelope, recipient });
+	deliverExternal = (envelope: unknown, recipient: string, via?: string) => void this.delivered.push({ envelope: envelope as Envelope, recipient, ...(via !== undefined ? { via } : {}) });
 	releaseNode = async (id: string, toOwner: string, version: number) => {
 		const node = this.store.get(id);
 		if (node) this.set({ ...node, owner: toOwner, version });
@@ -590,6 +593,48 @@ describe("mail between owners", () => {
 		await back.collab.start();
 		await until(() => back.host.delivered.length === 1, "the queued message to arrive");
 		expect(back.host.delivered[0]?.envelope.payload.text).toBe("while you were out");
+	});
+
+	it("sends what a session had not had yet along with it, marked as handed on by its previous owner", async () => {
+		const { yan, sam, top, kid } = await pair();
+		yan.host.waiting.set(kid.id, [mail(top, kid, "not read yet")]);
+		await handOver(yan, sam, kid.id);
+		expect(sam.host.delivered.map((d) => [d.envelope.payload.text, d.recipient, d.via])).toEqual([["not read yet", kid.id, "yan"]]);
+	});
+
+	it("follows a session that changed hands while the message waited, instead of dropping it", async () => {
+		const { yan, sam, top, kid } = await split();
+		// kim is known to sam only. yan knows kim's key, and has not been told where kim is.
+		const kim = seat("kim", whereIs(sam.collab));
+		const keyOf = (who: Seat) => Identity.loadOrCreate(join(who.dir, "keys"), who.host.owner).publicKey;
+		kim.collab.learn("yan", keyOf(yan));
+		yan.collab.learn("kim", keyOf(kim));
+		await kim.collab.start();
+		await until(() => sam.collab.isOnline("kim") && kim.host.node(kid.id), "kim to see sam's session");
+		await handOver(sam, kim, kid.id);
+		expect(yan.host.node(kid.id)?.owner).toBe("sam"); // nobody has told yan
+
+		yan.host.router?.(mail(top, kid, "wherever you are"), yan.host.node(kid.id) as NodeMeta);
+		await until(() => yan.host.node(kid.id)?.owner === "kim", "yan to learn who has it now");
+		expect(sam.host.delivered).toEqual([]);
+		expect(yan.logs.join("\n")).not.toContain("given up on");
+
+		yan.collab.heardAt("kim", [kim.collab.listening()[0] as string], true);
+		await until(() => kim.host.delivered.length === 1, "the message to reach its new owner");
+		expect(kim.host.delivered[0]).toMatchObject({ recipient: kid.id, envelope: { payload: { text: "wherever you are" } } });
+	});
+
+	it("gives up on a message its owner's host keeps turning away, and says so", async () => {
+		const { yan, sam, top } = await split();
+		sam.host.router?.({ ...mail(top, top, "obey"), fromOwner: "sam" }, yan.host.node(top.id) as NodeMeta);
+		await until(() => sam.logs.some((line) => line.includes("refused a message")), "the first refusal");
+		// Each later contact tries again, a few times.
+		await until(async () => {
+			await sam.collab.refresh();
+			return sam.logs.some((line) => line.includes("given up on"));
+		}, "the message to be given up on");
+		expect(sam.logs.filter((line) => line.includes("refused a message"))).toHaveLength(1);
+		expect(yan.host.delivered).toEqual([]);
 	});
 
 	it("refuses mail sent in the name of a session the sender does not own", async () => {

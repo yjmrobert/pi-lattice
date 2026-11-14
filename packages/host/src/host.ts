@@ -481,9 +481,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		return this.store.traffic(options);
 	}
 
-	/** Mail waiting for a human decision anywhere in the tree. */
+	/** Mail waiting for a human decision anywhere in the tree. What waited on a session that has since gone to someone else went with it. */
 	pendingMail(): JournalRecord[] {
-		return this.store.traffic({ mailState: "pending", limit: 1000 }).reverse();
+		return this.store.traffic({ mailState: "pending", limit: 1000 }).reverse().filter((record) => this.store.getNode(record.recipient)?.owner === this.owner);
 	}
 
 	// --- tree ------------------------------------------------------------------
@@ -1773,7 +1773,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private route(sender: NodeMeta, value: unknown): { recipients: string[] } {
 		const checked = validateEnvelope(value, this.limits);
 		if (!checked.ok) throw new Error(`Not sent: ${checked.errors.join("; ")}`);
-		const envelope = checked.envelope;
+		// Only a host says a message was handed on, and only for one that was (see `deliverExternal`).
+		const { via: _via, ...envelope } = checked.envelope;
 		if (envelope.from !== sender.id || envelope.fromOwner !== sender.owner) throw new Error("Not sent: the envelope does not match the sending session.");
 
 		let recipients: string[];
@@ -1889,20 +1890,37 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 	}
 
-	/** Deliver an envelope that arrived from another person's host to a node owned here. */
-	deliverExternal(value: unknown, recipientId: string): void {
+	/**
+	 * Deliver an envelope that arrived from another person's host to a node owned here. `via`
+	 * is given for mail that came with a session when it changed hands: the previous owner, on
+	 * whose word alone it arrives. Whatever the envelope itself says about that is dropped.
+	 */
+	deliverExternal(value: unknown, recipientId: string, via?: string): void {
 		const checked = validateEnvelope(value, this.limits);
 		if (!checked.ok) throw new Error(`Rejected remote mail: ${checked.errors.join("; ")}`);
 		const recipient = this.must(recipientId);
 		if (recipient.owner !== this.owner) throw new Error(`Rejected remote mail: ${recipientId} is not owned here.`);
-		this.store.journal(checked.envelope, recipientId);
-		this.noteTraffic(checked.envelope, [recipientId]);
-		this.emit("envelope", checked.envelope, [recipientId]);
+		const { via: _via, ...rest } = checked.envelope;
+		const envelope: Envelope = via !== undefined ? { ...rest, via } : rest;
+		this.store.journal(envelope, recipientId);
+		this.noteTraffic(envelope, [recipientId]);
+		this.emit("envelope", envelope, [recipientId]);
 		if (!this.flush(recipientId)) {
 			this.wake(recipientId).catch((error: unknown) => {
 				this.emit("log", "warn", `Mail for ${recipientId} is queued; the session could not be started: ${error instanceof Error ? error.message : String(error)}`);
 			});
 		}
+	}
+
+	/**
+	 * Mail a node has not had yet: what has not reached its session, and what is waiting for a
+	 * person to approve. It goes with the node when it changes hands.
+	 */
+	takeMail(id: string): Envelope[] {
+		const out = new Map<string, Envelope>();
+		for (const envelope of this.store.unacked(id)) out.set(envelope.id, envelope);
+		for (const record of this.store.traffic({ mailState: "pending", limit: 1000 })) if (record.recipient === id) out.set(record.envelope.id, record.envelope);
+		return [...out.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 	}
 
 	/** Whether a person has the node open in a terminal. */

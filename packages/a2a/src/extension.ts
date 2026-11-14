@@ -151,6 +151,13 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 		if (!cause || envelope.hops > cause.hops) cause = envelope;
 	};
 
+	/**
+	 * Whose word a message arrives on. Normally its sender's owner, which the host checked. Mail
+	 * handed on with a session that changed hands comes on the previous owner's word alone, and
+	 * only a host says so.
+	 */
+	const vouchedBy = (state: Active, envelope: Envelope): string => (state.transport.kind === "host" && envelope.via !== undefined ? envelope.via : envelope.fromOwner);
+
 	const handleInbound = async (value: unknown): Promise<void> => {
 		const state = active;
 		if (!state) throw new Error("no active session");
@@ -164,7 +171,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 
 		const hold = requiresApproval({
 			policy: policy(),
-			senderOwner: envelope.fromOwner,
+			senderOwner: vouchedBy(state, envelope),
 			recipientOwner: state.owner,
 			senderNode: envelope.from,
 			trustedSenders: state.store.trustedSenders(),
@@ -455,7 +462,8 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 				}
 				// Trust is in a session as its owner runs it. Whose it is comes from the tree, or from what it last sent here.
 				const peer = (await state.transport.peers().catch(() => [])).find((candidate) => candidate.id === target);
-				const owner = peer?.owner ?? state.store.lastFrom(target)?.fromOwner;
+				const last = state.store.lastFrom(target);
+				const owner = peer?.owner ?? (last ? vouchedBy(state, last) : undefined);
 				if (owner === undefined) {
 					ctx.ui.notify(`No session ${target} is known here, so there is nobody's session to trust. Trust it once it has written to this one.`, "warning");
 					return;

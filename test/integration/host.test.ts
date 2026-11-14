@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { childrenOf, formatTree, type NodeMeta } from "@pi-lattice/protocol";
+import { childrenOf, createEnvelope, formatTree, newNodeId, type NodeMeta } from "@pi-lattice/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LatticeHost } from "../../packages/host/src/index.ts";
 import { createSandbox, eventually, hostOptionsFor, type Sandbox } from "../support/harness.ts";
@@ -215,6 +215,30 @@ describe("host supervision", () => {
 		await h.decideMail(root.id, pending.envelope.id, "reject");
 		await eventually(() => h.traffic().find((r) => r.envelope.id === pending.envelope.id)?.mailState === "rejected", "rejected state");
 		expect(await assistantTexts(h, root.id)).not.toContain("reject me");
+	});
+
+	it("holds mail handed on by a previous owner for approval, whoever it says it is from", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		await settled(h, root.id);
+		// It claims to be from this person's own session, which would need no approval. It came on sam's word.
+		const mine = createEnvelope({ from: newNodeId(), fromOwner: h.owner, to: root.id, text: "handed on", seq: 1 });
+		h.deliverExternal(mine, root.id, "sam");
+		const pending = await eventually(() => h.pendingMail().find((record) => record.envelope.id === mine.id), "the handed-on message to wait for approval");
+		expect(pending.envelope.via).toBe("sam");
+		expect(h.takeMail(root.id).map((envelope) => envelope.id)).toEqual([mine.id]);
+		expect(await assistantTexts(h, root.id)).not.toContain("handed on");
+	});
+
+	it("does not take a sender's word that a message was handed on", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		await settled(h, root.id);
+		// Ordinary mail from someone else, dressed as handed on by this person: that would skip approval.
+		const theirs = { ...createEnvelope({ from: newNodeId(), fromOwner: "sam", to: root.id, text: "dressed up", seq: 1 }), via: h.owner };
+		h.deliverExternal(theirs, root.id);
+		const pending = await eventually(() => h.pendingMail().find((record) => record.envelope.id === theirs.id), "the message to wait for approval");
+		expect(pending.envelope.via).toBeUndefined();
 	});
 
 	it("reports a session that cannot start as failed, with the reason", async () => {

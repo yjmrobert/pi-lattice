@@ -37,7 +37,10 @@ export interface HostPort {
 	readMessages(id: string): Promise<unknown[]>;
 	setRemoteRouter(router: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined): void;
 	importRemoteNode(node: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt" | "repo">): void;
-	deliverExternal(envelope: unknown, recipientId: string): void;
+	/** `via`: the previous owner, for mail that came with a session when it changed hands. */
+	deliverExternal(envelope: unknown, recipientId: string, via?: string): void;
+	/** Mail a node has not had yet, which goes with it when it changes hands. */
+	takeMail?(id: string): Envelope[];
 	releaseNode(id: string, toOwner: string, version: number): Promise<void>;
 	adoptNode(id: string, options: { cwd: string; branch: string | null; workspace: NodeMeta["workspace"]; version: number; sessionFile?: string }): NodeMeta;
 	/** Whether a person has the node open in a terminal right now. Such a node is not sent away under them. */
@@ -161,8 +164,16 @@ export interface CollabEvents {
 interface OutboxItem {
 	envelope: Envelope;
 	recipient: string;
+	/** Whose the session was when this was written. It is sent to whoever has it when it goes. */
 	toOwner: string;
+	at?: number;
+	/** How many times its owner's host has turned it away. */
+	tries?: number;
 }
+/** A message its recipient's host keeps turning away is given up on after this many tries. */
+const OUTBOX_TRIES = 8;
+/** Mail that goes with a session when it changes hands, at most. */
+const CARRIED_MAIL = 500;
 interface Ask {
 	nodeId: string;
 	/** Who asks (kept by the owner) or who was asked (kept by the asker). */
@@ -176,6 +187,8 @@ interface Transfer {
 	branch: string | null;
 	session: string | null;
 	bundle: string | null;
+	/** Mail the session had not had yet. */
+	mail?: Envelope[];
 }
 type Frame =
 	| { t: "req"; id: number; op: string; p: unknown }
@@ -221,6 +234,8 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private readonly failures = new Map<string, { count: number; retryAt: number }>();
 	private readonly key: Buffer;
 	private settling = false;
+	private readonly flushing = new Set<string>();
+	private readonly flushAgain = new Set<string>();
 	/** Channels to members working on something else, by `name|scope`. They carry reading, never handing over. */
 	private readonly guests = new Map<string, { channel: SecureChannel; initiator: string }>();
 	private readonly guestAddresses = new Map<string, string>(); // name -> `host:port` of one of their other hosts
@@ -871,6 +886,8 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		}
 		if (changed) this.emit("changed");
 		this.debounce("settle", () => this.settle(), 0);
+		// A session mail is waiting for may have turned out to be with someone else.
+		this.debounce("outbox", () => this.flushOutboxes());
 	}
 
 	/** Ask every connected peer for their current tree. */
@@ -1090,7 +1107,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	// --- mail ------------------------------------------------------------------
 
 	private queueOutbound(envelope: Envelope, recipient: NodeMeta): void {
-		const item: OutboxItem = { envelope, recipient: recipient.id, toOwner: recipient.owner };
+		const item: OutboxItem = { envelope, recipient: recipient.id, toOwner: recipient.owner, at: this.now() };
 		const path = join(this.options.dir, "outbox", `${envelope.id}--${recipient.id}.json`);
 		writeFileSync(`${path}.tmp`, JSON.stringify(item));
 		renameSync(`${path}.tmp`, path);
@@ -1098,37 +1115,110 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		else this.emit("log", "info", `${recipient.owner} is offline; the message for "${recipient.name}" will be sent when they are back.`);
 	}
 
+	private async flushOutboxes(): Promise<void> {
+		for (const peer of [...this.channels.keys()]) await this.flushOutbox(peer).catch(() => {});
+	}
+
+	/**
+	 * Send what is waiting for a peer's sessions. Whose a session is, is asked again each time:
+	 * it may have changed hands while its mail waited, and the mail follows it. A message its
+	 * owner's host turns away is kept and tried again when more is known, a few times.
+	 */
 	private async flushOutbox(peer: string): Promise<void> {
+		if (this.flushing.has(peer)) {
+			this.flushAgain.add(peer); // something was queued meanwhile
+			return;
+		}
+		this.flushing.add(peer);
+		try {
+			do {
+				this.flushAgain.delete(peer);
+				await this.flushOnce(peer);
+			} while (this.flushAgain.has(peer) && this.channels.has(peer));
+		} finally {
+			this.flushing.delete(peer);
+			this.flushAgain.delete(peer);
+		}
+	}
+
+	private async flushOnce(peer: string): Promise<void> {
 		const dir = join(this.options.dir, "outbox");
+		const me = this.identity.name;
+		let learned = false;
 		for (const file of readdirSync(dir).sort()) {
 			if (!file.endsWith(".json")) continue;
+			const path = join(dir, file);
 			let item: OutboxItem;
 			try {
-				item = JSON.parse(readFileSync(join(dir, file), "utf8")) as OutboxItem;
+				item = JSON.parse(readFileSync(path, "utf8")) as OutboxItem;
 			} catch {
-				unlinkSync(join(dir, file));
+				rmSync(path, { force: true });
 				continue;
 			}
-			if (item.toOwner !== peer) continue;
+			const owner = this.host.node(item.recipient)?.owner ?? item.toOwner;
+			if (owner === me) {
+				// It came here while the message waited.
+				try {
+					this.host.deliverExternal(item.envelope, item.recipient);
+				} catch (error) {
+					this.emit("log", "warn", `A message for a session that is now yours could not be delivered: ${error instanceof Error ? error.message : String(error)}`);
+				}
+				rmSync(path, { force: true });
+				continue;
+			}
+			if (owner !== peer) continue;
+			let why: string;
 			try {
-				await this.request(peer, "mail", { envelope: item.envelope, recipient: item.recipient });
+				const answer = await this.request<{ moved?: unknown }>(peer, "mail", { envelope: item.envelope, recipient: item.recipient });
+				const moved = answer?.moved !== undefined ? parseRecord(JSON.stringify(answer.moved)) : undefined;
+				if (!moved) {
+					rmSync(path, { force: true });
+					continue;
+				}
+				// They no longer have it, and say who does.
+				if (moved.meta.body.id === item.recipient && this.consider(moved)) learned = true;
+				why = "that session is no longer with them";
 			} catch (error) {
 				if (!this.channels.has(peer)) return; // went offline; keep it queued
-				this.emit("log", "warn", `${peer} refused a message: ${error instanceof Error ? error.message : String(error)}`);
+				why = error instanceof Error ? error.message : String(error);
+				if (!item.tries) this.emit("log", "warn", `${peer} refused a message: ${why}`);
 			}
-			if (existsSync(join(dir, file))) unlinkSync(join(dir, file));
+			const tries = (item.tries ?? 0) + 1;
+			const age = this.now() - (item.at ?? Date.parse(item.envelope.createdAt));
+			if (tries >= OUTBOX_TRIES || age > (this.options.offerTtlMs ?? 24 * 3600_000)) {
+				this.emit("log", "warn", `A message from "${item.envelope.fromName ?? item.envelope.from}" could not be delivered and was given up on: ${why}`);
+				rmSync(path, { force: true });
+			} else if (existsSync(path)) {
+				writeFileSync(`${path}.tmp`, JSON.stringify({ ...item, tries } satisfies OutboxItem));
+				renameSync(`${path}.tmp`, path);
+			}
+		}
+		if (learned) {
+			this.emit("changed");
+			this.debounce("outbox", () => this.flushOutboxes());
 		}
 	}
 
 	/** Mail from a peer's agent. The channel proves who sent it; the logs prove they may speak for that node. */
-	private receiveMail(peer: string, value: unknown, recipient: unknown): Record<string, never> {
+	private async receiveMail(peer: string, value: unknown, recipient: unknown): Promise<{ moved?: NodeRecord }> {
 		const checked = validateEnvelope(value);
 		if (!checked.ok) throw new Error(`Malformed message: ${checked.errors[0] ?? "invalid"}`);
 		const envelope = checked.envelope;
 		if (envelope.fromOwner !== peer) throw new Error("A message must come from its sender's owner.");
-		const sender = this.record(envelope.from);
-		if (!sender || this.fold(sender).ownership.owner !== peer) throw new Error("The sending session does not belong to you, as far as this host knows.");
+		const theirs = (): boolean => {
+			const sender = this.record(envelope.from);
+			return sender !== undefined && this.fold(sender).ownership.owner === peer;
+		};
+		// The sending session may have become theirs a moment ago: ask before turning it away.
+		if (!theirs()) await this.fetchTree(peer).catch(() => {});
+		if (!theirs()) throw new Error("The sending session does not belong to you, as far as this host knows.");
 		const target = typeof recipient === "string" ? this.host.node(recipient) : undefined;
+		if (target && target.owner !== this.identity.name) {
+			// It was here and has gone to someone else. The signed log says who, so the mail can follow it.
+			const record = this.record(target.id);
+			const folded = record ? this.fold(record) : undefined;
+			if (record && folded?.valid && folded.ownership.owner !== this.identity.name) return { moved: record };
+		}
 		if (!target || target.owner !== this.identity.name) throw new Error("That session is not here.");
 		this.host.deliverExternal(envelope, target.id);
 		return {};
@@ -1255,8 +1345,9 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			if (!node) throw new Error(`No node ${nodeId} in this tree.`);
 			const session = node.sessionFile && existsSync(node.sessionFile) ? readFileSync(node.sessionFile).toString("base64") : null;
 			const bundle = await this.bundleBranch(node);
+			const mail = (this.host.takeMail?.(nodeId) ?? []).slice(0, CARRIED_MAIL);
 			const record = this.appendOwn(nodeId, this.identity.sign<LeaseEvent>({ type: "confirm", id: handoff.handoffId, by: this.identity.name, now: this.now() }));
-			const transfer: Transfer = { nodeId, to: handoff.to, record, branch: bundle ? node.branch : null, session, bundle };
+			const transfer: Transfer = { nodeId, to: handoff.to, record, branch: bundle ? node.branch : null, session, bundle, ...(mail.length > 0 ? { mail } : {}) };
 			writeFileSync(join(this.options.dir, "transfers", `${nodeId}.json`), JSON.stringify(transfer));
 			await this.host.releaseNode(nodeId, handoff.to, node.version + 1);
 			this.emit("changed");
@@ -1488,8 +1579,18 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			rmSync(sessionPath, { force: true });
 			rmSync(bundlePath, { force: true });
 		}
+		// Mail it had not had yet comes with it, on the previous owner's word alone: it is marked
+		// as handed on by them, and approval goes by that.
+		for (const envelope of Array.isArray(transfer.mail) ? transfer.mail.slice(0, CARRIED_MAIL) : []) {
+			try {
+				this.host.deliverExternal(envelope, id, peer);
+			} catch (error) {
+				this.emit("log", "warn", `A message that came with "${record.meta.body.name}" was dropped: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 		this.forget("asked", id);
 		this.emit("log", "notice", `You now own "${record.meta.body.name}".`);
+		this.debounce("outbox", () => this.flushOutboxes()); // what was waiting here for it has no further to go
 		this.debounce("publish", () => this.publishOwn());
 		this.emit("changed");
 		return receipt;
