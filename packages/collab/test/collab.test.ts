@@ -212,6 +212,13 @@ describe("a team", () => {
 		expect(sam.host.node(kid.id)).toMatchObject({ name: "impl", owner: "yan", parentId: top.id, version: 1, fragments: ["worker"], cwd: "" });
 	});
 
+	it("says when a session has sent its result, for whoever waits on it elsewhere", async () => {
+		const { yan, sam, kid } = await pair();
+		expect(sam.host.node(kid.id)?.done).toBeUndefined();
+		yan.host.set({ ...(yan.host.node(kid.id) as NodeMeta), done: true });
+		await until(() => sam.host.node(kid.id)?.done === true, "sam to hear it is done");
+	});
+
 	it("pushes a change to connected peers without polling", async () => {
 		const { yan, sam, kid } = await pair();
 		yan.host.set({ ...kid, name: "implementation", fragments: ["worker", "implementation"], status: "running" });

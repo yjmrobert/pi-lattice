@@ -609,8 +609,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	/**
 	 * The sessions a new child of `parent` is to wait on, from the ids or names it was given.
 	 * A name must be the only one of its kind in the tree. Nothing above the child can be waited
-	 * on, because a parent finishes after its children; nor can a teammate's session, whose
-	 * result this host does not see.
+	 * on, because a parent finishes after its children; nor can a teammate's session. One that
+	 * goes to a teammate after it was waited on still ends the wait when it finishes there
+	 * (see `importRemoteNode`).
 	 */
 	private resolveWaitsOn(all: NodeMeta[], parent: NodeMeta, given: unknown): NodeMeta[] {
 		if (given === undefined || given === null) return [];
@@ -1868,8 +1869,12 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		this.remoteRouter = router;
 	}
 
-	/** Record or refresh a node that someone else owns. It appears in the tree but cannot be run here. */
-	importRemoteNode(remote: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt" | "repo">): void {
+	/**
+	 * Record or refresh a node that someone else owns. It appears in the tree but cannot be run
+	 * here. Its owner says when it has sent its result, and a session here that was waiting on
+	 * it, from when it was this person's, then starts.
+	 */
+	importRemoteNode(remote: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt" | "repo" | "done">): void {
 		if (remote.owner === this.owner) throw new Error("importRemoteNode is for nodes owned by someone else.");
 		const existing = this.store.getNode(remote.id);
 		if (!existing) {
@@ -1879,14 +1884,17 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			return;
 		}
 		if (existing.owner === this.owner) return; // releasing a node is explicit; see releaseNode
-		const changed = (["parentId", "kind", "name", "brief", "owner", "version", "status", "workspace", "branch"] as const).some((key) => existing[key] !== remote[key]) ||
+		const done = remote.done === true;
+		const finished = done !== (existing.done === true);
+		const changed = finished || (["parentId", "kind", "name", "brief", "owner", "version", "status", "workspace", "branch"] as const).some((key) => existing[key] !== remote[key]) ||
 			existing.fragments.join(",") !== remote.fragments.join(",");
 		if (changed) {
 			this.update(remote.id, {
 				parentId: remote.parentId, kind: remote.kind, name: remote.name, brief: remote.brief, fragments: remote.fragments, owner: remote.owner,
-				version: remote.version, status: remote.status, workspace: remote.workspace, branch: remote.branch,
+				version: remote.version, status: remote.status, workspace: remote.workspace, branch: remote.branch, done,
 				...(remote.repo !== undefined ? { repo: remote.repo } : {}),
 			});
+			if (finished && done) this.releaseReady();
 		}
 	}
 

@@ -386,6 +386,25 @@ describe("sessions that wait on others", () => {
 		await eventually(async () => (await assistantTexts(h, root.id)).includes("api done"), "its result to reach the parent");
 	});
 
+	it("starts a waiting child when what it waits on finishes on a teammate's machine, after being handed over", async () => {
+		const h = await startHost();
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		const schema = await h.spawnChild(root.id, { name: "schema", brief: "wait for instructions" });
+		const api = await h.spawnChild(root.id, { name: "api", brief: result("api done"), waitsOn: ["schema"] });
+		await settled(h, schema.id);
+		// The session it waits on goes to sam, as a handoff leaves it here.
+		await h.releaseNode(schema.id, "sam", 2);
+		const theirs = { ...(h.node(schema.id) as NodeMeta), owner: "sam", version: 2 };
+		h.importRemoteNode({ ...theirs, status: "running" });
+		expect(h.node(api.id)).toMatchObject({ status: "dormant", waitsOn: [schema.id] });
+		expect(h.isRunning(api.id)).toBe(false);
+
+		// sam's host says it has sent its result.
+		h.importRemoteNode({ ...theirs, status: "idle", done: true });
+		await eventually(() => h.node(api.id)?.done === true, "the waiting child to run and report");
+		expect(h.node(api.id)?.waitsOn).toBeUndefined();
+	});
+
 	it("tells the model what it waits on, and starts at once a child whose wait is already over", async () => {
 		const h = await startHost();
 		const root = await h.createRoot({ name: "root", cwd: sandbox.work });

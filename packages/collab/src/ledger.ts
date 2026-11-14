@@ -8,7 +8,7 @@ import { initialOwnership, type LeaseEvent, type NodeMeta, type Ownership, trans
 import { type Signed, verifySigned } from "./identity.ts";
 
 /** The part of a node that collaborators see. Local details such as paths and session files stay local. */
-export type SharedMeta = Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "workspace" | "branch" | "status" | "createdAt" | "repo">;
+export type SharedMeta = Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "workspace" | "branch" | "status" | "createdAt" | "repo" | "done">;
 
 export interface Genesis {
 	nodeId: string;
@@ -107,5 +107,7 @@ export function toSharedMeta(node: NodeMeta): SharedMeta {
 		id: node.id, parentId: node.parentId, rootId: node.rootId, kind: node.kind, name: node.name, brief: node.brief,
 		fragments: node.fragments, workspace: node.workspace, branch: node.branch, status: node.status, createdAt: node.createdAt,
 		...(node.repo !== undefined ? { repo: node.repo } : {}),
+		// Whether it has sent its result: a session elsewhere may be waiting on it to start.
+		...(node.done ? { done: true } : {}),
 	};
 }

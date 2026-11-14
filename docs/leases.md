@@ -52,6 +52,7 @@ The owner acts once. That one act is their yes to the release, so it is where th
 - The offer, the request and their answers go through the server; the session itself goes straight between the two machines. Both people need to be online for it to move. A yes given while the other is away takes effect when they are back.
 - A session that is open in its owner's terminal is not sent from under them. It goes when they leave it, and the pane says so.
 - After the move, the previous owner sees the session marked with the new owner's name and can no longer run it, though they can still read it.
+- A session that was waiting on the one handed over still starts when it finishes: its new owner's host says when it has sent its result.
 
 Every step can be repeated safely. If a host crashes partway, the handoff carries on from where it was when the host is back.
 

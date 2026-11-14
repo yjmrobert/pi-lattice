@@ -36,7 +36,7 @@ export interface HostPort {
 	/** A node's conversation, without starting its session. */
 	readMessages(id: string): Promise<unknown[]>;
 	setRemoteRouter(router: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined): void;
-	importRemoteNode(node: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt" | "repo">): void;
+	importRemoteNode(node: Pick<NodeMeta, "id" | "parentId" | "rootId" | "kind" | "name" | "brief" | "fragments" | "owner" | "version" | "status" | "workspace" | "branch" | "createdAt" | "repo" | "done">): void;
 	/** `via`: the previous owner, for mail that came with a session when it changed hands. */
 	deliverExternal(envelope: unknown, recipientId: string, via?: string): void;
 	/** Mail a node has not had yet, which goes with it when it changes hands. */
