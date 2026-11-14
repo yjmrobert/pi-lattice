@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SCHEME, fieldProblem, firstState, type Issue, isClosed, ladder, misfit, misplaced, normalizeScheme, type Scheme, schemeProblems, stateKind, wouldLoop } from "../src/index.ts";
 
-const issue = (number: number, type: string, parent?: number, state = "todo"): Issue => ({ number, title: `#${number}`, body: "", type, state, ...(parent !== undefined ? { parent } : {}), labels: [], fields: {}, author: "yan", createdAt: 0, updatedAt: 0, rev: number });
+const issue = (number: number, type: string, parent?: number, state = "todo"): Issue => ({ number, title: `#${number}`, body: "", type, state, ...(parent !== undefined ? { parent } : {}), labels: [], fields: {}, rank: number, author: "yan", createdAt: 0, updatedAt: 0, rev: number });
 
 describe("the default scheme", () => {
 	it("is epics, features, stories and tasks, with bugs anywhere", () => {

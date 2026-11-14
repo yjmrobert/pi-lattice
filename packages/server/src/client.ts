@@ -3,7 +3,7 @@
  * change it. The copy is what was last heard; when the server cannot be reached it stays, and
  * says so.
  */
-import type { Issue, IssueChange, IssueComment, IssueEvent, NextFilter, Scheme, WorkSession, WorkState } from "@pi-lattice/protocol";
+import type { Issue, IssueChange, IssueComment, IssueEvent, NextFilter, Note, SaidLine, Scheme, WorkSession, WorkState } from "@pi-lattice/protocol";
 import { DEFAULT_SCHEME } from "@pi-lattice/protocol";
 import type { Changes, Signal } from "./http.ts";
 
@@ -73,6 +73,9 @@ export async function joinServer(address: string, name: string): Promise<ServerA
 	return { url, name: taken, token };
 }
 
+/** How many of the last things done to the work a host keeps. */
+const RECENT_MAX = 300;
+
 export class WorkClient {
 	readonly account: ServerAccount;
 	private readonly options: ClientOptions;
@@ -81,6 +84,8 @@ export class WorkClient {
 	private people: WorkState["people"] = [];
 	private sessions: WorkSession[] = [];
 	private hosts: WorkState["hosts"] = [];
+	private recent: IssueEvent[] = [];
+	private seen = 0;
 	private rev = 0;
 	private beat = 0;
 	private connected = false;
@@ -101,7 +106,7 @@ export class WorkClient {
 	state(): WorkState {
 		return {
 			url: this.account.url, me: this.account.name, connected: this.connected, ...(this.problem ? { problem: this.problem } : {}),
-			scheme: this.scheme, issues: [...this.issues.values()].sort((a, b) => a.number - b.number), people: this.people, sessions: this.sessions, hosts: this.hosts,
+			scheme: this.scheme, issues: [...this.issues.values()].sort((a, b) => a.number - b.number), people: this.people, sessions: this.sessions, hosts: this.hosts, recent: this.recent, seen: this.seen,
 		};
 	}
 
@@ -120,11 +125,17 @@ export class WorkClient {
 		this.people = changes.people;
 		this.sessions = changes.sessions;
 		this.hosts = changes.hosts ?? [];
+		// The feed gives what is new; what is kept is the last of everything heard, each event once.
+		const known = new Set(this.recent.map((event) => `${event.rev}:${event.issue}:${event.what}`));
+		this.recent = [...this.recent, ...(changes.events ?? []).filter((event) => !known.has(`${event.rev}:${event.issue}:${event.what}`))].slice(-RECENT_MAX);
+		const seen = Math.max(this.seen, changes.seen ?? 0);
+		const looked = seen !== this.seen;
+		this.seen = seen;
 		this.rev = changes.rev;
 		this.beat = changes.beat;
 		this.connected = true;
 		this.problem = undefined;
-		if (changes.issues.length > 0 || changes.scheme || JSON.stringify([this.rev, this.beat, this.connected, this.people, this.sessions, this.hosts]) !== before) this.emit();
+		if (looked || changes.issues.length > 0 || changes.scheme || JSON.stringify([this.rev, this.beat, this.connected, this.people, this.sessions, this.hosts]) !== before) this.emit();
 	}
 
 	private emit(): void {
@@ -183,31 +194,63 @@ export class WorkClient {
 		return issue;
 	}
 
-	async create(change: IssueChange): Promise<Issue> {
-		return this.wrote((await this.request<{ issue: Issue }>("POST", "/issues", change)).issue);
+	/** `note` on any of these says which session or agent is making the change, and why: both are kept with it. */
+	async create(change: IssueChange, note: Note = {}): Promise<Issue> {
+		return this.wrote((await this.request<{ issue: Issue }>("POST", "/issues", { ...change, ...note })).issue);
 	}
 
-	async update(number: number, change: IssueChange, basedOn?: number): Promise<Issue> {
-		return this.wrote((await this.request<{ issue: Issue }>("PATCH", `/issues/${number}`, { ...change, ...(basedOn !== undefined ? { basedOn } : {}) })).issue);
+	async update(number: number, change: IssueChange, basedOn?: number, note: Note = {}): Promise<Issue> {
+		return this.wrote((await this.request<{ issue: Issue }>("PATCH", `/issues/${number}`, { ...change, ...(basedOn !== undefined ? { basedOn } : {}), ...note })).issue);
 	}
 
-	async comment(number: number, body: string): Promise<IssueComment> {
-		return (await this.request<{ comment: IssueComment }>("POST", `/issues/${number}/comments`, { body })).comment;
+	async comment(number: number, body: string, note: Note = {}): Promise<IssueComment> {
+		return (await this.request<{ comment: IssueComment }>("POST", `/issues/${number}/comments`, { body, ...note })).comment;
 	}
 
-	/** An issue with what was said on it and everything done to it. */
-	read(number: number): Promise<{ issue: Issue; comments: IssueComment[]; history: IssueEvent[] }> {
-		return this.request("GET", `/issues/${number}`);
+	/** An issue with what was said on it and everything done to it. `as` is the agent looking, when it holds the issue from a shell. */
+	read(number: number, as?: string): Promise<{ issue: Issue; comments: IssueComment[]; history: IssueEvent[]; said: SaidLine[] }> {
+		return this.request("GET", `/issues/${number}${as ? `?as=${encodeURIComponent(as)}` : ""}`);
 	}
 
 	/** A session was put on an issue, or reported its result: the server applies the scheme's rules. */
-	async session(number: number, event: "start" | "report"): Promise<Issue> {
-		return this.wrote((await this.request<{ issue: Issue }>("POST", `/issues/${number}/session`, { event })).issue);
+	async session(number: number, event: "start" | "report", note: Note = {}): Promise<Issue> {
+		return this.wrote((await this.request<{ issue: Issue }>("POST", `/issues/${number}/session`, { event, ...note })).issue);
+	}
+
+	/** The work on an issue is finished: what was done, how it was checked, where to look. */
+	async done(number: number, result: { summary: string; checks?: string; url?: string }, note: Note = {}): Promise<Issue> {
+		return this.wrote((await this.request<{ issue: Issue }>("POST", `/issues/${number}/done`, { ...result, ...note })).issue);
+	}
+
+	/** Give an issue back, saying why. */
+	async drop(number: number, why: string, as?: string): Promise<Issue> {
+		return this.wrote((await this.request<{ issue: Issue }>("POST", `/issues/${number}/drop`, { why, ...(as ? { as } : {}) })).issue);
+	}
+
+	/** This person says something about an issue. */
+	async say(number: number, text: string): Promise<SaidLine> {
+		const { line, issue } = await this.request<{ line: SaidLine; issue: Issue }>("POST", `/issues/${number}/said`, { text });
+		await this.wrote(issue);
+		return line;
+	}
+
+	/** Keep a line a person said as a direction that stands, or lift it. */
+	async stand(line: number, stands: boolean, note: Note = {}): Promise<Issue> {
+		return this.wrote((await this.request<{ issue: Issue }>("PATCH", `/said/${line}`, { stands, ...note })).issue);
+	}
+
+	/** This person has looked at what changed. */
+	async looked(): Promise<void> {
+		const { seen } = await this.request<{ seen: number }>("POST", "/seen", {});
+		if (seen !== this.seen) {
+			this.seen = seen;
+			this.emit();
+		}
 	}
 
 	/** Take the next issue that is ready, started and assigned to this person. None when nothing is ready. */
-	async next(filter: NextFilter): Promise<{ issue?: Issue; waiting: number }> {
-		const result = await this.request<{ issue?: Issue; waiting: number }>("POST", "/next", filter);
+	async next(filter: NextFilter, note: Note = {}): Promise<{ issue?: Issue; waiting: number }> {
+		const result = await this.request<{ issue?: Issue; waiting: number }>("POST", "/next", { ...filter, ...note });
 		if (result.issue) await this.wrote(result.issue);
 		return result;
 	}

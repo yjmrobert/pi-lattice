@@ -8,7 +8,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { Issue, IssueChange, Scheme, WorkHost, WorkSession, WorkState } from "@pi-lattice/protocol";
+import type { Issue, IssueChange, IssueEvent, Note, Scheme, WorkHost, WorkSession, WorkState } from "@pi-lattice/protocol";
 import { Tracker, WorkError } from "./tracker.ts";
 
 export interface ServerOptions {
@@ -22,6 +22,8 @@ export interface ServerOptions {
 	/** The longest a `/changes` request waits. */
 	maxWaitMs?: number;
 	now?: () => number;
+	/** How long an agent with no host keeps an issue after its last word on it. */
+	leaseMs?: number;
 	/** Said to anyone who asks what this is, along with the service's name. Nothing secret. */
 	info?: Record<string, unknown>;
 }
@@ -38,6 +40,10 @@ export interface Changes {
 	people: WorkState["people"];
 	sessions: WorkSession[];
 	hosts: WorkHost[];
+	/** What was done to issues since the revision asked from, oldest first; the last of it when there is much. */
+	events: IssueEvent[];
+	/** The revision the asker last looked at the work at. */
+	seen: number;
 }
 
 /** Something one host hands the server for another: an offer, a request, an answer. Kept until asked for, and not for long. */
@@ -80,7 +86,7 @@ export class WorkServer {
 		this.now = options.now ?? Date.now;
 		this.ttl = options.sessionTtlMs ?? 45_000;
 		this.heard = this.now();
-		this.tracker = new Tracker(options.file, { now: this.now });
+		this.tracker = new Tracker(options.file, { now: this.now, ...(options.leaseMs !== undefined ? { leaseMs: options.leaseMs } : {}) });
 		this.tracker.onChange = () => this.wake();
 	}
 
@@ -123,6 +129,8 @@ export class WorkServer {
 	private expire(): void {
 		const cutoff = this.now() - this.ttl;
 		let changed = false;
+		// An agent that took an issue from a shell and went quiet loses it. The change wakes whoever is waiting.
+		this.tracker.expire();
 		for (const [key, host] of this.hosts) {
 			if (host.at < cutoff) {
 				this.hosts.delete(key);
@@ -147,7 +155,7 @@ export class WorkServer {
 		}
 	}
 
-	private changes(after: number): Changes {
+	private changes(after: number, who: string): Changes {
 		const tracker = this.tracker;
 		return {
 			rev: tracker.rev,
@@ -157,6 +165,8 @@ export class WorkServer {
 			people: tracker.people().map((person) => ({ ...person, online: this.online.has(person.name) })),
 			sessions: [...this.hosts.values()].flatMap((host) => host.sessions),
 			hosts: [...this.hosts.values()].flatMap((host) => (host.peer ? [host.peer] : [])),
+			events: tracker.eventsAfter(after, 200),
+			seen: tracker.seenOf(who),
 		};
 	}
 
@@ -208,6 +218,11 @@ export class WorkServer {
 			this.touch(who);
 			this.heard = this.now();
 			const number = Number(parts[1]);
+			// Who made a change besides the person, and why: said with the change, kept with it.
+			const short = (value: unknown, max: number): string | undefined => (typeof value === "string" && value.trim() !== "" ? value.trim().slice(0, max) : undefined);
+			const { why: saidWhy, as: saidAs, ...rest } = body as Record<string, unknown>;
+			const [why, as] = [short(saidWhy, 500), short(saidAs, 100)];
+			const note: Note = { ...(why ? { why } : {}), ...(as ? { as } : {}) };
 			switch (route) {
 				case "GET /changes": {
 					const after = Number(url.searchParams.get("after") ?? 0) || 0;
@@ -216,25 +231,40 @@ export class WorkServer {
 					if (wait > 0 && this.tracker.rev <= after && this.beat <= beat) await this.waitFor(wait, request);
 					// Still here: being asked is being online.
 					this.seen.set(who, this.now());
-					return send(200, this.changes(after));
+					return send(200, this.changes(after, who));
 				}
-				case "GET /issues/:n":
-					return send(200, { issue: this.found(number), comments: this.tracker.comments(number), history: this.tracker.history(number) });
+				case "GET /issues/:n": {
+					// An agent that holds it on a lease is still there when it looks.
+					const looking = short(url.searchParams.get("as"), 100);
+					if (looking && Number.isInteger(number)) this.tracker.touch(number, looking);
+					return send(200, { issue: this.found(number), comments: this.tracker.comments(number), history: this.tracker.history(number), said: this.tracker.said(number) });
+				}
 				case "POST /issues":
-					return send(201, { issue: this.tracker.create(who, body as IssueChange) });
+					return send(201, { issue: this.tracker.create(who, rest as IssueChange, note) });
 				case "PATCH /issues/:n": {
-					const { basedOn, ...change } = body as IssueChange & { basedOn?: number };
-					return send(200, { issue: this.tracker.update(who, number, change, typeof basedOn === "number" ? basedOn : undefined) });
+					const { basedOn, ...change } = rest as IssueChange & { basedOn?: number };
+					return send(200, { issue: this.tracker.update(who, number, change, typeof basedOn === "number" ? basedOn : undefined, note) });
 				}
 				case "POST /issues/:n/comments":
-					return send(201, { comment: this.tracker.comment(who, number, body.body) });
+					return send(201, { comment: this.tracker.comment(who, number, body.body, note) });
 				case "POST /issues/:n/session":
 					if (body.event !== "start" && body.event !== "report") throw new WorkError(400, 'The event is "start" or "report".');
-					return send(200, { issue: this.tracker.session(who, number, body.event) });
+					return send(200, { issue: this.tracker.session(who, number, body.event, note) });
+				case "POST /issues/:n/done":
+					return send(200, { issue: this.tracker.done(who, number, rest, note) });
+				case "POST /issues/:n/drop":
+					return send(200, { issue: this.tracker.drop(who, number, saidWhy, as ? { as } : {}) });
+				case "POST /issues/:n/said":
+					return send(201, { line: this.tracker.say(who, number, body.text), issue: this.found(number) });
+				case "PATCH /said/:n":
+					if (typeof body.stands !== "boolean") throw new WorkError(400, 'Say whether it stands: "stands" is true or false.');
+					return send(200, { issue: this.tracker.stand(who, number, body.stands, note) });
+				case "POST /seen":
+					return send(200, { seen: this.tracker.seen(who) });
 				case "POST /next": {
 					const text = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
 					const [repo, type, label] = [text(body.repo), text(body.type), text(body.label)];
-					return send(200, this.tracker.next(who, { ...(repo ? { repo } : {}), ...(type ? { type } : {}), ...(label ? { label } : {}), ...(Number.isInteger(body.under) ? { under: body.under as number } : {}) }));
+					return send(200, this.tracker.next(who, { ...(repo ? { repo } : {}), ...(type ? { type } : {}), ...(label ? { label } : {}), ...(Number.isInteger(body.under) ? { under: body.under as number } : {}), ...(body.lease === true ? { lease: true } : {}) }, note));
 				}
 				case "PUT /scheme":
 					return send(200, { scheme: this.tracker.setScheme(who, body) });

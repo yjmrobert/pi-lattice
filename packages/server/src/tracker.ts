@@ -7,7 +7,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { DEFAULT_SCHEME, fieldProblem, firstState, type Issue, type IssueChange, type IssueComment, type IssueEvent, isClosed, misplaced, type NextFilter, normalizeScheme, repoOf, type Scheme, schemeProblems, stateKind, takeable, waitingOn, wouldLoop } from "@pi-lattice/protocol";
+import { DEFAULT_SCHEME, type Direction, fieldProblem, firstState, type Issue, type IssueChange, type IssueComment, type IssueEvent, type IssueResult, isClosed, misplaced, type NextFilter, type Note, normalizeScheme, type Place, repoOf, type SaidLine, type Scheme, schemeProblems, stateKind, takeable, treeOrder, waitingOn, wouldLoop } from "@pi-lattice/protocol";
 
 /** A request that cannot be done, with the HTTP status that says what kind of problem it is. */
 export class WorkError extends Error {
@@ -44,17 +44,38 @@ const MIGRATIONS: string[] = [
 	ALTER TABLE issues ADD COLUMN waits TEXT NOT NULL DEFAULT '[]';
 	ALTER TABLE issues ADD COLUMN repo TEXT;`,
 	`ALTER TABLE members ADD COLUMN key TEXT;`,
+	// Order, results, what people said, why a change was made, what each person has seen, and agents that hold an issue from a shell.
+	`ALTER TABLE issues ADD COLUMN rank REAL NOT NULL DEFAULT 0;
+	UPDATE issues SET rank = number;
+	ALTER TABLE issues ADD COLUMN result TEXT;
+	ALTER TABLE issues ADD COLUMN agent TEXT;
+	ALTER TABLE issues ADD COLUMN lease INTEGER;
+	ALTER TABLE events ADD COLUMN why TEXT;
+	ALTER TABLE events ADD COLUMN as_ TEXT;
+	CREATE INDEX events_rev ON events (rev);
+	ALTER TABLE members ADD COLUMN seen INTEGER NOT NULL DEFAULT 0;
+	CREATE TABLE said (id INTEGER PRIMARY KEY AUTOINCREMENT, issue INTEGER NOT NULL, who TEXT NOT NULL, text TEXT NOT NULL, at INTEGER NOT NULL, stands INTEGER NOT NULL DEFAULT 0);
+	CREATE INDEX said_issue ON said (issue);`,
 ];
 
 const TITLE_MAX = 200;
 const BODY_MAX = 64 * 1024;
 const LABELS_MAX = 20;
 const WAITS_MAX = 50;
+const SAID_MAX = 2000;
+const WHY_MAX = 500;
+/** How long an agent with no host keeps an issue after its last word on it. */
+export const LEASE_MS = 30 * 60_000;
 const NAME = /^[a-z0-9][a-z0-9._-]{0,31}$/i;
 const hash = (token: string): string => createHash("sha256").update(token).digest("hex");
 
 type Row = Record<string, unknown>;
-const toIssue = (row: Row): Issue => ({
+const toEvent = (row: Row): IssueEvent => ({
+	rev: row.rev as number, issue: row.issue as number, who: row.who as string, at: row.at as number, what: row.what as string,
+	...(row.was !== null ? { from: row.was as string } : {}), ...(row.now !== null ? { to: row.now as string } : {}),
+	...(row.why ? { why: row.why as string } : {}), ...(row.as_ ? { as: row.as_ as string } : {}),
+});
+const toIssue = (row: Row, directions?: Direction[]): Issue => ({
 	number: row.number as number,
 	title: row.title as string,
 	body: row.body as string,
@@ -67,6 +88,10 @@ const toIssue = (row: Row): Issue => ({
 	...(row.human ? { human: true as const } : {}),
 	...((row.waits as string) !== "[]" ? { waitsOn: JSON.parse(row.waits as string) as number[] } : {}),
 	...(row.repo !== null ? { repo: row.repo as string } : {}),
+	rank: row.rank as number,
+	...(row.result ? { result: JSON.parse(row.result as string) as IssueResult } : {}),
+	...(directions && directions.length > 0 ? { directions } : {}),
+	...(row.agent ? { agent: row.agent as string } : {}),
 	author: row.author as string,
 	createdAt: row.created_at as number,
 	updatedAt: row.updated_at as number,
@@ -76,11 +101,13 @@ const toIssue = (row: Row): Issue => ({
 export class Tracker {
 	private readonly db: DatabaseSync;
 	private readonly now: () => number;
+	private readonly leaseMs: number;
 	private cachedScheme: Scheme | undefined;
 	/** Called after every change, with the new revision. */
 	onChange: (rev: number) => void = () => {};
 
-	constructor(file: string, options: { now?: () => number } = {}) {
+	constructor(file: string, options: { now?: () => number; leaseMs?: number } = {}) {
+		this.leaseMs = options.leaseMs ?? LEASE_MS;
 		if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true });
 		this.db = new DatabaseSync(file);
 		this.now = options.now ?? Date.now;
@@ -142,7 +169,8 @@ export class Tracker {
 			throw new WorkError(409, `Someone is already "${name}" on this server. If that is you on another machine, copy your lattice home's server.json from it; otherwise choose another name.`);
 		}
 		const token = randomBytes(32).toString("hex");
-		this.change(() => this.db.prepare("INSERT INTO members (name, token_hash, joined_at) VALUES (?, ?, ?)").run(name, hash(token), this.now()));
+		// What is there when someone joins is not news to them.
+		this.change((rev) => this.db.prepare("INSERT INTO members (name, token_hash, joined_at, seen) VALUES (?, ?, ?, ?)").run(name, hash(token), this.now(), rev));
 		return { name, token };
 	}
 
@@ -176,6 +204,18 @@ export class Tracker {
 	team(): { name: string; secret: string } {
 		if (this.meta("team_secret") === undefined) this.setMeta("team_secret", randomBytes(32).toString("base64url"));
 		return { name: "team", secret: this.meta("team_secret") as string };
+	}
+
+	/** The revision a person last looked at the work at. */
+	seenOf(who: string): number {
+		return (this.db.prepare("SELECT seen FROM members WHERE name = ?").get(who) as { seen: number } | undefined)?.seen ?? 0;
+	}
+
+	/** A person has looked: nothing before now is new to them. */
+	seen(who: string): number {
+		const rev = this.rev;
+		this.db.prepare("UPDATE members SET seen = ? WHERE name = ?").run(rev, who);
+		return rev;
 	}
 
 	members(): string[] {
@@ -212,9 +252,22 @@ export class Tracker {
 
 	// Issues
 
+	/** What people said that stands, by the issue it stands on. */
+	private standing(only?: number): Map<number, Direction[]> {
+		const rows = (only === undefined ? this.db.prepare("SELECT id, issue, who, text, at FROM said WHERE stands = 1 ORDER BY id").all() : this.db.prepare("SELECT id, issue, who, text, at FROM said WHERE stands = 1 AND issue = ? ORDER BY id").all(only)) as Row[];
+		const out = new Map<number, Direction[]>();
+		for (const row of rows) out.set(row.issue as number, [...(out.get(row.issue as number) ?? []), { id: row.id as number, who: row.who as string, text: row.text as string, at: row.at as number }]);
+		return out;
+	}
+
+	private all(): Issue[] {
+		const standing = this.standing();
+		return (this.db.prepare("SELECT * FROM issues ORDER BY number").all() as Row[]).map((row) => toIssue(row, standing.get(row.number as number)));
+	}
+
 	issue(number: number): Issue | undefined {
 		const row = this.db.prepare("SELECT * FROM issues WHERE number = ?").get(number) as Row | undefined;
-		return row ? toIssue(row) : undefined;
+		return row ? toIssue(row, this.standing(number).get(number)) : undefined;
 	}
 
 	private must(number: number): Issue {
@@ -225,11 +278,12 @@ export class Tracker {
 
 	/** Every issue changed after a revision, oldest change first. */
 	issuesAfter(rev: number): Issue[] {
-		return (this.db.prepare("SELECT * FROM issues WHERE rev > ? ORDER BY rev, number").all(rev) as Row[]).map(toIssue);
+		const standing = this.standing();
+		return (this.db.prepare("SELECT * FROM issues WHERE rev > ? ORDER BY rev, number").all(rev) as Row[]).map((row) => toIssue(row, standing.get(row.number as number)));
 	}
 
 	children(number: number): Issue[] {
-		return (this.db.prepare("SELECT * FROM issues WHERE parent = ? ORDER BY number").all(number) as Row[]).map(toIssue);
+		return (this.db.prepare("SELECT * FROM issues WHERE parent = ? ORDER BY rank, number").all(number) as Row[]).map((row) => toIssue(row));
 	}
 
 	comments(number: number): IssueComment[] {
@@ -237,14 +291,51 @@ export class Tracker {
 	}
 
 	history(number: number): IssueEvent[] {
-		return (this.db.prepare("SELECT rev, issue, who, at, what, was, now FROM events WHERE issue = ? ORDER BY id").all(number) as Row[]).map((row) => ({
-			rev: row.rev as number, issue: row.issue as number, who: row.who as string, at: row.at as number, what: row.what as string,
-			...(row.was !== null ? { from: row.was as string } : {}), ...(row.now !== null ? { to: row.now as string } : {}),
-		}));
+		return (this.db.prepare("SELECT rev, issue, who, at, what, was, now, why, as_ FROM events WHERE issue = ? ORDER BY id").all(number) as Row[]).map(toEvent);
+	}
+
+	/** The last things done to issues after a revision, oldest first, at most `limit` of them. */
+	eventsAfter(rev: number, limit = 200): IssueEvent[] {
+		return (this.db.prepare("SELECT rev, issue, who, at, what, was, now, why, as_ FROM events WHERE rev > ? AND issue > 0 ORDER BY id DESC LIMIT ?").all(rev, limit) as Row[]).map(toEvent).reverse();
+	}
+
+	/** What people said on an issue, standing or not. */
+	said(number: number): SaidLine[] {
+		return (this.db.prepare("SELECT id, issue, who, text, at, stands FROM said WHERE issue = ? ORDER BY id").all(number) as Row[]).map((row) => ({ id: row.id as number, issue: row.issue as number, who: row.who as string, text: row.text as string, at: row.at as number, stands: row.stands === 1 }));
+	}
+
+	private note: Note = {};
+
+	/** Do something as a session or an agent, for a reason: both are recorded with every change it makes. */
+	private with<T>(note: Note, work: () => T): T {
+		const before = this.note;
+		const clean = (value: unknown, max: number): string | undefined => (typeof value === "string" && value.trim() !== "" ? value.trim().slice(0, max) : undefined);
+		const [why, as] = [clean(note.why, WHY_MAX), clean(note.as, 100)];
+		this.note = { ...(why ? { why } : {}), ...(as ? { as } : {}) };
+		try {
+			return work();
+		} finally {
+			this.note = before;
+		}
 	}
 
 	private record(rev: number, issue: number, who: string, what: string, was?: string, now?: string): void {
-		this.db.prepare("INSERT INTO events (rev, issue, who, at, what, was, now) VALUES (?, ?, ?, ?, ?, ?, ?)").run(rev, issue, who, this.now(), what, was ?? null, now ?? null);
+		this.db.prepare("INSERT INTO events (rev, issue, who, at, what, was, now, why, as_) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(rev, issue, who, this.now(), what, was ?? null, now ?? null, this.note.why ?? null, this.note.as ?? null);
+	}
+
+	/** The rank that puts an issue where it is asked to go among those under a parent. */
+	private rankAt(parent: number | undefined, place: Place | undefined, self?: number): number {
+		const rows = (parent === undefined ? this.db.prepare("SELECT number, rank FROM issues WHERE parent IS NULL ORDER BY rank, number").all() : this.db.prepare("SELECT number, rank FROM issues WHERE parent = ? ORDER BY rank, number").all(parent)) as Array<{ number: number; rank: number }>;
+		const others = rows.filter((row) => row.number !== self);
+		const [first, last] = [others[0], others.at(-1)];
+		if (place === undefined || place === "last") return last ? last.rank + 1 : 1;
+		if (place === "first") return first ? first.rank - 1 : 1;
+		if (typeof place !== "object" || place === null) throw new WorkError(400, 'A place is "first", "last", or the issue to go before or after.');
+		const beside = "before" in place ? place.before : place.after;
+		const at = others.findIndex((row) => row.number === beside);
+		if (at < 0) throw new WorkError(400, `#${String(beside)} is not beside it: an issue is placed among the issues under the same parent.`);
+		const [a, b] = "before" in place ? [others[at - 1], others[at]] : [others[at], others[at + 1]];
+		return a && b ? (a.rank + b.rank) / 2 : a ? a.rank + 1 : (b as { rank: number }).rank - 1;
 	}
 
 	private text(value: unknown, what: string, max: number, empty: boolean): string {
@@ -304,7 +395,11 @@ export class Tracker {
 		return parent;
 	}
 
-	create(who: string, change: IssueChange): Issue {
+	create(who: string, change: IssueChange, note: Note = {}): Issue {
+		return this.with(note, () => this.createIssue(who, change));
+	}
+
+	private createIssue(who: string, change: IssueChange): Issue {
 		const scheme = this.scheme;
 		const title = this.text(change.title, "A title", TITLE_MAX, false);
 		const body = change.body === undefined ? "" : this.text(change.body, "A body", BODY_MAX, true);
@@ -323,12 +418,13 @@ export class Tracker {
 		if (problem) throw new WorkError(400, problem);
 		const waits = change.waitsOn === undefined ? [] : this.waits(undefined, change.waitsOn);
 		const repo = change.repo === undefined || change.repo === null ? undefined : this.repo(change.repo);
+		const rank = this.rankAt(parent?.number, change.place);
 		return this.change((rev) => {
 			const at = this.now();
 			const number = Number((this.db.prepare("SELECT COALESCE(MAX(number), 0) + 1 AS next FROM issues").get() as { next: number }).next);
 			this.db
-				.prepare("INSERT INTO issues (number, title, body, type, state, parent, assignee, labels, fields, human, waits, repo, author, created_at, updated_at, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-				.run(number, title, body, type, state, parent?.number ?? null, assignee ?? null, JSON.stringify(labels), JSON.stringify(fields), change.human === true ? 1 : 0, JSON.stringify(waits), repo ?? null, who, at, at, rev);
+				.prepare("INSERT INTO issues (number, title, body, type, state, parent, assignee, labels, fields, human, waits, repo, rank, author, created_at, updated_at, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+				.run(number, title, body, type, state, parent?.number ?? null, assignee ?? null, JSON.stringify(labels), JSON.stringify(fields), change.human === true ? 1 : 0, JSON.stringify(waits), repo ?? null, rank, who, at, at, rev);
 			this.record(rev, number, who, "created");
 			return this.must(number);
 		});
@@ -338,7 +434,11 @@ export class Tracker {
 	 * Change an issue. `basedOn` is the revision the caller last saw it at: when the issue has
 	 * changed since, nothing is done and the caller is told to look again.
 	 */
-	update(who: string, number: number, change: IssueChange, basedOn?: number): Issue {
+	update(who: string, number: number, change: IssueChange, basedOn?: number, note: Note = {}): Issue {
+		return this.with(note, () => this.updateIssue(who, number, change, basedOn));
+	}
+
+	private updateIssue(who: string, number: number, change: IssueChange, basedOn?: number): Issue {
 		const before = this.must(number);
 		if (basedOn !== undefined && before.rev > basedOn) throw new WorkError(409, `#${number} has changed since you last saw it. Look at it again, then make the change.`);
 		const scheme = this.scheme;
@@ -390,6 +490,8 @@ export class Tracker {
 			const problem = fieldProblem(scheme, after.type, after.fields, this.members());
 			if (problem) throw new WorkError(400, problem);
 		}
+		// Moved under another parent, it goes last there unless it is said where.
+		if (change.place !== undefined || after.parent !== before.parent) after.rank = this.rankAt(after.parent, change.place, number);
 		const changes: Array<[what: string, was: string | undefined, now: string | undefined]> = [];
 		const note = (what: string, was: unknown, now: unknown): void => {
 			const [a, b] = [was === undefined ? undefined : String(was), now === undefined ? undefined : String(now)];
@@ -405,21 +507,31 @@ export class Tracker {
 		note("human", before.human ? "yes" : undefined, after.human ? "yes" : undefined);
 		note("waits on", before.waitsOn?.map((other) => `#${other}`).join(", "), after.waitsOn?.map((other) => `#${other}`).join(", "));
 		note("repo", before.repo, after.repo);
+		if (after.rank !== before.rank && after.parent === before.parent) {
+			const place = change.place;
+			changes.push(["order", undefined, place === "first" || place === "last" ? place : place && "before" in place ? `before #${place.before}` : place && "after" in place ? `after #${place.after}` : undefined]);
+		}
 		for (const name of new Set([...Object.keys(before.fields), ...Object.keys(after.fields)])) note(`field:${name}`, before.fields[name], after.fields[name]);
 		if (changes.length === 0) return before;
 		return this.change((rev) => {
 			this.db
-				.prepare("UPDATE issues SET title = ?, body = ?, type = ?, state = ?, parent = ?, assignee = ?, labels = ?, fields = ?, human = ?, waits = ?, repo = ?, updated_at = ?, rev = ? WHERE number = ?")
-				.run(after.title, after.body, after.type, after.state, after.parent ?? null, after.assignee ?? null, JSON.stringify(after.labels), JSON.stringify(after.fields), after.human ? 1 : 0, JSON.stringify(after.waitsOn ?? []), after.repo ?? null, this.now(), rev, number);
+				.prepare("UPDATE issues SET title = ?, body = ?, type = ?, state = ?, parent = ?, assignee = ?, labels = ?, fields = ?, human = ?, waits = ?, repo = ?, rank = ?, updated_at = ?, rev = ? WHERE number = ?")
+				.run(after.title, after.body, after.type, after.state, after.parent ?? null, after.assignee ?? null, JSON.stringify(after.labels), JSON.stringify(after.fields), after.human ? 1 : 0, JSON.stringify(after.waitsOn ?? []), after.repo ?? null, after.rank, this.now(), rev, number);
+				this.hold(number);
 			for (const [what, was, now] of changes) this.record(rev, number, who, what, was, now);
 			return this.must(number);
 		});
 	}
 
-	comment(who: string, number: number, body: unknown): IssueComment {
+	comment(who: string, number: number, body: unknown, note: Note = {}): IssueComment {
+		return this.with(note, () => this.addComment(who, number, body));
+	}
+
+	private addComment(who: string, number: number, body: unknown): IssueComment {
 		this.must(number);
 		const text = this.text(body, "A comment", BODY_MAX, false);
 		return this.change((rev) => {
+			this.hold(number);
 			const at = this.now();
 			const { lastInsertRowid } = this.db.prepare("INSERT INTO comments (issue, author, body, at) VALUES (?, ?, ?, ?)").run(number, who, text, at);
 			this.db.prepare("UPDATE issues SET updated_at = ?, rev = ? WHERE number = ?").run(at, rev, number);
@@ -434,9 +546,14 @@ export class Tracker {
 	 * on nothing unfinished. It is started and assigned in the same step, so two sessions asking
 	 * at once never get the same one. `waiting` counts what was passed over only for waiting.
 	 */
-	next(who: string, filter: NextFilter = {}): { issue?: Issue; waiting: number } {
+	next(who: string, filter: NextFilter = {}, note: Note = {}): { issue?: Issue; waiting: number } {
+		return this.with(note, () => this.takeNext(who, filter));
+	}
+
+	private takeNext(who: string, filter: NextFilter): { issue?: Issue; waiting: number } {
 		const scheme = this.scheme;
-		const all = (this.db.prepare("SELECT * FROM issues ORDER BY number").all() as Row[]).map(toIssue);
+		// In the order the tree is read: the first ready issue of the first branch that has one.
+		const all = treeOrder(this.all());
 		const by = new Map(all.map((issue) => [issue.number, issue]));
 		if (filter.under !== undefined && !by.has(filter.under)) throw new WorkError(404, `There is no issue #${filter.under}.`);
 		const unfinishedBelow = new Set(all.filter((issue) => issue.parent !== undefined && !isClosed(scheme, issue)).map((issue) => issue.parent as number));
@@ -456,7 +573,108 @@ export class Tracker {
 		const ready = open.find((issue) => waitingOn(scheme, issue, by).length === 0);
 		if (!ready) return { waiting: open.length };
 		const start = scheme.rules.onStart;
-		return { issue: this.update(who, ready.number, { assignee: who, ...(start && scheme.states.some((state) => state.name === start) ? { state: start } : {}) }), waiting: 0 };
+		const taken = this.updateIssue(who, ready.number, { assignee: who, ...(start && scheme.states.some((state) => state.name === start) ? { state: start } : {}) });
+		// An agent with no host says it is still there by speaking of the issue; one that goes quiet loses it.
+		if (!filter.lease || !this.note.as) return { issue: taken, waiting: 0 };
+		return { issue: this.change((rev) => {
+			this.db.prepare("UPDATE issues SET agent = ?, lease = ?, rev = ? WHERE number = ?").run(this.note.as as string, this.now() + this.leaseMs, rev, ready.number);
+			return this.must(ready.number);
+		}), waiting: 0 };
+	}
+
+	/** Whoever holds an issue on a lease spoke of it: the lease starts again. */
+	private hold(number: number): void {
+		if (this.note.as) this.db.prepare("UPDATE issues SET lease = ? WHERE number = ? AND agent = ?").run(this.now() + this.leaseMs, number, this.note.as);
+	}
+
+	/** An agent looked at the issue it holds. */
+	touch(number: number, as: string): void {
+		this.db.prepare("UPDATE issues SET lease = ? WHERE number = ? AND agent = ?").run(this.now() + this.leaseMs, number, as);
+	}
+
+	/**
+	 * The work on an issue is finished, as whoever did it says: what was done, how it was checked,
+	 * where to look. It is kept on the issue, and the issue moves on by the scheme's rule for a result.
+	 */
+	done(who: string, number: number, result: { summary?: unknown; checks?: unknown; url?: unknown }, note: Note = {}): Issue {
+		return this.with(note, () => {
+			const issue = this.must(number);
+			const scheme = this.scheme;
+			if (isClosed(scheme, issue)) throw new WorkError(400, `#${number} is already ${issue.state}.`);
+			const summary = this.text(result.summary, "A summary", BODY_MAX, false).trim();
+			const optional = (value: unknown, what: string): string | undefined => (value === undefined || value === null || value === "" ? undefined : this.text(value, what, BODY_MAX, false));
+			const [checks, url] = [optional(result.checks, "How it was checked"), optional(result.url, "Where to look")];
+			const kept: IssueResult = { summary, ...(checks ? { checks } : {}), ...(url ? { url } : {}), by: this.note.as ?? who, at: this.now() };
+			const target = scheme.rules.onReport;
+			const state = target && scheme.states.some((entry) => entry.name === target) ? target : issue.state;
+			return this.change((rev) => {
+				this.db.prepare("UPDATE issues SET result = ?, state = ?, agent = NULL, lease = NULL, updated_at = ?, rev = ? WHERE number = ?").run(JSON.stringify(kept), state, this.now(), rev, number);
+				this.record(rev, number, who, "result", undefined, summary.split("\n")[0]?.slice(0, 200));
+				if (state !== issue.state) this.record(rev, number, who, "state", issue.state, state);
+				return this.must(number);
+			});
+		});
+	}
+
+	/** Give an issue back: nobody is on it, and it can be taken again. Why is kept on it, for whoever takes it next. */
+	drop(who: string, number: number, why: unknown, note: Note = {}): Issue {
+		const reason = this.text(why, "Why", WHY_MAX, false).trim();
+		return this.with({ ...note, why: reason }, () => {
+			const issue = this.must(number);
+			const scheme = this.scheme;
+			if (isClosed(scheme, issue)) throw new WorkError(400, `#${number} is already ${issue.state}.`);
+			const take = scheme.rules.take;
+			const state = take && scheme.states.some((entry) => entry.name === take) ? take : firstState(scheme);
+			return this.change((rev) => {
+				const at = this.now();
+				this.db.prepare("UPDATE issues SET state = ?, assignee = NULL, agent = NULL, lease = NULL, updated_at = ?, rev = ? WHERE number = ?").run(state, at, rev, number);
+				this.db.prepare("INSERT INTO comments (issue, author, body, at) VALUES (?, ?, ?, ?)").run(number, who, `${this.note.as ?? who} gave this back: ${reason}`, at);
+				this.record(rev, number, who, "gave back", issue.state, state);
+				return this.must(number);
+			});
+		});
+	}
+
+	/** Take back what agents hold and have gone quiet on. Returns the issues that were. */
+	expire(): Issue[] {
+		const quiet = this.db.prepare("SELECT number, agent, assignee, author FROM issues WHERE lease IS NOT NULL AND lease < ?").all(this.now()) as Array<{ number: number; agent: string | null; assignee: string | null; author: string }>;
+		const out: Issue[] = [];
+		for (const row of quiet) {
+			try {
+				out.push(this.drop(row.assignee ?? row.author, row.number, "it went quiet", { as: row.agent ?? "an agent" }));
+			} catch {
+				this.db.prepare("UPDATE issues SET lease = NULL, agent = NULL WHERE number = ?").run(row.number);
+			}
+		}
+		return out;
+	}
+
+	/** A person says something about an issue. It is kept, in their words; whether it stands is decided after. */
+	say(who: string, number: number, text: unknown): SaidLine {
+		this.must(number);
+		const line = this.text(text, "What is said", SAID_MAX, false).trim();
+		return this.change((rev) => {
+			const at = this.now();
+			const { lastInsertRowid } = this.db.prepare("INSERT INTO said (issue, who, text, at) VALUES (?, ?, ?, ?)").run(number, who, line, at);
+			this.db.prepare("UPDATE issues SET updated_at = ?, rev = ? WHERE number = ?").run(at, rev, number);
+			this.record(rev, number, who, "said", undefined, line.slice(0, 200));
+			return { id: Number(lastInsertRowid), issue: number, who, text: line, at, stands: false };
+		});
+	}
+
+	/** Keep a line a person said as a direction that stands on its issue, or lift it. The words are theirs and are not changed. */
+	stand(who: string, line: number, stands: boolean, note: Note = {}): Issue {
+		return this.with(note, () => {
+			const row = this.db.prepare("SELECT issue, text, stands FROM said WHERE id = ?").get(line) as { issue: number; text: string; stands: number } | undefined;
+			if (!row) throw new WorkError(404, `Nobody said a line ${line}. Only what a person said can stand as a direction.`);
+			if ((row.stands === 1) === stands) return this.must(row.issue);
+			return this.change((rev) => {
+				this.db.prepare("UPDATE said SET stands = ? WHERE id = ?").run(stands ? 1 : 0, line);
+				this.db.prepare("UPDATE issues SET updated_at = ?, rev = ? WHERE number = ?").run(this.now(), rev, row.issue);
+				this.record(rev, row.issue, who, "direction", stands ? undefined : row.text.slice(0, 200), stands ? row.text.slice(0, 200) : undefined);
+				return this.must(row.issue);
+			});
+		});
 	}
 
 	/**
@@ -464,7 +682,11 @@ export class Tracker {
 	 * nobody has started; a result moves it on, unless it is finished already. Anything the
 	 * rules do not cover, or that would be refused, leaves the issue as it is.
 	 */
-	session(who: string, number: number, event: "start" | "report"): Issue {
+	session(who: string, number: number, event: "start" | "report", note: Note = {}): Issue {
+		return this.with(note, () => this.sessionDid(who, number, event));
+	}
+
+	private sessionDid(who: string, number: number, event: "start" | "report"): Issue {
 		const issue = this.must(number);
 		const scheme = this.scheme;
 		const target = event === "start" ? scheme.rules.onStart : scheme.rules.onReport;
@@ -472,7 +694,7 @@ export class Tracker {
 		if (event === "start" && stateKind(scheme, issue.state) !== "open") return issue;
 		if (event === "report" && isClosed(scheme, issue)) return issue;
 		try {
-			return this.update(who, number, { state: target });
+			return this.updateIssue(who, number, { state: target });
 		} catch (error) {
 			if (error instanceof WorkError && error.status === 400) return issue;
 			throw error;

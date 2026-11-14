@@ -5,7 +5,7 @@ import { buildWorld, type CanopyKey, initial, interpret, pathTo, renderPlain } f
 import { LEVELS, world } from "./fixture.ts";
 
 let next = 1;
-const issue = (title: string, type: string, parent?: number, more: Partial<Issue> = {}): Issue => ({ number: next++, title, body: "", type, state: "todo", ...(parent !== undefined ? { parent } : {}), labels: [], fields: {}, author: "yan", createdAt: 0, updatedAt: 0, rev: 1, ...more });
+const issue = (title: string, type: string, parent?: number, more: Partial<Issue> = {}): Issue => ({ number: next++, rank: next, title, body: "", type, state: "todo", ...(parent !== undefined ? { parent } : {}), labels: [], fields: {}, author: "yan", createdAt: 0, updatedAt: 0, rev: 1, ...more });
 const session = (owner: string, id: string, on: number | undefined, state: WorkSession["state"], more: Partial<WorkSession> = {}): WorkSession => ({ host: `${owner}:shop`, owner, repo: "shop", id, name: id, role: "implementation", state, ...(on !== undefined ? { issue: on } : {}), asks: state === "asking" ? 1 : 0, ...more });
 
 /** A small team: yan runs this canopy; sam and teo are teammates, teo away. */
@@ -28,7 +28,7 @@ const team = (scheme: Scheme = DEFAULT_SCHEME): WorkState => {
 		url: "https://lattice.example.com", me: "yan", connected: true, scheme, issues,
 		people: [{ name: "yan", online: true }, { name: "sam", online: true }, { name: "teo", online: false }],
 		sessions: [session("sam", "sam-form", 4, "working", { activity: "editing form.tsx" }), session("sam", "sam-review", 4, "idle", { role: "review" }), session("sam", "sam-story", 3, "asking"), session("teo", "teo-scratch", undefined, "idle")],
-		hosts: [],
+		hosts: [], recent: [], seen: 0,
 	};
 };
 /** yan's own sessions, as their host has them: one on the bug, one on no issue. */

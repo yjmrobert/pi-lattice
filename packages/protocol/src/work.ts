@@ -50,7 +50,45 @@ export interface Scheme {
 		onReport?: string;
 		/** The state sessions take their next issue from. Absent, any state of kind `open`: name one to keep the rest, like a backlog, for people to release. */
 		take?: string;
+		/** The types whose results are checked by a session of their own, not by the one tending the branch. Absent, the tending session checks everything. */
+		review?: string[];
 	};
+}
+
+/** Something a person said about an issue that stands: a rule for it and for everything under it, in their words. */
+export interface Direction {
+	id: number;
+	who: string;
+	text: string;
+	at: number;
+}
+
+/** A line a person said about an issue, standing or not. */
+export interface SaidLine extends Direction {
+	issue: number;
+	stands: boolean;
+}
+
+/** What was done on an issue, as whoever did it reports it: what is checked before the issue is closed. */
+export interface IssueResult {
+	summary: string;
+	/** How it was checked. */
+	checks?: string;
+	/** Where to look. */
+	url?: string;
+	/** The session or agent that reported it. */
+	by: string;
+	at: number;
+}
+
+/** Where an issue goes among the issues under the same parent. */
+export type Place = "first" | "last" | { before: number } | { after: number };
+
+/** Who made a change besides the person whose token it came with, and why. */
+export interface Note {
+	why?: string;
+	/** The session or agent that made it: a role, a name. Absent, a person did it by hand. */
+	as?: string;
 }
 
 export interface Issue {
@@ -69,6 +107,14 @@ export interface Issue {
 	waitsOn?: number[];
 	/** The repository it is to be done in. Absent, the one its parent is in, or any. */
 	repo?: string;
+	/** Its place among the issues under the same parent: lower comes first. */
+	rank: number;
+	/** What was reported when the work on it was finished. */
+	result?: IssueResult;
+	/** What people said here that stands. */
+	directions?: Direction[];
+	/** An agent that is not a session of any host, holding it on a lease. */
+	agent?: string;
 	author: string;
 	createdAt: number;
 	updatedAt: number;
@@ -94,6 +140,10 @@ export interface IssueEvent {
 	what: string;
 	from?: string;
 	to?: string;
+	/** Why, as whoever made the change said. */
+	why?: string;
+	/** The session or agent that made it. Absent, a person did. */
+	as?: string;
 }
 
 /** What may be given when making an issue, or changed on one. `null` clears a parent, an assignee, a repository or a field. */
@@ -110,6 +160,8 @@ export interface IssueChange {
 	/** All the issues it waits on: this replaces the ones it had. */
 	waitsOn?: number[];
 	repo?: string | null;
+	/** Where it goes among the issues under its parent. A new issue goes last. */
+	place?: Place;
 }
 
 /** A session someone has running, as the server tells everyone. */
@@ -157,6 +209,10 @@ export interface WorkState {
 	sessions: WorkSession[];
 	/** The hosts that say they can be connected to. */
 	hosts: WorkHost[];
+	/** The last things done to the work, oldest first. */
+	recent: IssueEvent[];
+	/** The revision this person last looked at the work at: what an agent changed after it is new to them. */
+	seen: number;
 }
 
 /** What a session, the pane or the canopy asks of the team's work. */
@@ -165,9 +221,19 @@ export type WorkRequest =
 	| { do: "look" }
 	/** One issue with what was said on it and everything done to it. */
 	| { do: "read"; number: number }
-	| { do: "add"; change: IssueChange }
-	| { do: "update"; number: number; change: IssueChange; basedOn?: number }
+	| { do: "add"; change: IssueChange; why?: string }
+	| { do: "update"; number: number; change: IssueChange; basedOn?: number; why?: string }
 	| { do: "comment"; number: number; body: string }
+	/** The work on an issue is finished: say what was done and how it was checked. It moves on by the team's rules. */
+	| { do: "done"; number: number; summary: string; checks?: string; url?: string }
+	/** Give an issue back: it could not be finished. */
+	| { do: "drop"; number: number; why: string }
+	/** Keep a line a person said as a direction that stands, or lift it. Only a session a person steered does this. */
+	| { do: "stand"; line: number; stands: boolean; why?: string }
+	/** A person says something about an issue. Only a person's own terminal asks this. */
+	| { do: "say"; number: number; text: string }
+	/** A person has looked at what changed. Only a person's own terminal asks this. */
+	| { do: "seen" }
 	| { do: "scheme"; scheme: Scheme }
 	/** Take the next issue that is ready for a session, start it, and put the asking session on it. */
 	| { do: "next"; under?: number; type?: string; label?: string }
@@ -179,6 +245,10 @@ export interface WorkResult {
 	issue?: Issue;
 	comments?: IssueComment[];
 	history?: IssueEvent[];
+	/** What people said on the issue, standing or not. */
+	said?: SaidLine[];
+	/** The line just said. */
+	line?: SaidLine;
 	scheme?: Scheme;
 	/** After `next` found nothing: how many issues would have been taken but wait on others. */
 	waiting?: number;
@@ -190,6 +260,8 @@ export interface NextFilter {
 	under?: number;
 	type?: string;
 	label?: string;
+	/** The asker is an agent with no host: it keeps the issue only while it goes on speaking of it. */
+	lease?: boolean;
 }
 
 export const DEFAULT_SCHEME: Scheme = {
@@ -210,7 +282,8 @@ export const DEFAULT_SCHEME: Scheme = {
 	],
 	// Where the work on it can be looked at: a pull request, a branch.
 	fields: [{ name: "url", type: "text" }],
-	rules: { onStart: "doing", onReport: "review" },
+	// A result on a task is checked by the session tending its branch; on anything larger, by a session of its own.
+	rules: { onStart: "doing", onReport: "review", review: ["epic", "feature", "story"] },
 };
 
 const KINDS: readonly string[] = ["open", "active", "done", "dropped"];
@@ -281,6 +354,10 @@ export function schemeProblems(value: unknown): string[] {
 	}
 	unique("fields", fieldNames);
 	if (value.rules !== undefined && !isRecord(value.rules)) out.push('"rules" is an object.');
+	if (isRecord(value.rules) && value.rules.review !== undefined) {
+		if (!strings(value.rules.review)) out.push('"rules.review" is a list of types: the ones whose results a session of their own checks.');
+		else for (const type of value.rules.review) if (!typeNames.includes(type)) out.push(`"rules.review" names "${type}", which is not a type.`);
+	}
 	return out;
 }
 
@@ -291,7 +368,7 @@ export function normalizeScheme(value: Scheme): Scheme {
 		types: value.types.map((type) => ({ name: type.name, level: type.level, under: [...type.under], top: type.top })),
 		states: value.states.map((state) => ({ name: state.name, kind: state.kind })),
 		fields: (value.fields ?? []).map((field) => ({ name: field.name, type: field.type, ...(field.choices ? { choices: [...field.choices] } : {}), ...(field.on ? { on: [...field.on] } : {}), ...(field.required ? { required: true } : {}) })),
-		rules: { ...(typeof rules.onStart === "string" ? { onStart: rules.onStart } : {}), ...(typeof rules.onReport === "string" ? { onReport: rules.onReport } : {}), ...(typeof rules.take === "string" ? { take: rules.take } : {}) },
+		rules: { ...(typeof rules.onStart === "string" ? { onStart: rules.onStart } : {}), ...(typeof rules.onReport === "string" ? { onReport: rules.onReport } : {}), ...(typeof rules.take === "string" ? { take: rules.take } : {}), ...(strings(rules.review) ? { review: [...rules.review] } : {}) },
 	};
 }
 
@@ -328,6 +405,42 @@ export function takeable(scheme: Scheme, state: string): boolean {
 	const take = scheme.rules.take;
 	if (take !== undefined && scheme.states.some((entry) => entry.name === take)) return state === take;
 	return scheme.states.some((entry) => entry.name === state && entry.kind === "open");
+}
+
+/** Whether a result on an issue of this type is checked by a session of its own. */
+export const reviewed = (scheme: Scheme, type: string): boolean => (scheme.rules.review ?? []).includes(type);
+
+/** The issues under each parent, in the order they are to be done: by rank, then as filed. An issue whose parent is gone is at the top. */
+export function childrenInOrder<T extends Pick<Issue, "number" | "parent" | "rank">>(issues: readonly T[]): Map<number | undefined, T[]> {
+	const known = new Set(issues.map((issue) => issue.number));
+	const kids = new Map<number | undefined, T[]>();
+	for (const issue of issues) {
+		const parent = issue.parent !== undefined && known.has(issue.parent) ? issue.parent : undefined;
+		kids.set(parent, [...(kids.get(parent) ?? []), issue]);
+	}
+	for (const list of kids.values()) list.sort((a, b) => (a.rank ?? a.number) - (b.rank ?? b.number) || a.number - b.number);
+	return kids;
+}
+
+/** Every issue in the order the tree is read: each one, then what is under it, first to last. */
+export function treeOrder<T extends Pick<Issue, "number" | "parent" | "rank">>(issues: readonly T[]): T[] {
+	const kids = childrenInOrder(issues);
+	const out: T[] = [];
+	const walk = (issue: T, depth: number): void => {
+		out.push(issue);
+		if (depth < 64) for (const child of kids.get(issue.number) ?? []) walk(child, depth + 1);
+	};
+	for (const issue of kids.get(undefined) ?? []) walk(issue, 0);
+	return out;
+}
+
+/** The directions that reach an issue: its own, then those of everything above it, nearest first. `on` is the issue each stands on. */
+export function directionsFor(issue: Pick<Issue, "number" | "parent" | "directions">, issues: ReadonlyMap<number, Pick<Issue, "number" | "parent" | "directions">>): Array<Direction & { on: number }> {
+	const out: Array<Direction & { on: number }> = [];
+	for (let at: Pick<Issue, "number" | "parent" | "directions"> | undefined = issue, steps = 0; at && steps < 64; at = at.parent === undefined ? undefined : issues.get(at.parent), steps++) {
+		for (const direction of [...(at.directions ?? [])].reverse()) out.push({ ...direction, on: at.number });
+	}
+	return out;
 }
 
 /** The names of the types on each level, nearest the root first; a level nobody is on is skipped. */
@@ -394,6 +507,7 @@ export function describeScheme(scheme: Scheme): string {
 		scheme.rules.take && scheme.states.some((state) => state.name === scheme.rules.take) ? `sessions take their next issue from ${scheme.rules.take}` : "",
 		scheme.rules.onStart ? `a session put on an issue moves it to ${scheme.rules.onStart}` : "",
 		scheme.rules.onReport ? `its result moves it to ${scheme.rules.onReport}` : "",
+		scheme.rules.onReport ? ((scheme.rules.review ?? []).length > 0 ? `a result on ${(scheme.rules.review ?? []).join(", ")} is checked by a reviewer session, on anything else by the session tending the branch` : "results are checked by the session tending the branch") : "",
 	].filter(Boolean);
 	if (rules.length > 0) lines.push(`Rules: ${rules.join("; ")}.`);
 	if (scheme.fields.length > 0) lines.push(`Fields: ${scheme.fields.map((field) => `${field.name} (${field.type === "choice" ? (field.choices ?? []).join("|") : field.type}${field.on ? `, on ${field.on.join(", ")}` : ""}${field.required ? ", required" : ""})`).join("; ")}.`);
@@ -406,7 +520,7 @@ export function issueLine(issue: Issue, state?: Partial<Pick<WorkState, "session
 	const waits = state?.issues && state.scheme ? waitingOn(state.scheme, issue, new Map(state.issues.map((entry) => [entry.number, entry]))) : (issue.waitsOn ?? []);
 	const on = (state?.sessions ?? []).filter((session) => session.issue === issue.number).map((session) => `${session.owner}'s "${session.name}" ${session.state}`);
 	const fields = Object.entries(issue.fields).map(([name, value]) => `${name}=${value}`);
-	return [`#${issue.number}`, issue.type, issue.title, `[${issue.state}]`, issue.assignee ? `@${issue.assignee}` : "", issue.labels.map((label) => `+${label}`).join(" "), fields.join(" "), issue.repo ? `in ${issue.repo}` : "", issue.human ? "(for a person)" : "", waits.length > 0 ? `(waits on ${waits.map((number) => `#${number}`).join(", ")})` : "", on.length > 0 ? `<- ${on.join(", ")}` : ""].filter(Boolean).join("  ");
+	return [`#${issue.number}`, issue.type, issue.title, `[${issue.state}]`, issue.assignee ? `@${issue.assignee}` : "", issue.labels.map((label) => `+${label}`).join(" "), fields.join(" "), issue.repo ? `in ${issue.repo}` : "", issue.human ? "(for a person)" : "", issue.agent ? `<- ${issue.agent}, from a shell` : "", (issue.directions ?? []).length > 0 ? `⚑${(issue.directions ?? []).length}` : "", waits.length > 0 ? `(waits on ${waits.map((number) => `#${number}`).join(", ")})` : "", on.length > 0 ? `<- ${on.join(", ")}` : ""].filter(Boolean).join("  ");
 }
 
 /**
@@ -415,11 +529,7 @@ export function issueLine(issue: Issue, state?: Partial<Pick<WorkState, "session
  */
 export function formatWork(state: Pick<WorkState, "issues" | "scheme" | "sessions">, options: { under?: number; open?: boolean } = {}): string {
 	const byNumber = new Map(state.issues.map((issue) => [issue.number, issue]));
-	const kids = new Map<number | undefined, Issue[]>();
-	for (const issue of state.issues) {
-		const parent = issue.parent !== undefined && byNumber.has(issue.parent) ? issue.parent : undefined;
-		kids.set(parent, [...(kids.get(parent) ?? []), issue]);
-	}
+	const kids = childrenInOrder(state.issues);
 	const lines: string[] = [];
 	const shown = (issue: Issue): boolean => !options.open || !isClosed(state.scheme, issue) || (kids.get(issue.number) ?? []).some(shown);
 	const walk = (issue: Issue, depth: number): void => {

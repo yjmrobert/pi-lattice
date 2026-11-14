@@ -337,3 +337,104 @@ describe("what is kept", () => {
 		}
 	});
 });
+
+describe("work that agents keep", () => {
+	it("is taken in the order of the tree, which an agent can change and says why", async () => {
+		const yan = await member("yan");
+		const epic = await yan.create({ title: "Checkout", type: "epic" });
+		const pay = await yan.create({ title: "Pay", parent: epic.number });
+		const cart = await yan.create({ title: "Cart", parent: epic.number });
+		const story = async (title: string, parent: number): Promise<Issue> => yan.create({ title, parent: (await yan.create({ title: `${title} story`, parent })).number });
+		const card = await story("Card", pay.number);
+		const totals = await story("Totals", cart.number);
+		// As filed, what is under the first feature comes first.
+		expect((await yan.next({})).issue?.number).toBe(card.number);
+		await yan.drop(card.number, "not yet");
+		// Put the second feature first: its work is taken before the rest.
+		const moved = await yan.update(cart.number, { place: "first" }, undefined, { as: "planner", why: "the cart blocks the demo" });
+		expect(moved.rank).toBeLessThan(pay.rank);
+		expect((await yan.next({})).issue?.number).toBe(totals.number);
+		const order = (await yan.read(cart.number)).history.at(-1);
+		expect(order).toMatchObject({ what: "order", to: "first", as: "planner", why: "the cart blocks the demo", who: "yan" });
+		// Beside something, by its number; and only among the issues under the same parent.
+		expect((await yan.update(cart.number, { place: { after: pay.number } })).rank).toBeGreaterThan(pay.rank);
+		expect(await refused(yan.update(cart.number, { place: { before: card.number } }))).toContain("is not beside it");
+		await yan.refresh();
+		expect(yan.state().recent.some((event) => event.what === "order" && event.as === "planner")).toBe(true);
+	});
+
+	it("keeps what was done on an issue when the work is finished, and moves it on", async () => {
+		const yan = await member("yan");
+		const task = await yan.create({ title: "Fix it", type: "bug" });
+		const done = await yan.done(task.number, { summary: "Fixed the total.", checks: "12 tests pass" }, { as: "worker" });
+		expect(done).toMatchObject({ state: "review", result: { summary: "Fixed the total.", checks: "12 tests pass", by: "worker" } });
+		expect(await refused(yan.done(task.number, { summary: "" }))).toBe("A summary cannot be empty.");
+		await yan.update(task.number, { state: "done" }, undefined, { as: "planner", why: "it does what the issue says done means" });
+		expect(await refused(yan.done(task.number, { summary: "again" }))).toBe(`#${task.number} is already done.`);
+	});
+
+	it("keeps what a person says, in their words, and lets it stand as a direction on everything under it", async () => {
+		const yan = await member("yan");
+		const sam = await member("sam");
+		const epic = await yan.create({ title: "Checkout", type: "epic" });
+		const line = await yan.say(epic.number, "ask me before anything here lands");
+		expect(line).toMatchObject({ who: "yan", text: "ask me before anything here lands", stands: false });
+		expect(yan.issue(epic.number)?.directions).toBeUndefined();
+		const stood = await yan.stand(line.id, true, { as: "planner" });
+		expect(stood.directions).toEqual([{ id: line.id, who: "yan", text: "ask me before anything here lands", at: line.at }]);
+		await sam.refresh();
+		expect(sam.issue(epic.number)?.directions?.[0]?.text).toBe("ask me before anything here lands");
+		expect((await yan.read(epic.number)).said).toMatchObject([{ id: line.id, stands: true }]);
+		// Only what was said can stand; lifting it leaves the line.
+		expect(await refused(yan.stand(999, true))).toContain("Nobody said a line 999");
+		expect((await yan.stand(line.id, false)).directions).toBeUndefined();
+		expect((await yan.read(epic.number)).said).toMatchObject([{ id: line.id, stands: false }]);
+	});
+
+	it("says what changed since a person last looked", async () => {
+		const yan = await member("yan");
+		const bug = await yan.create({ title: "Before", type: "bug" });
+		const sam = await member("sam");
+		// What was there when someone joined is not news to them.
+		expect(sam.state().seen).toBeGreaterThanOrEqual(bug.rev);
+		await yan.update(bug.number, { title: "After" }, undefined, { as: "planner", why: "the old title was wrong" });
+		await sam.refresh();
+		const fresh = sam.state().recent.filter((event) => event.rev > sam.state().seen && event.as);
+		expect(fresh).toMatchObject([{ issue: bug.number, what: "title", as: "planner", why: "the old title was wrong" }]);
+		await sam.looked();
+		expect(sam.state().recent.filter((event) => event.rev > sam.state().seen)).toEqual([]);
+	});
+
+	it("takes an issue back from an agent with no host that goes quiet", async () => {
+		await server.stop();
+		server = new WorkServer({ file: ":memory:", host: "127.0.0.1", sessionTtlMs: 400, leaseMs: 5_000, now: () => clock });
+		address = `http://127.0.0.1:${await server.start()}/#${server.tracker.code}`;
+		const yan = await member("yan");
+		const bug = await yan.create({ title: "Flaky", type: "bug" });
+		const taken = (await yan.next({ lease: true }, { as: "claude" })).issue;
+		expect(taken).toMatchObject({ number: bug.number, state: "doing", agent: "claude", assignee: "yan" });
+		// Speaking of it keeps it.
+		clock += 4_000;
+		await yan.comment(bug.number, "found the race", { as: "claude" });
+		clock += 4_000;
+		expect(server.tracker.expire()).toEqual([]);
+		clock += 6_000;
+		expect(server.tracker.expire().map((issue) => issue.number)).toEqual([bug.number]);
+		await yan.refresh();
+		expect(yan.issue(bug.number)).toMatchObject({ state: "todo" });
+		expect(yan.issue(bug.number)?.agent).toBeUndefined();
+		expect(yan.issue(bug.number)?.assignee).toBeUndefined();
+		const read = await yan.read(bug.number);
+		expect(read.history.at(-1)).toMatchObject({ what: "gave back", as: "claude", why: "it went quiet" });
+		expect(read.comments.at(-1)?.body).toBe("claude gave this back: it went quiet");
+		// A session of a host holds nothing on a lease: the host says it is running.
+		expect((await yan.next({})).issue?.agent).toBeUndefined();
+	});
+
+	it("checks results on the types the scheme names with a session of their own", async () => {
+		const yan = await member("yan");
+		expect(yan.state().scheme.rules.review).toEqual(["epic", "feature", "story"]);
+		expect(await refused(yan.setScheme({ ...DEFAULT_SCHEME, rules: { ...DEFAULT_SCHEME.rules, review: ["chore"] } }))).toBe('"rules.review" names "chore", which is not a type.');
+		expect((await yan.setScheme({ ...DEFAULT_SCHEME, rules: { onStart: "doing", onReport: "review", review: [] } })).rules.review).toEqual([]);
+	});
+});
