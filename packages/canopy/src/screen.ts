@@ -297,7 +297,7 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 	return grid;
 }
 
-function footer(world: World, state: CanopyState, width: number): Grid {
+function footer(world: World, state: CanopyState, width: number, leave?: ReadonlyArray<readonly [string, string]>, away = false): Grid {
 	const grid = new Grid(width, FOOTER);
 	const item = state.selected ? world.items.get(state.selected) : undefined;
 	if (state.typing) {
@@ -306,14 +306,24 @@ function footer(world: World, state: CanopyState, width: number): Grid {
 		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], [" ⏎ ", KEYCAP], [state.typing.what === "add" ? " add   " : " comment   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]]);
 		return grid;
 	}
-	const keys: Array<[string, string]> = [["←↑↓→", "move"], ["tab", "next that needs someone"]];
-	if (item?.issue) {
-		if (item.node) keys.push(["⏎", "open"]);
-		keys.push(["s", "put this session on it"], ["n", "new under it"], ["e", "next state"], ["m", item.issue.assignee === world.me ? "not mine" : "mine"], ["t", "comment"]);
-	} else if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
-	else if (item && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
-	if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
-	keys.push([".", "next to start"], ["o", state.order === "dependency" ? "as filed" : "first to last"], ["1-9", "one person"], ["a", "panel"], ["shift+←→", "pan"], ["esc", "back"]);
+	const named = (leave ?? []).map(([key, does]): [string, string] => [key, does]);
+	const keys: Array<[string, string]> = [];
+	if (away) {
+		// The keys are not the canopy's while the keyboard is elsewhere: only what leads here is said.
+		keys.push(...named);
+	} else {
+		// In a layout, the keys that lead to the chat are said first: they are what a person arriving
+		// needs, and the canopy may be narrow there. As an overlay, escape goes back and is said last.
+		keys.push(...named, ["←↑↓→", "move"], ["tab", "next that needs someone"]);
+		if (item?.issue) {
+			if (item.node) keys.push(["⏎", "open"]);
+			keys.push(["s", "put this session on it"], ["n", "new under it"], ["e", "next state"], ["m", item.issue.assignee === world.me ? "not mine" : "mine"], ["t", "comment"]);
+		} else if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
+		else if (item && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
+		if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
+		keys.push([".", "next to start"], ["o", state.order === "dependency" ? "as filed" : "first to last"], ["1-9", "one person"], ["a", "panel"], ["shift+←→", "pan"]);
+		if (!leave) keys.push(["esc", "back"]);
+	}
 	let at = 1;
 	for (const [key, does] of keys) {
 		if (at + key.length + does.length + 4 > width) break;
@@ -453,6 +463,10 @@ function edges(plan: Layout, state: CanopyState, win: { width: number; height: n
 export interface Moving {
 	animations: readonly Animation[];
 	now: number;
+	/** The keys that lead out of the canopy, when it is not an overlay that escape closes. */
+	leave?: ReadonlyArray<readonly [string, string]>;
+	/** Whether the keyboard is somewhere else: then only the keys that lead here are listed. */
+	away?: boolean;
 }
 
 function compose(world: World, state: CanopyState, width: number, height: number, tick: number, moving: Moving | undefined, lines: (grid: Grid, col?: number, row?: number, width?: number, height?: number) => string[]): string[] {
@@ -471,7 +485,7 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	for (const edge of edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
 	const canvas = lines(tree, view.camera.col, view.camera.row, win.width, win.height);
 	const panel = side > 0 ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick)) : [];
-	return [...lines(header(world, view, width, tick)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width))];
+	return [...lines(header(world, view, width, tick)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away))];
 }
 
 /** The screen as terminal lines, exactly `height` of them and `width` cells wide. */

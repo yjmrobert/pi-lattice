@@ -63,6 +63,25 @@ export interface LatticeEvents {
 	"lattice:trees:query": { trees?: Array<{ key: string; repo: string; state: UiState }>; current?: string };
 	/** Ask for the canopy to be shown, on a session when one is named. Whoever can show it sets `claimed`. */
 	"lattice:canopy:open": { nodeId?: string; claimed: boolean };
+	/**
+	 * Ask for the canopy as a view to put in a layout, where it is what Pi opens on. Whoever has the
+	 * canopy fills in `view`. The asker keeps the layout and decides which keys the view gets.
+	 */
+	"lattice:canopy:mount": {
+		/** Pi's terminal interface, to ask for a redraw and to read the size. */
+		tui: unknown;
+		/** Kept by the asker from one session to the next, so what was selected survives opening a session. */
+		memory: { state?: unknown };
+		/** Open a session beside the tree. */
+		open(nodeId: string): void;
+		/** Escape, when the canopy has nothing of its own for it to do. */
+		back(): void;
+		/** Keys the asker adds, read at each draw. They are listed last among the keys. */
+		keys(): Array<{ key: string; does: string; run?: () => void }>;
+		/** Whether the keyboard is somewhere else, so the canopy lists only the keys that lead to it. */
+		away(): boolean;
+		view?: { render(width: number): string[]; key(data: string): void; dispose(): void };
+	};
 	/** Ask the roles extension to replace the applied fragments. */
 	"lattice:roles:set": { fragments: string[] };
 }

@@ -62,6 +62,7 @@ A setting takes its value from the first of these that has one:
 | `pane.autoStart` | In a git repository, the first message starts a session tree without anything being typed. Applies at once. | on \| off | on | `LATTICE_AUTO_START` |
 | `pane.autoJoin` | A new session joins its repository's tree with its first message. Applies at once. | on \| off | on | `LATTICE_AUTO_JOIN` |
 | `pane.bell` | Ring the terminal when one more thing starts waiting on you. Applies at once. | on \| off | on | `LATTICE_BELL` |
+| `pane.home` | Canopy: Pi opens on all the work as a tree, and a session's chat slides in beside it when it is opened. Chat: Pi opens on the chat, with the sessions listed in a pane on the left. Applies at once. | canopy \| chat | canopy |  |
 | `pane.width` | How many columns the pane takes. Applies the next time Pi starts. | a whole number from 24 to 60 | 34 |  |
 
 ## Canopy
