@@ -27,7 +27,7 @@ Work is different. An epic is nobody's machine's: several people edit it, reorde
   | No logins: share only on a network you trust. | Kept stricter: a code to join, a token each. Still no roles and no TLS. |
   | One writer, a change counter the board polls. | The same, arrived at separately: revisions and a feed that waits. |
   | When the shared board cannot be reached, calls fail. | Kept as it was: the last copy stays, marked stale; writes fail. |
-  | Board order: cards are dragged into the order agents take them. | Not built. Issues are taken lowest number first. |
+  | Board order: cards are dragged into the order agents take them. | Since [0033](../decisions/0033-agents-keep-the-issues.md): issues have a rank the agents keep, and are taken in the order of the tree. A person changes it by saying so. |
   | A board in the browser; MCP, so any agent can use it; images; a filter language; export; sync through a git repository; a single 4.7 MB binary. | Not built. The canopy is the board, and only Pi sessions under a lattice host have the tools. |
 
   Kanzo has no hierarchy, types or custom fields: a task is in a project and a column. The scheme here has no counterpart in it.
@@ -44,7 +44,7 @@ Work is different. An epic is nobody's machine's: several people edit it, reorde
 - **Fields**: a name and a type (`text`, `number`, `date`, `person`, `choice` with its choices), optionally only for some types, optionally required.
 - **Rules** for what sessions do to issues: the state an issue takes when a session is put on it (`doing`), when the session reports its result (`review`, for a person to close), and optionally the one state sessions take their next issue from, which leaves the others, like a backlog, to people.
 
-**What is ready.** A session asking for its next issue gets the lowest-numbered one that is in a state sessions take from, is not for a person, is unassigned or its owner's, has nothing unfinished under it, waits on nothing unfinished, and is not for another repository. The server picks, starts and assigns it in one step.
+**What is ready.** A session asking for its next issue gets the first one, in the order of the tree, that is in a state sessions take from, is not for a person, is unassigned or its owner's, has nothing unfinished under it, waits on nothing unfinished, and is not for another repository. The server picks, starts and assigns it in one step.
 
 Changing the scheme never rewrites or rejects what exists. An issue that no longer fits (a type that was removed, a parent that is no longer allowed) stays where it is and is marked as misplaced, so a team can change its structure first and move the work after.
 
@@ -109,6 +109,6 @@ Phase 8 is last because it removes something that works, and nothing before it d
 - Whether the scheme should be editable by everyone, as planned, or by the person who started the server.
 - ~~Whether a host should be able to carry a small server of its own.~~ Yes: the board, after Kanzo.
 - Whether the board should start by itself, so that a person has issues without asking. Today it is one command, because with it the canopy draws issues instead of the session tree, and that is a change someone should choose.
-- The order sessions take issues in. Lowest number first is predictable and cannot be changed; Kanzo lets cards be dragged. Proposed in [0033](../decisions/0033-agents-keep-the-issues.md): a rank the agents keep and people steer, taken in tree order.
+- The order sessions take issues in. Lowest number first is predictable and cannot be changed; Kanzo lets cards be dragged. Settled in [0033](../decisions/0033-agents-keep-the-issues.md): a rank the agents keep and people steer, taken in tree order.
 - Whether a repository should be known by its remote rather than its folder's name, so that clones under different names are one repository.
-- Whether the work tools should also be an MCP server, so that agents outside a lattice host can use the board. Proposed in 0033: a command line, `pi-lattice work`, not MCP.
+- Whether the work tools should also be an MCP server, so that agents outside a lattice host can use the board. Settled in 0033: a command line, `pi-lattice work`, not MCP.

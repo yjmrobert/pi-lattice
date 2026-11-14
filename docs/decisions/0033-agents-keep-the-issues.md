@@ -1,6 +1,6 @@
 # 0033. Agents keep the issues; people steer, on the tree
 
-Status: proposed. Nothing here is built. [The plan](../design/steering-plan.md) has what was looked at and the order to build in; [the mockup](../design/steering.html) can be used.
+Status: built. [The plan](../design/steering-plan.md) has what was looked at; [the mockup](../design/steering.html) is the design it was built from, and differs from the canopy in small ways.
 
 Builds on [0026](0026-a-server-for-the-work.md), [0027](0027-what-kanzo-changed.md) and [0031](0031-pi-opens-on-the-canopy.md). Answers two things [the server plan](../design/server-plan.md) left open: the order sessions take issues in, and how agents outside a lattice host reach the work.
 
@@ -12,19 +12,19 @@ That is a person keeping a tracker, with agents allowed in. Agents file, split, 
 
 ## Decision
 
-1. **Agents keep the issues.** Filing, breaking down, ordering, what waits on what, states, putting sessions on work, checking results, closing, pruning. A person does none of it by hand. `n`, `e`, `m` and `t` leave the canopy.
+1. **Agents keep the issues.** Filing, breaking down, ordering, what waits on what, states, putting sessions on work, checking results, closing, pruning. A person does none of it by hand. `n`, `e`, `m` and `t` are removed from the canopy outright, not kept as shortcuts.
 
-2. **Every branch is tended.** The session that tends an item is the nearest one at or above it with the coordinator role. Where a person speaks and nothing tends the branch, the host starts one on the nearest item above that has an owner.
+2. **Every branch is tended.** The session that tends an issue is the nearest one of the person's with the coordinator role, on it or on an issue above it; a coordinator at the top of their tree, on no issue, tends what nothing else does. Where a person speaks and nothing tends the branch, the host starts a coordinator on the top issue of that branch, under the person's own session.
 
-3. **A person steers by saying.** `space` on any item opens a line at the foot of the tree, addressed to whoever tends that item, about that item: "this first", "drop this", "split it by provider", "why is this held". The line at the foot says who it goes to before it is sent. The answer comes back in one line in the same place, saying what was done, and what was done moves on the tree. This is `o` from [0031](0031-pi-opens-on-the-canopy.md), no longer waiting to be asked.
+3. **A person steers by saying.** `space` on any item opens a line at the foot of the tree, addressed to whoever tends that item, about that item: "this first", "drop this", "split it by provider", "why is this held". The line at the foot says who it goes to before it is sent. The session's last sentence of that turn is the answer, drawn in the same place; what it did moves on the tree. This is `o` from [0031](0031-pi-opens-on-the-canopy.md), no longer waiting to be asked. `/lattice say <issue | session> <text>` does the same from the chat. A session open in a terminal is told by that terminal, since the host cannot type there.
 
-4. **What a person says can stand.** A line that is a rule and not an errand ("ask me before anything here lands", "no new dependencies") is kept on the item as a direction, word for word, under the person's name. Everything under the item is told it: a direction is part of the brief of every issue below, and `work_next` prints the ones above the issue it hands out. `⚑` beside an item, in the person's colour, says one stands there. Only a person's line makes a direction; an agent cannot write one. It is lifted by saying so.
+4. **What a person says can stand.** Every line said about an issue is kept on it, in the person's words. There is one key: the session decides whether a line is an errand or a rule, and keeps a rule as a direction (`work_direction`, naming the line). A direction stands on the issue under the person's name, and `work_next` and `pi-lattice work next` print the ones that reach the issue they hand out. `⚑` beside an item, in the person's colour, says one stands there. An agent cannot write a direction or change its words: it can only keep or lift a line a person said. It is lifted by saying so.
 
-5. **Gates are directions.** There is no column a person must empty. By default the session tending a branch checks a result against what the issue says done means, and closes it. A person puts a gate where they want one, by saying so there, and it holds for that branch only. An agent that is unsure asks, in amber, as now.
+5. **Results are checked by agents, and gates are directions.** There is no column a person must empty. A result on a task is checked by the session tending its branch, against what the issue says done means, and closed. A result on anything larger is checked by a session of its own with the `reviewer` role, started under the one that tends it, so that nothing larger than a task is closed by what delegated it. Which types get a reviewer is the scheme's `rules.review`: every type but tasks and bugs by default, and a team sets it to nothing to have the tending session check everything. A person puts a gate where they want one, by saying so there, and it holds for that branch only. An agent that is unsure asks, in amber, as now.
 
-6. **Every change by an agent says why.** A reason is recorded with it. Items changed since a person last looked are marked on the tree; `u` goes through them, newest first: who, what, and why, at the foot. `x` there puts it back, which is a line to whoever made the change.
+6. **Every change by an agent says why.** The session or agent that made it and the reason it gave are recorded with it, beside the person whose token it came with. The server keeps the revision each person last looked at. Items an agent changed since are marked `+` on the tree; `u` goes through them, newest first: who, what, and why, at the foot. `x` there puts it back, which is a line to whatever tends it. Past the last one, the person has looked.
 
-7. **Order is kept by the agents and steered by people.** An issue has a `rank` among the issues under its parent. `next` hands out the first ready issue in tree order; waits still come first. In the canopy that is left to right, as it already reads ([0030](0030-the-canopy-in-order.md)), and an item that changes place now moves there.
+7. **Order is kept by the agents and steered by people.** An issue has a `rank` among the issues under its parent, set with `place` (first, last, before or after another). `next` hands out the first ready issue in the order the tree is read; waits still come first. In the canopy that is left to right, as it already reads ([0030](0030-the-canopy-in-order.md)), and an item that changes place now moves there, as a folded one does.
 
 8. **A result is part of the issue.** `work_done`: what was done, how it was checked, where to look. It is what the tending session checks, and what a person is shown when a direction sends it to them.
 
@@ -46,10 +46,26 @@ That is a person keeping a tracker, with agents allowed in. Agents file, split, 
 
 11. **Pi sessions keep their tools,** which know which session is asking: `work_list`, `work_add`, `work_update`, `work_on`, `work_next`, and the new `work_done`. Each write takes a `why`.
 
+## Evidence
+
+- `packages/server/test/server.test.ts`, "work that agents keep": tree order and placing, with who and why; a result kept and the issue moved on; a line kept in the person's words, standing and lifted; what changed since a person looked; a lease kept by speaking and lost by silence; `rules.review` checked.
+- `test/integration/work.test.ts`, "steering the work", with a real server, a real host and real Pi sessions on the scripted model: a line said about an issue reaches the coordinator above it, which changes the order with a reason and answers; the line is kept and becomes a direction when the session keeps it; a session cannot say a line itself; a session is started to tend a branch that nothing tends; a result from an agent with no host is handed to the tending session for a bug and to a reviewer for a feature.
+- `test/integration/tui.test.ts`, in Pi's terminal: `space` on a feature, the line to "a session that is started to tend it", the story the session adds with its reason, the answer at the foot of the tree, and the count of what agents changed.
+- `packages/canopy/test/work.test.ts`: the line and who it goes to, the walk through what changed and putting one back, directions drawn where they stand and in the panel, issues in the order the agents keep, an agent holding an issue from a shell, the removed keys doing nothing, and what counts as changing place.
+- `packages/app/test/workcli.test.ts`: `pi-lattice work` against a real server: next with the brief and the directions, note, add with a reason, done, show, drop, the exit codes, `--json`.
+
+## Not verified
+
+- **A real model.** Every test uses the scripted model, which does what a line tells it in so many words. Whether a model reads "this first" and places the issue, tells a rule from an errand, and answers in one sentence is what `npm run eval` is for, and it has not been run on this.
+- **A teammate's line.** A line said on an issue that a teammate's session tends is kept on the server and passed to that session by their host as a request, not a direction. The code is there; no test has two hosts.
+- **A result that arrives while the host is off.** A host hands on the results it sees come in while it runs. One that came in before it started waits until something else moves the issue.
+
 ## Rejected
 
 - **A board.** Drawn, and turned down: states as columns with the tree as lanes, and keys for a person to release and accept. It was a second place to look and it had a person moving issues, which is the work being given away. The tree is the only view.
 - **Keeping the keys as shortcuts.** Two ways to change an issue, one of which the tending session does not hear about until it reads the history.
+- **Two keys, one for an errand and one for a rule.** The person would have to classify what they are about to say before saying it. The session says which it took it for.
+- **The tending session checking everything.** It would close work it delegated. That is accepted for tasks, where a reviewer for each would cost more than the task, and is a setting for the rest.
 - **A fixed review step for people.** It makes a person the limit on everything, including what they do not care about.
 - **Agents writing directions.** A direction is what a person meant. An agent that wants a rule asks for one.
 - **Sprints, points, velocity.** They pace a team's capacity, which is not what is short.
@@ -62,4 +78,6 @@ That is a person keeping a tracker, with agents allowed in. Agents file, split, 
 - **Saying is slower than a key** for the smallest change, and a line can be misread. The answer says what was done, so a misreading is seen at once.
 - **Something is always tending.** A session per branch a person steers, for as long as there is work on it.
 - **Existing habits go.** People who used `n` and `e` say it instead.
-- **The command line acts as the person.** An agent's name is recorded with what it did, and is not checked.
+- **The command line acts as the person.** An agent's name is recorded with what it did, and is not checked. That only a person says a line is held by the host and by the command line having no way to say one, not by the server: the token is the same.
+- **A line said in answer shows as a change.** What a session does because of a person's line is marked `+` like anything else an agent did.
+- **`/lattice issue` is still there.** It reads an issue, and can change one from the chat. The canopy has no key for it.

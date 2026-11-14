@@ -2,6 +2,7 @@
 import { DEFAULT_SCHEME, type Issue, type IssueEvent, type Scheme, type Steer, type WorkSession, type WorkState } from "@pi-lattice/protocol";
 import { describe, expect, it } from "vitest";
 import { buildWorld, type CanopyKey, initial, interpret, pathTo, renderPlain } from "../src/index.ts";
+import { reordered } from "../src/order.ts";
 import { LEVELS, world } from "./fixture.ts";
 
 let next = 1;
@@ -233,6 +234,18 @@ describe("the canopy of a team with a server", () => {
 		expect(w.items.get("#1")?.children.map((child) => child.id).slice(0, 2)).toEqual(["#7", "#2"]);
 		expect(w.items.get("#6")).toMatchObject({ outside: true, planned: false, agent: { role: "claude", state: "working" } });
 		expect(press(w, { ...initial(w, undefined), selected: "#6" }, "enter").actions).toEqual([{ do: "say", text: "claude holds #6 from a shell: it is not a session, and there is nothing here to open." }]);
+	});
+
+	it("knows when something changed place among its siblings, which is when the tree moves", () => {
+		const base = team();
+		const before = build(base);
+		// Put the second feature first.
+		const moved = build({ ...base, issues: base.issues.map((entry) => (entry.number === 7 ? { ...entry, rank: 0 } : entry)) });
+		expect(reordered(before, moved, "filed")).toBe(true);
+		expect(reordered(before, build(base), "filed")).toBe(false);
+		// Something new under an item moves nothing that was there.
+		const added = build({ ...base, issues: [...base.issues, { ...(base.issues[6] as Issue), number: 12, rank: 99, title: "Receipts" }] });
+		expect(reordered(before, added, "filed")).toBe(false);
 	});
 
 	it("says nothing while the server cannot be reached, and says why", () => {

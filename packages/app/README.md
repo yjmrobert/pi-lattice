@@ -26,6 +26,21 @@ node packages/app/src/cli.ts --role coordinator     # a line-based interface, fo
 | `--idle-exit <seconds>` | `daemon`: exit after this long with nobody connected (default 600, 0 never) |
 | `-- <pi arguments>` | Passed to every headless session, for example `-- --model <model>` |
 
+### The team's work, from a shell
+
+```bash
+pi-lattice work                    # the work that is not finished, as a tree
+pi-lattice work next               # take the next ready issue; prints its brief and the directions above it
+pi-lattice work note 38 "the vault token is per customer"
+pi-lattice work done 38 --summary "Wrong input is marked before submit." --check "14 tests pass"
+pi-lattice work drop 38 "needs the staging key"
+pi-lattice work prime              # what to put in an agent's instructions
+```
+
+For agents that are not Pi sessions (anything with a shell) and for scripts. It talks to the server this machine has joined, as that person; `--agent <name>` or `LATTICE_AGENT` says which agent is asking, and that is recorded with everything it does. `--json` prints data. An issue taken with `next` is the agent's while it goes on speaking of it, and is given back after thirty minutes of silence. It exits 3 when there is nothing to take and 4 when refused. `pi-lattice work --help` lists the rest.
+
+There is no command here for a person to edit issues with: a person says what they want in Pi, on the tree.
+
 In the line interface, type to talk to the current session; `:tree`, `:use <name>`, `:inbox`, `:approve <id>`, `:dialogs`, `:answer <n> <text>`, `:quit`; and for the team `:people`, `:handoffs`, `:offer`, `:take`, `:approve` (`:help` lists them all).
 
 How the packages fit together is in [ADR 0014](../../docs/decisions/0014-package-seams.md).

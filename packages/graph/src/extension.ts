@@ -322,7 +322,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		name: "work_next",
 		label: "Next work",
 		description:
-			"Take the next issue that is ready for a session and put this session on it. Ready means: in a state sessions take from, not for a person, not someone else's, nothing unfinished under it, waiting on nothing unfinished, and not for another repository. The lowest number is taken first. It is started and assigned to this session's owner in one step, so no two sessions get the same issue. Shows the issue with what was said on it.",
+			"Take the next issue that is ready for a session and put this session on it. Ready means: in a state sessions take from, not for a person, not someone else's, nothing unfinished under it, waiting on nothing unfinished, and not for another repository. The first one in the order of the tree is taken: what is under the first branch comes before the rest. It is started and assigned to this session's owner in one step, so no two sessions get the same issue. Shows the issue with what was said on it.",
 		promptSnippet: "Take the next issue that is ready and start on it",
 		promptGuidelines: ["When asked to take the next piece of work, or when you have finished one and are to carry on, call work_next rather than choosing from work_list: it skips what is not ready and what is for people, and it cannot hand you an issue another session has."],
 		parameters: Type.Object({

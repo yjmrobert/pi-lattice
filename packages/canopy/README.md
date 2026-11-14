@@ -4,7 +4,9 @@ All the work of a team as a tree that grows upward: the team at the root, then e
 
 Press `c` in the pane, or run `/lattice canopy`. It takes the whole screen; `esc` gives it back.
 
-When you have joined your team's server (`/lattice server <address>`), the tree is the team's issues, on the levels of the team's own scheme. An item's colour is whoever it is assigned to, and the ring round it is the colour of whoever's session is on it. `s` puts the session open in your terminal on the selected issue, `n` adds an issue under it, `e` moves it to its next state, `m` assigns it to you and `t` comments on it. Sessions on no issue are drawn at the foot. Without a server, the tree is the sessions themselves and the items planned among them.
+When you have joined your team's server (`/lattice server <address>`), the tree is the team's issues, on the levels of the team's own scheme. An item's colour is whoever it is assigned to, and the ring round it is the colour of whoever's session is on it. Sessions on no issue are drawn at the foot. Without a server, the tree is the sessions themselves and the items planned among them.
+
+Agents keep the issues; you steer. `space` on an item opens a line at the foot of the tree, to the session tending that item and about that item. The foot says who it goes to before you send it. Say what you want ("this first", "split this by provider", "drop it", "why is this held") and that session changes the work and answers there in one sentence. Nothing tends the branch yet: a session is started for it. `s` still puts the session open in your terminal on the selected issue.
 
 ```
  ◆ harbor  1 @yan ⠋4 ●2 19   2 @mira ⠋4 10   3 @sam ⠋4 ●1 17   4 ○@teo away ●1 4
@@ -32,6 +34,9 @@ When you have joined your team's server (`/lattice server <address>`), the tree 
 - **`›` between two items** means the second waits on the first; it dims once the first is finished. A wait that reaches into another branch is a dashed arc.
 - **Dim with `⧗` is held.** Something it waits on is unfinished, or what it is under is held. `⧗2` after a name counts what waits on that item. What nobody is on and nothing holds is there to be taken: `.` goes to the next, and the top of the screen counts both.
 - **A thin dotted line ties an agent to what it is working on**, when that is not the item it sits on.
+- **`⚑` is a direction that stands.** Something a person said that is a rule and not an errand ("ask me before anything here lands") is kept on the item in their words, in their colour. Everything under the item is told it. The panel lists the directions that reach the selected item, nearest first.
+- **`+` is something an agent changed since you looked.** The top of the screen counts them. `u` goes to the next, and the foot says who did it, what, and why. `x` there puts it back: a line to whatever tends it. Past the last one, you have looked.
+- **An agent in a shell is a ring too.** One that took an issue with `pi-lattice work next` is drawn on it by name. It is not a session, so there is nothing to open.
 - **What moves is something that happened.** A light running along the branches is a message, from the sender to the receiver. A branch lighting downward is a task that landed. A ring spreading in amber is a question that just arrived; a ring closing in on an item is a session put on it. A colour spreading along a branch is an item that changed hands. With nothing happening the screen is still. `canopy.motion` turns it down (`calm`) or off.
 
 ## Keys
@@ -43,8 +48,10 @@ When you have joined your team's server (`/lattice server <address>`), the tree 
 | `tab` | the next thing that needs someone |
 | `.` | the next thing that is there to be taken: nobody on it, nothing holding it |
 | `o` | first to last, or as filed |
+| `space` | say what you want about the item, to whatever tends it |
+| `u` | the next thing an agent changed since you looked; `x` there puts it back |
 | `enter` | open the session on the item in this terminal; unfold a folded item |
-| `s` | put a session on a planned item |
+| `s` | put a session on a planned item, or the session open here on an issue |
 | `f` | fold an item to one node, or unfold it |
 | `1`–`9`, `0` | keep one person's colour and grey the rest; clear |
 | `a` | the panel: the selected item, every agent by owner, or nothing |

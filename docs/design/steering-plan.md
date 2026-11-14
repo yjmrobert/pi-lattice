@@ -1,6 +1,6 @@
 # Steering: agents keep the issues, people say what they want
 
-A plan for what the issue tracker needs next. Status: proposed, nothing built. The decision is [0033](../decisions/0033-agents-keep-the-issues.md); [the mockup](steering.html) is the canopy below, working.
+What the issue tracker needed next, and how it was built. Status: built, all six phases. The decision is [0033](../decisions/0033-agents-keep-the-issues.md), which also says what is not verified; [the mockup](steering.html) is the canopy below as it was designed.
 
 ## The questions this started from
 
@@ -84,7 +84,7 @@ It is yours until you say done or drop it, or go quiet for 30 minutes.
 ## States and edges
 
 - **Nothing tends the branch.** The foot says so and that a session is being started for it; the line is sent when it is there.
-- **The line was not understood.** The answer says what was not clear and changes nothing.
+- **The line was not understood.** The session is told to change nothing and say so. Whether it does is the model's.
 - **The line asks for something the scheme refuses** (a task under an epic). The answer says why not.
 - **A direction and a later one disagree.** The nearer to the item wins; on one item, the later. The tending session says which it followed.
 - **A person is away.** Nothing waits on them but what a direction of theirs, or an agent's doubt, sends to them.
@@ -110,12 +110,18 @@ It is yours until you say done or drop it, or go quiet for 30 minutes.
 3. **Directions.** Kept on the issue, told to everything below, `⚑`, the panel. Results checked by the tending session; a gate where a direction asks for one.
 4. **Order.** `rank`, `next` in tree order, items that move.
 5. **The command line.** `pi-lattice work`, leases, `prime`.
-6. **The keys go.** `n`, `e`, `m`, `t`, once 1 to 3 have had real use.
+6. **The keys go.** `n`, `e`, `m`, `t`.
+
+## Decided on the way
+
+- **One key.** The session tells an errand from a rule, and says which it took a line for.
+- **A reviewer for everything but tasks.** `rules.review` in the scheme names the types whose results a session of their own checks; the rest are checked by the session tending the branch.
+- **The keys go at once,** not after a trial.
 
 ## Open
 
-- Whether one line can be told apart from a standing direction reliably by the tending session, or the person should say which (`space` and `shift+space`).
-- Whether the tending session should close results itself by default, or a second session should, so that nothing checks its own delegation.
+- Whether a model tells an errand from a rule reliably. It needs a run with a real one.
 - What a person is shown when two teammates' directions on one branch disagree.
+- Whether a result that came in while no host was running should be handed on when one starts.
 - Whether the command should have a shorter name than `pi-lattice work`.
 - How long a lease is. Thirty minutes is a guess.

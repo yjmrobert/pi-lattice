@@ -102,3 +102,18 @@ export const inOrder = (flow: Flow, item: Item, order: Order): Item[] => (order 
 /** Nobody is on it and nothing holds it: it is there to be taken. */
 export const canStart = (flow: Flow, item: Item): boolean =>
 	item.level >= 0 && !item.done && !item.agent && item.children.length === 0 && !flow.held.has(item.id) && item.parent?.children.includes(item) === true;
+
+/**
+ * Whether anything that was drawn before is drawn in another place among its siblings now:
+ * an agent put it first, or its state moved it along. What is new or gone does not count.
+ */
+export function reordered(before: { items: ReadonlyMap<string, Item>; flow: Flow }, after: { items: ReadonlyMap<string, Item>; flow: Flow }, order: Order): boolean {
+	for (const [id, item] of after.items) {
+		const was = before.items.get(id);
+		if (!was || (was.children.length < 2 && item.children.length < 2)) continue;
+		const [then, now] = [inOrder(before.flow, was, order).map((child) => child.id), inOrder(after.flow, item, order).map((child) => child.id)];
+		const [kept, still] = [new Set(now), new Set(then)];
+		if (then.filter((child) => kept.has(child)).join("\n") !== now.filter((child) => still.has(child)).join("\n")) return true;
+	}
+	return false;
+}

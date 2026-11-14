@@ -8,6 +8,7 @@ import { formatSetting, SETTINGS, settingAccepts, TEMPLATE_NAMES, TEMPLATES } fr
 /** Environment variables that are not settings: where things are kept and how Pi is started. */
 const OTHER: ReadonlyArray<readonly [name: string, does: string]> = [
 	["LATTICE_HOME", "Where your own settings, templates, the list of your trees, and the server you joined, its people and your key are kept. Default: `<Pi agent directory>/lattice`, usually `~/.pi/agent/lattice`."],
+	["LATTICE_AGENT", "Which agent is asking, for `pi-lattice work`: the name recorded with what an agent that is not a Pi session does to the team's work. `--agent` says the same for one command. Default: `agent`."],
 	["LATTICE_STATE_DIR", "Where the tree for the current directory is kept, in place of `<repository>/.lattice`. With it set, a first message does not start a tree by itself."],
 	["LATTICE_OWNER", "The name sessions you start are owned by, for this run. Default: the name you chose when you joined a server, else your user name."],
 	["LATTICE_ADVERTISE", "The host name or address teammates should reach this machine at. Default: every network address it has."],
