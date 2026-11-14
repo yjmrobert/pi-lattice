@@ -1,6 +1,6 @@
 # 0030 The canopy in order
 
-Builds on [0024](0024-the-canopy.md). Status: built.
+Builds on [0024](0024-the-canopy.md). Status: built. Since [0033](0033-agents-keep-the-issues.md), "as filed" is the rank the agents keep, and an item that changes place moves there.
 
 The canopy drew the items under one in the order they were filed, and every unfinished wait as a dashed arc between the two. With more than a few waits the arcs crossed each other and the labels, and nothing said which work could go ahead.
 
@@ -18,7 +18,7 @@ The canopy drew the items under one in the order they were filed, and every unfi
 
 **Not done**
 
-An item that changes place is not animated: it is drawn where it now belongs. Sessions on no issue stay at the foot, unordered.
+Sessions on no issue stay at the foot, unordered. (An item that changes place was not animated when this was written; since 0033 it moves there.)
 
 **Evidence**
 

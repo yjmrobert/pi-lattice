@@ -100,7 +100,7 @@ The workflow runs the whole suite on the tagged commit, builds the package and p
 
 ## Not done yet
 
-- **A run with a real model.** Every flow is tested against a scripted model, which checks the mechanics, not how well a model follows the role fragments. `npm run eval` is written for that and has not been run yet.
+- **A run with a real model.** Every flow is tested against a scripted model, which checks the mechanics, not how well a model follows the role fragments. That matters most for steering: whether a model reads "this first" and reorders the work, tells a rule from an errand, and answers in one sentence. `npm run eval` is written for delegation and has not been run yet; [the hand test](docs/testing.md) has the steps for steering.
 - **Two real machines.** Sharing is tested with two isolated hosts on one machine ([manual script](docs/two-machine-handoff.md)).
 - **Sharing across arbitrary networks.** The two machines must reach each other directly (LAN, VPN, SSH tunnel). Hole-punching is not built ([ADR 0012](docs/decisions/0012-peer-to-peer-collab.md)).
 - **The side pane relies on Pi internals.** It falls back to a compact list if they change ([ADR 0013](docs/decisions/0013-pane-inside-pi.md)).

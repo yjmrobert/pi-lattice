@@ -154,6 +154,54 @@ With `pane.home` at its default, in a terminal at least 120 columns wide, in a p
 
 - [ ] The chat and the tree take turns with the whole width.
 
+## 3b. Steering the work
+
+This is the part no automated test covers: whether a real model does what a line said on the tree means. It needs a board (`/lattice server start`) and the canopy.
+
+1. In a session, ask for some work to be written down: "Plan a small checkout feature as issues: an epic, two features, a story under each, and two tasks under each story. Start nothing."
+
+- [ ] The canopy draws the issues on their levels as they are filed. The top of the screen counts what agents changed (`+N changed by agents`), and new items have `+` beside them.
+
+2. Press `u` a few times.
+
+- [ ] Each press goes to a changed item, and the foot of the tree says which agent did it, what, and why. The reason reads like a reason, not like the title again.
+- [ ] After the last one it says that is everything, and the `+` marks and the count are gone.
+
+3. Select the second feature and press `space`.
+
+- [ ] The foot says who the line goes to (a coordinator and the item it sits on, or "a session that is started to tend it") and what it is about, before anything is typed.
+
+4. Type `this first` and press `enter`.
+
+- [ ] The foot shows your line and that it is being read, then one sentence from the session saying what it did.
+- [ ] The feature moves to the left of the other, and the tree moves there, not jumps.
+- [ ] `/lattice issue <its number>` shows the change as the agent's, with why.
+
+5. On the epic, say `ask me before anything here lands`.
+
+- [ ] The answer says it was kept as a direction. `⚑` appears beside the epic in your colour, and the panel lists it under DIRECTIONS on the epic and on everything under it.
+
+6. On a task, say `why is this not started?`.
+
+- [ ] It answers, changes nothing, and keeps no direction.
+
+7. Say something that cannot be done, such as `put this task under the other epic` where there is none.
+
+- [ ] It says what is wrong and changes nothing.
+
+8. In another terminal, in the same repository: `pi-lattice work next --agent tester`, then `pi-lattice work done <n> --summary "did it" --check "looked"`.
+
+- [ ] `next` prints the issue and the direction from step 5 above it. The canopy draws `tester` on that task with a ring.
+- [ ] After `done`, the session tending the branch is told of the result. Because of the direction, it asks you before closing it: the item turns amber and the question is at the foot.
+
+9. Have a session finish a story or a feature (a result on something larger than a task).
+
+- [ ] A session named `review-<n>` appears under the one tending the branch, with the reviewer role, and closes the issue, sends it back with a comment, or asks you.
+
+10. Press `x` on a change while walking with `u`.
+
+- [ ] The session that tends the item is told to put it back, does, and says so.
+
 ## 4. Messages to approve
 
 Messages between your own sessions skip approval by default. Turn approval on for this repository:

@@ -143,6 +143,8 @@ Every animation is the picture of one event. Nothing moves when nothing happened
 
 The keys the pane already has keep their meaning. `n` is both "no" and "add": as in the pane, the answer keys apply only while the selected item is asking.
 
+This table is the plan as it was written. What is built is in [the canopy's readme](../../packages/canopy/README.md). Since [0033](../decisions/0033-agents-keep-the-issues.md) nothing is added or changed by key: `n` to add is gone, `space` says what a person wants about the selected item to whatever tends it, and `u` goes through what agents changed.
+
 ## Edges
 
 **Size**

@@ -1485,8 +1485,6 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				const { nodeId } = call("told");
 				const lines = this.runtimes.get(nodeId)?.foreground === connection.id ? (this.toTell.get(nodeId) ?? []) : [];
 				if (lines.length > 0) this.toTell.delete(nodeId);
-				// What is typed there from now on is in answer to it.
-				for (const steer of this.steers) if (steer.to.nodeId === nodeId && steer.answer === undefined) delete steer.message;
 				return { messages: lines };
 			}
 			case "server": {

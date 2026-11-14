@@ -1,6 +1,6 @@
 # One server, and the work on it
 
-A plan to replace peer-to-peer sharing with one hosted service, and to track work on it as issues. Status: phases 1 to 6 are built ([0026](../decisions/0026-a-server-for-the-work.md)), and so is what reading Kanzo changed ([0027](../decisions/0027-what-kanzo-changed.md)): a board on a person's own machine, sessions taking the next ready issue, and review before done. Phase 7 is built as it was redecided ([0028](../decisions/0028-the-server-introduces-the-machines-carry.md)): the server says who is where and carries offers and requests, and sessions still go straight between the two machines, which must both be on. Phase 8 is built too: the networks joined by a code are removed ([0029](../decisions/0029-networks-are-gone.md)). Of phase 6, moving an issue under another parent, changing its type, labels and fields are commands or agent tools, not keys in the canopy.
+A plan to replace peer-to-peer sharing with one hosted service, and to track work on it as issues. Status: phases 1 to 6 are built ([0026](../decisions/0026-a-server-for-the-work.md)), and so is what reading Kanzo changed ([0027](../decisions/0027-what-kanzo-changed.md)): a board on a person's own machine, sessions taking the next ready issue, and review before done. Phase 7 is built as it was redecided ([0028](../decisions/0028-the-server-introduces-the-machines-carry.md)): the server says who is where and carries offers and requests, and sessions still go straight between the two machines, which must both be on. Phase 8 is built too: the networks joined by a code are removed ([0029](../decisions/0029-networks-are-gone.md)). Phase 6, working on issues from the canopy by key, was built and then taken out: agents keep the issues and a person says what they want ([0033](../decisions/0033-agents-keep-the-issues.md), [the plan for it](steering-plan.md)).
 
 ## Why
 
@@ -35,14 +35,14 @@ Work is different. An epic is nobody's machine's: several people edit it, reorde
 
 ## The model
 
-**An issue** is: a number (`#12`, counted by the server), a title, a body, a type, a state, a parent, an assignee, labels, values for the team's fields, the issues it waits on, whether it is for a person, the repository it is for, comments, and a history of every change with who made it and when.
+**An issue** is: a number (`#12`, counted by the server), a title, a body, a type, a state, a parent, an assignee, labels, values for the team's fields, the issues it waits on, whether it is for a person, the repository it is for, comments, and a history of every change with who made it and when. Since [0033](../decisions/0033-agents-keep-the-issues.md) also: its rank among the issues under its parent, the result reported on it, what people said about it and which of that stands as a direction, the session or agent behind each change and its reason, and an agent holding it from a shell.
 
 **A scheme** is how a team structures them, and it is data on the server, edited as a whole:
 
 - **Types**, each with the level it is drawn on and the types it may sit under. By default `epic`, `feature` under an epic, `story` under a feature, `task` under a story, and `bug` under any of them or under nothing.
-- **States**, each of a kind: `open`, `active`, `done` or `dropped`. By default `todo`, `doing`, `done`, `dropped`.
+- **States**, each of a kind: `open`, `active`, `done` or `dropped`. By default `todo`, `doing`, `review`, `done`, `dropped`.
 - **Fields**: a name and a type (`text`, `number`, `date`, `person`, `choice` with its choices), optionally only for some types, optionally required.
-- **Rules** for what sessions do to issues: the state an issue takes when a session is put on it (`doing`), when the session reports its result (`review`, for a person to close), and optionally the one state sessions take their next issue from, which leaves the others, like a backlog, to people.
+- **Rules** for what sessions do to issues: the state an issue takes when a session is put on it (`doing`), when the session reports its result (`review`, where since 0033 a reviewer session or the session tending the branch checks it; `rules.review` names the types that get a reviewer), and optionally the one state sessions take their next issue from, which leaves the others, like a backlog, to people.
 
 **What is ready.** A session asking for its next issue gets the first one, in the order of the tree, that is in a state sessions take from, is not for a person, is unassigned or its owner's, has nothing unfinished under it, waits on nothing unfinished, and is not for another repository. The server picks, starts and assigns it in one step.
 
@@ -61,8 +61,9 @@ Changing the scheme never rewrites or rejects what exists. An issue that no long
 | Types and rules | `protocol` | `Issue`, `Scheme`, the default scheme, and the pure functions that say whether an issue fits. No I/O. |
 | The service | new package `server` | An HTTP server over one SQLite file. The only writer. Also the client the host uses. |
 | The host | `host`, wired in `app` | Connects when a server is configured, keeps a copy of the issues, tells the server which sessions it runs, and answers the pane, the canopy and the agents from the copy. |
-| Agents | `graph` | Tools to read the work, add to it, change it, and say which issue they are on. |
-| The canopy | `canopy` | Draws the issues, with sessions on them, when there is a server; the session tree as before when there is not. |
+| Agents | `graph` | Tools to read the work, add to it, change it and order it with a reason, say which issue they are on, take the next, report a result, and keep what a person said as a direction. |
+| Other agents | `app` | `pi-lattice work`: the same from a shell, for agents that are not Pi sessions. |
+| The canopy | `canopy` | Draws the issues, with sessions on them, when there is a server; the session tree as before when there is not. Where a person says what they want about an item, and sees what agents changed. |
 | Running it | `app` | `pi-lattice server` for a machine that stays on; `/lattice server start` and `share` for a board on one's own; `/lattice server <address>` to join either. |
 
 The API, all JSON over HTTP, with a personal token:
@@ -70,7 +71,11 @@ The API, all JSON over HTTP, with a personal token:
 - `POST /join` with the team's code and a name: a token.
 - `GET /changes?after=<n>&wait=<s>`: what changed since revision `n`: issues, the scheme, people, sessions. Waits up to `wait` seconds when nothing has. A client that has nothing asks from 0.
 - `POST /issues`, `PATCH /issues/<number>`, `POST /issues/<number>/comments`, `GET /issues/<number>` (with comments and history).
-- `POST /next`: take the next ready issue, narrowed by repository, an issue it must be under, a type or a label.
+- `POST /next`: take the next ready issue, narrowed by repository, an issue it must be under, a type or a label. With `lease`, for an agent with no host.
+- `POST /issues/<number>/done`, `POST /issues/<number>/drop`: report a result; give an issue back with a reason.
+- `POST /issues/<number>/said`, `PATCH /said/<line>`: a person says a line about an issue; a line is made to stand as a direction, or lifted.
+- `POST /seen`: this person has looked at what changed.
+- Any write may carry `as` (the session or agent making it) and `why`. Both are kept with the change, and `/changes` carries the last things done.
 - `PUT /scheme`.
 - `PUT /sessions`: the sessions one host is running, which expire if the host stops saying so. A host that can be connected to adds its addresses, what it is working on, and its person's public key.
 - `GET /team`: the secret with which members' hosts prove to each other that they are members.
@@ -83,6 +88,7 @@ Every write is checked and applied by the server in order. A write may name the 
 - **No server configured.** Everything works as today: the session tree, planned items in it, the canopy drawn from sessions.
 - **Server unreachable.** The host keeps its last copy and shows it as stale. Reads work; writes fail and say so. Nothing is queued: a queue of edits made offline is the merging this plan exists to avoid.
 - **A laptop goes offline.** Its sessions disappear from the server after 45 seconds without word. Its issues are untouched.
+- **An agent from a shell goes quiet.** The issue it took is given back after thirty minutes without a word on it, with that written on it.
 - **Two people change one issue.** Different fields: both apply. The same field: the later one wins, and history shows both.
 - **A parent is closed with open children,** or a child moved under its own descendant: refused, with the reason.
 - **A name is taken.** Joining under a name someone holds is refused without that person's token.
@@ -96,7 +102,7 @@ Every write is checked and applied by the server in order. A write may name the 
 3. **The host joins.** Configuration, the copy, presence, a `work` method for the pane and canopy, and sessions that record their issue. `pi-lattice server`, `/lattice server`.
 4. **Agents.** `work_list`, `work_add`, `work_update`, `work_on`, `work_next`; `spawn_session` takes an issue; a result landing moves the issue as the rules say.
 5. **The canopy draws issues.** Levels from the scheme, sessions on their issues, teammates' sessions from the server, misplaced issues marked.
-6. **Working on issues from the canopy.** Add, edit, move, assign, comment, change state in place; edit the scheme.
+6. **Working on issues from the canopy.** Add, edit, move, assign, comment, change state in place; edit the scheme. Built, then replaced by saying what one wants ([0033](../decisions/0033-agents-keep-the-issues.md)); editing the scheme stays.
 6a. **After Kanzo.** A board on one's own machine and sharing it; `work_next`, waiting, issues for people, review, a state to take from, a repository on an issue.
 7. **Sessions by way of the server.** As first planned, the server would have held a session in flight, so that the two people need not be online together; that meant conversations, with the files and command output in them, stored on the server. Decided otherwise: the transfer stays between the two machines and needs both on. The server does what a join code, the local-network beacons and the shared ports did: it is the membership, it tells each host where the others are and which key each person signs with, and it carries offers, requests and their answers. Reading a teammate's conversation and mail between owners stay on the direct connection.
 8. **Retire networks.** Remove networks joined by a code, the beacons, the lobby port and the exchange of who knows whom, now that every install can be a server. The connection, the signed ownership logs and the transfer stay. A host on no server shares with nobody.

@@ -155,7 +155,7 @@ describe("the scheme", () => {
 		await yan.create({ title: "Checkout", type: "epic" });
 		await yan.create({ title: "Pay by card", parent: 1 });
 		expect((await yan.session(2, "start")).state).toBe("doing");
-		// A result is for a person to look at: it does not close the issue.
+		// A result is to be checked before the issue counts as done: it does not close the issue.
 		expect((await yan.session(2, "report")).state).toBe("review");
 		expect((await yan.session(2, "start")).state).toBe("review");
 		await yan.update(2, { state: "done" });

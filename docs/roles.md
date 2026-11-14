@@ -62,8 +62,9 @@ The applied list is stored in the session, survives resume, and carries over `/n
 |---|---|---|
 | `protocol` | base | Given to every session in a tree: who is speaking, how messages work, how to delegate |
 | `reporting` | base | Given to every child: how to answer the session that created it |
-| `coordinator` | base | Breaking work down, delegating to children, tracking, reporting |
+| `coordinator` | base | Breaking work down, delegating to children, tracking, reporting; with a server, keeping the issues under it and doing what a person says about them |
 | `worker` | base | One bounded piece of work, reported back when done or blocked |
+| `reviewer` | base | Checking one result against what its issue says done means, then closing it, sending it back, or asking |
 | `lifecycle` | base | Moving work through the four phases below, with the user steering |
 | `grilling` | phase | Finding gaps and contradictions in a request before planning |
 | `planning` | phase | Producing a plan for approval; no code yet |

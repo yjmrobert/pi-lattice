@@ -1,6 +1,6 @@
 # 0026 A server for the team's work
 
-Begins the move away from peer to peer ([0012](0012-peer-to-peer-collab.md), [0018](0018-networks.md), [0019](0019-everything-everyone-is-running.md)). Changes [0023](0023-planned-work.md): with a server, work is planned as issues on it, not as items in a session tree. [The plan](../design/server-plan.md) has the reasoning and what is left.
+Begins the move away from peer to peer ([0012](0012-peer-to-peer-collab.md), [0018](0018-networks.md), [0019](0019-everything-everyone-is-running.md)). Changes [0023](0023-planned-work.md): with a server, work is planned as issues on it, not as items in a session tree. [The plan](../design/server-plan.md) has the reasoning and what is left. Changed by [0033](0033-agents-keep-the-issues.md): people no longer work on issues by key in the canopy (`n`, `e`, `m`, `t` and `/lattice issue add`, `set`, `comment` are gone), agents have more tools than the four listed here, and issues are taken in an order the agents keep.
 
 **Decision**
 

@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, isKeyRelease, matchesKey, type StackEntry, truncateToWidth, type TUI, visibleWidth, VStack } from "@earendil-works/pi-tui";
-import { describeScheme, emitEvent, type IssueChange, issueLine, type Scheme, schemeProblems, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState, type LatticeEvents } from "@pi-lattice/protocol";
+import { describeScheme, emitEvent, issueLine, type Scheme, schemeProblems, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState, type LatticeEvents } from "@pi-lattice/protocol";
 import { type ChildForm, type FormKey, formKey, newChildForm, renderForm, waitChoices } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
@@ -1422,49 +1422,15 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		await refresh();
 	};
 
-	/** Look at one of the team's issues, add one, change one, or comment on one. */
+	/** Look at one of the team's issues: what it is, what was said and done on it, and why. Changing it is said to whatever tends it. */
 	const issue = async (ctx: ExtensionCommandContext, arg: string): Promise<void> => {
-		const USAGE = "/lattice issue <number> shows one. /lattice issue add <parent | top> <title>, /lattice issue set <number> <title | type | state | parent | assignee | repo | waits | human> <value | none>, /lattice issue comment <number> <text>. waits takes the numbers of the issues it waits on; human takes yes or no.";
+		const USAGE = "/lattice issue <number> shows an issue: what it is, the directions on it, its result, and everything done to it with who and why. To change one, say what you want: space on it in the canopy, or /lattice say <number> <what you want>.";
 		const words = arg.trim().split(/\s+/).filter(Boolean);
 		const client = need(ctx);
 		if (!client) return;
-		const numberOf = (word: string | undefined): number | undefined => (word !== undefined && /^#?\d+$/.test(word) ? Number(word.replace("#", "")) : undefined);
 		try {
-			const [verb, target, ...rest] = words;
-			if (verb === "add") {
-				const parent = numberOf(target);
-				const title = (parent === undefined && target !== "top" ? [target, ...rest] : rest).join(" ");
-				if (!title) return ctx.ui.notify(USAGE, "warning");
-				const made = (await client.ui("work", { request: { do: "add", change: { title, ...(parent !== undefined ? { parent } : {}) } } })).issue;
-				if (made) ctx.ui.notify(`Added ${issueLine(made)}${made.parent !== undefined ? `, under #${made.parent}` : ""}.`, "info");
-			} else if (verb === "set") {
-				const number = numberOf(target);
-				const [field, ...value] = rest;
-				const text = value.join(" ");
-				if (number === undefined || !field || text === "" || !["title", "type", "state", "parent", "assignee", "repo", "waits", "human"].includes(field)) return ctx.ui.notify(USAGE, "warning");
-				const none = text === "none";
-				const waits = text.split(/[\s,]+/).filter(Boolean).map(numberOf);
-				if (field === "waits" && !none && waits.includes(undefined)) return ctx.ui.notify("What it waits on is issue numbers, like 3 4, or none.", "warning");
-				if (field === "human" && !["yes", "no"].includes(text)) return ctx.ui.notify("human is yes, for a person and not for sessions, or no.", "warning");
-				if (none && !["parent", "assignee", "repo", "waits"].includes(field)) return ctx.ui.notify(`An issue always has a ${field}.`, "warning");
-				const parent = numberOf(text);
-				if (field === "parent" && !none && parent === undefined) return ctx.ui.notify("The parent is an issue's number, or none.", "warning");
-				const change: IssueChange =
-					field === "parent" ? { parent: none ? null : (parent as number) }
-					: field === "assignee" ? { assignee: none ? null : text.replace(/^@/, "") }
-					: field === "repo" ? { repo: none ? null : text }
-					: field === "waits" ? { waitsOn: none ? [] : (waits as number[]) }
-					: field === "human" ? { human: text === "yes" }
-					: { [field]: text };
-				const changed = (await client.ui("work", { request: { do: "update", number, change } })).issue;
-				if (changed) ctx.ui.notify(issueLine(changed), "info");
-			} else if (verb === "comment") {
-				const number = numberOf(target);
-				if (number === undefined || rest.length === 0) return ctx.ui.notify(USAGE, "warning");
-				await client.ui("work", { request: { do: "comment", number, body: rest.join(" ") } });
-				ctx.ui.notify(`Commented on #${number}.`, "info");
-			} else {
-				const number = numberOf(verb);
+			{
+				const number = words.length === 1 && /^#?\d+$/.test(words[0] as string) ? Number((words[0] as string).replace("#", "")) : undefined;
 				if (number === undefined) return ctx.ui.notify(USAGE, words.length === 0 ? "info" : "warning");
 				const read = await client.ui("work", { request: { do: "read", number } });
 				if (!read.issue) return;
@@ -2121,7 +2087,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		},
 		{ name: "approvals", does: "review messages waiting for approval", run: (ctx) => approvals(ctx) },
 		{ name: "server", usage: "server [start | share [off] | address [your name] | leave]", does: "where the work is tracked: start a board on this machine, share it with teammates, or join theirs by its address; with nothing, say which one you are on", run: (ctx, arg) => server(ctx, arg) },
-		{ name: "issue", usage: "issue <number> | add <parent | top> <title> | set <number> <field> <value> | comment <number> <text>", does: "look at one of the team's issues, add one, change one, or comment on one", run: (ctx, arg) => issue(ctx, arg) },
+		{ name: "issue", usage: "issue <number>", does: "look at one of the team's issues: what it is, what was said and done on it, and why", run: (ctx, arg) => issue(ctx, arg) },
 		{
 			name: "say", usage: "say <issue | session> <what you want>", does: "say something about an issue or a session to whatever tends it: it changes the work and answers in a sentence. space on the canopy does the same",
 			run: async (ctx, arg) => {

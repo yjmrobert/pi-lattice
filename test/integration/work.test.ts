@@ -111,7 +111,7 @@ describe("the team's work", () => {
 		await eventually(() => sam.state().sessions.some((session) => session.id === root.id && session.issue === 1), "sam to see the coordinator on #1");
 		expect(sam.state().sessions.find((session) => session.id === root.id)).toMatchObject({ owner: "tester", repo: "shop", host: "laptop:shop", name: "checkout", role: "coordinator" });
 
-		// A child is put on the feature. When its result lands, the feature is up for a person to review; the epic is not touched by that.
+		// A child is put on the feature. When its result lands, the feature is up to be checked; the epic is not touched by that.
 		await ask(h, root.id, tool("spawn_session", { name: "card form", kind: "task", issue: 2, brief: `!tool send_message ${JSON.stringify({ to: "parent", text: "card form done", intent: "result" })}` }));
 		const kid = await eventually(() => childrenOf(h.nodes(), root.id).find((node) => node.name === "card form"), "the child");
 		expect(kid.issue).toBe(2);

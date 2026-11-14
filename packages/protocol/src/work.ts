@@ -275,7 +275,7 @@ export const DEFAULT_SCHEME: Scheme = {
 	states: [
 		{ name: "todo", kind: "open" },
 		{ name: "doing", kind: "active" },
-		// A session's result is looked at by a person before the issue counts as done.
+		// A session's result is checked before the issue counts as done: by a reviewer session, or by the one tending the branch.
 		{ name: "review", kind: "active" },
 		{ name: "done", kind: "done" },
 		{ name: "dropped", kind: "dropped" },

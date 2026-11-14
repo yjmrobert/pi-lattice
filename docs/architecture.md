@@ -47,13 +47,13 @@ Two kinds of thing, kept separate.
 | `protocol` | The contracts: envelope, typed events, host assignment, wire frames, inbound and lease state machines. No I/O, no Pi. | typebox |
 | `a2a` | Extension. `send_message`, `/inbox`, inbound state machine, `Transport` interface, file and host transports. | protocol |
 | `roles` | Extension plus markdown fragments. `/role`, `apply_role`, prompt-section injection. | protocol |
-| `graph` | Extension. `spawn_session`, `list_sessions`, `/children`. Needs a host to spawn. | protocol |
+| `graph` | Extension. `spawn_session`, `list_sessions`, `/children`, and the tools an agent keeps the team's work with: `work_list`, `work_add`, `work_update`, `work_on`, `work_next`, `work_done`, `work_direction`. Needs a host. | protocol |
 | `pane` | Extension. The tree as a left pane inside Pi; `/lattice`; opens a session here by taking it over from the host. | protocol |
-| `canopy` | Extension. All the work as a tree that grows upward, full screen: who owns what, which agent is on it. Asks the pane for what to draw over the event bus. | protocol |
+| `canopy` | Extension. All the work as a tree that grows upward, full screen: who owns what, which agent is on it, what agents changed. A person says what they want about any item there. Asks the pane for what to draw, and hands it what was said, over the event bus. | protocol |
 | `host` | Library. Store, supervisor, broker, socket API, foreground handover. | protocol |
 | `collab` | Library. Networks, identities, finding teammates, an encrypted peer channel, signed ownership logs, cross-owner mail, handoff. | protocol |
-| `server` | Library and program. One always-on place for a team's work: issues structured by a scheme the team defines, over HTTP, in one SQLite file; and the client a host uses. ([ADR 0026](decisions/0026-a-server-for-the-work.md)) | protocol |
-| `app` | The composition root. The Pi package manifest, the launcher extension, the background host wired to sharing, the command line. | all of the above |
+| `server` | Library and program. One always-on place for a team's work: issues structured by a scheme the team defines, in an order the agents keep, with what people said on them and why each change was made, over HTTP, in one SQLite file; and the client a host uses. ([ADR 0026](decisions/0026-a-server-for-the-work.md), [0033](decisions/0033-agents-keep-the-issues.md)) | protocol |
+| `app` | The composition root. The Pi package manifest, the launcher extension, the background host wired to sharing, the command line, and `pi-lattice work` for agents that are not Pi sessions. | all of the above |
 
 ## Seams
 
@@ -103,6 +103,18 @@ Details in [roles.md](roles.md). Each applied fragment becomes one system prompt
 - **Workspaces**: shared directory or a git worktree per node ([0010](decisions/0010-workspace-policy.md)).
 - **Foreground handover**: a session opened in a terminal is taken over from the host and handed back on leaving. Its messaging goes through the same broker either way.
 - **No UI of its own**: the pane in the developer's Pi shows the tree and drives the host ([0013](decisions/0013-pane-inside-pi.md)).
+
+## The work
+
+With a server, the team's work is issues in a tree, and agents keep it ([ADR 0033](decisions/0033-agents-keep-the-issues.md)). A person does not edit issues.
+
+- **Who tends what.** The session that tends an issue is the nearest one with the coordinator role, on it or above it. It files, splits, orders and closes what is under it, and says why with each change.
+- **Steering.** A person says a line about an item: `space` on the canopy, or `/lattice say`. The canopy hands it to the pane, the pane to the host, and the host to the session tending that branch, starting one when nothing does. A session open in a terminal is told by that terminal. The session's last sentence is the answer, and is drawn at the foot of the tree.
+- **Directions.** The line is kept on the issue in the person's words. The session may keep it as a direction, which then reaches every issue below and is printed with the brief of any issue handed out there. Agents cannot write one.
+- **Order.** Issues have a rank among their siblings, and the next ready issue is the first in the order the tree is read.
+- **Results.** Finished work is reported on the issue. The host hands a result to a session with the reviewer role for the types the scheme names (by default everything but tasks and bugs), and to the tending session otherwise. Either closes it, sends it back, or asks the person.
+- **What changed.** The server keeps the revision each person last looked at. What an agent changed since is marked on the tree and walked with `u`.
+- **Other agents.** Anything with a shell uses `pi-lattice work` against the same server, as the person, under its own name. It holds an issue on a lease, since no host says it is running.
 
 ## Collaboration
 

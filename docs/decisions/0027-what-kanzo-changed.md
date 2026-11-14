@@ -1,6 +1,6 @@
 # 0027. What Kanzo changed: a board on your own machine, and work that agents take
 
-Status: built.
+Status: built. Changed by [0033](0033-agents-keep-the-issues.md): `work_next` takes the first ready issue in the order of the tree, not the lowest number; a result in `review` is checked by a session, not left for a person; and agents outside Pi reach the work with `pi-lattice work`, where this said MCP was not taken.
 
 ## Context
 

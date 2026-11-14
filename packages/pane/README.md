@@ -38,6 +38,10 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | `/lattice restore [name]` | Bring archived sessions back |
 | `?` | List every key |
 | `/lattice server [start \| share [off] \| <address> [your name] \| leave]` | Where the work is tracked and who your team is: start a board on this machine, share it, or join a teammate's by its address. Joining asks once what teammates should call you. With nothing, says which one you are on |
+| `/lattice say <issue \| session> <what you want>` | Say something about an issue or a session to whatever tends it. It changes the work and answers in a sentence. `space` on the canopy does the same |
+| `/lattice issue <number>` | Read an issue: what it is, the directions on it, its result, and everything done to it with who and why |
+| `/lattice scheme [edit]` | How the team structures its work: types, states, fields, and which results get a reviewer |
+| `/lattice on <issue \| none>` | Say which issue the session open here is on |
 | `/lattice team` | The people on your server: who is here, what is being handed over, a teammate's changed key, and looking for teammates again, which says which addresses were tried and why they did not answer |
 | `o` / `/lattice offer <name> [person]` | Offer one of your sessions to a teammate. It is theirs as soon as they accept. With no server joined, `o` says how to join one |
 | `t` / `/lattice take <name>` | Ask a teammate for one of their sessions. It is yours as soon as they approve. `t` again takes the request back. For a session in a repository that is not on this machine, the repository is cloned first, after showing you where from and where to |

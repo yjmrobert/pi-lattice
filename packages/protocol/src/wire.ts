@@ -124,11 +124,6 @@ export interface Steer {
 	/** What the session said it did, in a sentence. */
 	answer?: string;
 	answeredAt?: number;
-	/**
-	 * The session is open in a terminal, where the host cannot type: whoever has it open says
-	 * this there. Present only in the answer to the one who asked.
-	 */
-	message?: string;
 }
 
 export interface UiState {

@@ -30,8 +30,8 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0023 | Planned work, and what a session is working on | accepted |
 | 0024 | The canopy | first part built |
 | 0025 | One published package, built | built; the publish itself not yet done |
-| 0026 | A server for the team's work | built: issues, the scheme, sessions on issues, the canopy, working on issues from it |
-| 0027 | What Kanzo changed | built: a board on your own machine and sharing it, `work_next`, waiting, issues for people, review before done |
+| 0026 | A server for the team's work | built: issues, the scheme, sessions on issues, the canopy; working on issues from it by key replaced by 0033 |
+| 0027 | What Kanzo changed | built: a board on your own machine and sharing it, `work_next`, waiting, issues for people, review before done; the order issues are taken in and who reviews changed by 0033 |
 | 0028 | The server introduces; the machines carry | built: on a server, hosts find each other and pass offers and requests through it; sessions go directly between the two machines, both online |
 | 0029 | Networks joined by a code are gone | built: sessions are shared with the people on your server; join codes, beacons and the shared ports are removed |
 | 0030 | The canopy in order | built: what must come first is on the left; held work is dim; `o` puts it back as filed |
