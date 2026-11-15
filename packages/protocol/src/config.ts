@@ -56,7 +56,7 @@ export const SETTINGS: readonly Setting[] = [
 
 	{ key: "roles.tree", section: "Roles", label: "Every session", help: "Role fragments every session in a tree is given. `protocol` is what tells sessions how to talk to each other.", kind: "list", default: ["protocol"], applies: NEW_SESSIONS },
 	{ key: "roles.children", section: "Roles", label: "Every child", help: "Role fragments every child session is given as well, whatever roles were chosen for it. `reporting` is what tells a child how to answer its parent.", kind: "list", default: ["reporting"], applies: NEW_SESSIONS },
-	{ key: "roles.root", section: "Roles", label: "First session", help: "Roles for the session that starts a tree, for example coordinator. Empty leaves it as a plain Pi session.", kind: "list", default: [], applies: NEW_SESSIONS },
+	{ key: "roles.root", section: "Roles", label: "First session", help: "Roles for the session that starts a tree, for example coordinator. Empty leaves it as a plain Pi session; with a board, it is then given coordinator, so that results are checked.", kind: "list", default: [], applies: NEW_SESSIONS },
 	{ key: "roles.child", section: "Roles", label: "Child with no roles", help: "Roles for a child that was created without any.", kind: "list", default: ["worker"], applies: NEW_SESSIONS },
 
 	{ key: "approval", section: "Messaging", label: "Approval", help: "Which messages between agents wait for you: those from other people's sessions (cross-owner), all of them (always), or none (never).", kind: "choice", choices: APPROVAL_POLICIES, default: "cross-owner", env: "LATTICE_APPROVAL", applies: "Applies at once to the session open here, and to background sessions started from now on." },

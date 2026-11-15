@@ -26,7 +26,7 @@ A setting takes its value from the first of these that has one:
 |---|---|---|---|---|
 | `roles.tree` | Role fragments every session in a tree is given. `protocol` is what tells sessions how to talk to each other. Applies to sessions created from now on. | names separated by spaces, or none | protocol |  |
 | `roles.children` | Role fragments every child session is given as well, whatever roles were chosen for it. `reporting` is what tells a child how to answer its parent. Applies to sessions created from now on. | names separated by spaces, or none | reporting |  |
-| `roles.root` | Roles for the session that starts a tree, for example coordinator. Empty leaves it as a plain Pi session. Applies to sessions created from now on. | names separated by spaces, or none | none |  |
+| `roles.root` | Roles for the session that starts a tree, for example coordinator. Empty leaves it as a plain Pi session; with a board, it is then given coordinator, so that results are checked. Applies to sessions created from now on. | names separated by spaces, or none | none |  |
 | `roles.child` | Roles for a child that was created without any. Applies to sessions created from now on. | names separated by spaces, or none | worker |  |
 
 ## Messaging
