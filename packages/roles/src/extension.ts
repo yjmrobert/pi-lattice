@@ -229,6 +229,13 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 	onEvent(pi.events, "lattice:roles:set", (request) => {
 		if (context) change("set", request.fragments);
 	});
+	// Roles given by the session's host after it started: a session reads its roles only when it starts.
+	onEvent(pi.events, "lattice:roles:add", (request) => {
+		if (!context) return;
+		reload(context);
+		const known = request.fragments.filter((name) => available.has(name));
+		if (known.length > 0) change("add", known);
+	});
 
 	// The event bus outlives a session switch, so this instance must go quiet once its session ends.
 	pi.on("session_shutdown", async () => {

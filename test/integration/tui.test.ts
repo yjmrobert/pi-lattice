@@ -210,6 +210,35 @@ describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 		await pi.see("echo[user] roles=[lattice-role-protocol] still here?");
 	}, 60_000);
 
+	it("gives the session open here the coordinator role when a board arrives after its tree and its children are on the issues", async () => {
+		const server = new WorkServer({ file: ":memory:", host: "127.0.0.1" });
+		const address = `http://127.0.0.1:${await server.start()}/#${server.tracker.code}`;
+		const sam = new WorkClient(await joinServer(address, "sam"));
+		try {
+			await sam.create({ title: "Checkout", type: "epic" });
+			await sam.create({ title: "Pay by card", parent: 1 });
+			// The tree first, with a plain first session; the board after, as someone trying it out does.
+			const pi = await withTree({ cols: 150, rows: 40 });
+			await pi.submit(`/lattice server ${address}`);
+			await pi.see(/Joined http:\/\/127\.0\.0\.1:\d+ as tester\. It has 2 issues\./);
+			await pi.submit("before");
+			await pi.see("echo[user] roles=[lattice-role-protocol] before");
+
+			// It delegates a feature. Nothing here tends the board, so the root is given the role (ADR 0036), and the session open here takes it up.
+			await pi.submit(`do !tool spawn_session ${JSON.stringify({ name: "card form", kind: "task", issue: 2, brief: "say ok" })}`);
+			await pi.see(/now has the coordinator role/, 30_000);
+			await pi.see(/roles: protocol \+ coordinator/, 30_000);
+			// A turn keeps the roles it started with: the role is in the prompt from the next turn that starts.
+			await pi.submit("after");
+			await pi.see(/echo\[user\] roles=\[[\w,-]+\] after/, 30_000);
+			await pi.submit("again");
+			await pi.see(/echo\[user\] roles=\[lattice-role-protocol,lattice-role-coordinator\] again/, 30_000);
+		} finally {
+			sam.stop();
+			await server.stop();
+		}
+	}, 90_000);
+
 	it("joins a team's server by its address, draws the team's issues in the canopy, and puts this session on one with s", async () => {
 		const server = new WorkServer({ file: ":memory:", host: "127.0.0.1" });
 		const address = `http://127.0.0.1:${await server.start()}/#${server.tracker.code}`;

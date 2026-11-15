@@ -112,6 +112,10 @@ interface Shared {
 	slider: ReturnType<typeof setInterval> | undefined;
 	/** Whether the canopy is what Pi opens on, read from the settings a moment ago. */
 	homeChosen: { value: boolean; at: number } | undefined;
+	/** The roles the host has for the session open here, as last seen: what it gains later is applied to the session. */
+	roles?: { nodeId: string; fragments: string[] };
+	/** The roles applied in the session open here, as the roles extension last said. */
+	applied?: string[];
 }
 const KEY = Symbol.for("pi-lattice.pane.6");
 const globals = globalThis as { [KEY]?: Shared };
@@ -543,12 +547,29 @@ async function typeWhatIsTold(link: Link): Promise<void> {
 	}
 }
 
+/**
+ * Roles the host gave the session open here after it started are applied to it (ADR 0036):
+ * a session reads its roles only when it starts, and the host cannot reach into a terminal.
+ */
+function syncRoles(link: Link): void {
+	const node = link.state?.nodes.find((candidate) => candidate.id === shared.current);
+	if (!node) return;
+	const before = shared.roles?.nodeId === node.id ? shared.roles.fragments : undefined;
+	// Seen for the first time, the session may have been closed when its host gave it the role: a root the host has as coordinator is one.
+	// What the session has applied is not known until the roles extension has said so; until then, look again.
+	if (!before && !shared.applied) return;
+	shared.roles = { nodeId: node.id, fragments: node.fragments };
+	const gained = before ? node.fragments.filter((name) => !before.includes(name)) : node.parentId === null && node.fragments.includes("coordinator") && !shared.applied?.includes("coordinator") ? ["coordinator"] : [];
+	if (gained.length > 0 && shared.pi) emitEvent(shared.pi.events, "lattice:roles:add", { fragments: gained });
+}
+
 async function refreshLink(link: Link): Promise<void> {
 	link.refreshing ??= link.client
 		.ui("state", {})
 		.then(async (state) => {
 			link.details = await fetchDetails(link.client, state);
 			link.state = state;
+			syncRoles(link);
 			void typeWhatIsTold(link);
 		})
 		.catch(() => {})
@@ -1012,6 +1033,11 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		if (!link) return;
 		request.done = true;
 		void link.client.ui("work", { request: { do: "seen" } }).then(() => refreshLink(link)).catch(() => {});
+	});
+
+	// What the session open here has applied, so that a role its host gave it while it was closed can be told from one it has.
+	onEvent(pi.events, "lattice:roles:changed", ({ fragments }) => {
+		if (shared.pi === pi || shared.pi === undefined) shared.applied = [...fragments];
 	});
 
 	// The other extensions ask what the settings are; the files are ours to read.

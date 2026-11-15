@@ -114,6 +114,8 @@ export interface LatticeEvents {
 	"lattice:seen": { done?: boolean };
 	/** Ask the roles extension to replace the applied fragments. */
 	"lattice:roles:set": { fragments: string[] };
+	/** Ask the roles extension to apply these fragments as well: roles its host gave the session after it started (ADR 0036). */
+	"lattice:roles:add": { fragments: string[] };
 }
 
 export type LatticeEventName = keyof LatticeEvents;
