@@ -1,6 +1,6 @@
 # 0031 Pi opens on the canopy
 
-Builds on [0013](0013-pane-inside-pi.md), [0015](0015-pane-design.md) and [0024](0024-the-canopy.md). Status: built; how the chat is shown is replaced by [0032](0032-a-session-opens-over-the-tree.md).
+Builds on [0013](0013-pane-inside-pi.md), [0015](0015-pane-design.md) and [0024](0024-the-canopy.md). Status: built; how the chat is shown is replaced by [0032](0032-a-session-opens-over-the-tree.md), and what Pi opens on where there is no tree yet by [0035](0035-the-first-message-on-the-canopy.md).
 
 Pi opened on one session's chat, with the others listed in a pane beside it and the canopy a key away. With several sessions working, the chat of one of them is the wrong thing to open on: what matters first is which of them needs someone, and the chat of that one comes second.
 

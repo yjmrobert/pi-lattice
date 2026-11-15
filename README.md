@@ -29,7 +29,7 @@ Then open `pi` in a project as you always do. Where the project has sessions, Pi
 ```
 
 - To open on the chat with that pane always on its left, as before, set `pane.home` to `chat` (`,` in the pane, or `/lattice config`). Then `alt+l` gives the pane the keyboard and `c` opens the canopy.
-- In a git repository there is nothing to set up: your first message starts the tree, and each new session joins with its first message. Elsewhere, run `/lattice` once.
+- In a git repository there is nothing to set up: Pi opens on an empty canopy that says your first message starts the tree, and you type or paste it there. Each new session joins with its first message. Elsewhere, run `/lattice` once.
 - What needs you is listed above the tree: questions a background session is stuck on, messages to approve. `alt+l` gives the pane the keyboard, and you answer them where they are (`y`/`n`, `a`/`x`, or `o` to say something else instead).
 - With the keyboard, the chat steps aside to show the selected session in full. `enter` opens it in this terminal, with all of Pi. You can switch at any time, even mid-turn: the work you leave carries on in the background.
 - `n` creates a child session from one form. Agents can also delegate on their own. Children run in the background, each on the model you choose. A child can be told to wait on others: it shows in the tree at once and starts by itself when they have finished.

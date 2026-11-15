@@ -18,7 +18,7 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 ```
 
 - **A project with sessions**: they are listed straight away, with nothing typed. A session you just opened joins the list with your first message, named after what you asked.
-- **A git repository with none**: your first message starts a tree, with that session as its root. Nothing to type.
+- **A git repository with none**: Pi opens on an empty canopy that says so, and the first message, typed or pasted there, starts a tree with that session as its root. Nothing else to type.
 - **Any other directory**: the pane says so. Run `/lattice` once to start a tree from the session you are in.
 
 | Key or command | Does |
