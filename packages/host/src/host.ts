@@ -26,6 +26,7 @@ import {
 	latticeHome,
 	type Limits,
 	limitsOf,
+	listSetting,
 	newNodeId,
 	parseSettings,
 	repoConfigPath,
@@ -241,6 +242,8 @@ export function tailOf(messages: RpcRecord[], limit: number): string[] {
 	return lines.slice(-limit);
 }
 
+/** What tells one result on an issue from the next. */
+const resultKey = (issue: Issue): string => `${issue.number}:${issue.result?.at ?? 0}`;
 const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
 
 function isProcessAlive(pid: number): boolean {
@@ -1074,7 +1077,10 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const runtime = this.foregroundRuntime(clientId);
 		this.runtimes.set(id, runtime);
 		this.emit("node", node);
-		return { node, assignment: this.assignment(node, runtime.token) };
+		// With a board, the session that starts a tree tends it, unless roles were chosen for it (ADR 0036).
+		if (!spec.fragments?.length) this.crownRoot(id);
+		const adopted = this.must(id);
+		return { node: adopted, assignment: this.assignment(adopted, runtime.token) };
 	}
 
 	/** Supply sharing, so the pane can show people and run handoffs. */
@@ -1089,6 +1095,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		work?.onChanged(() => {
 			this.notifyUi();
 			this.publishSoon();
+			this.crownRoot();
 			this.checkResults();
 			void this.hearTeammates();
 		});
@@ -1304,7 +1311,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const target = state?.scheme.rules.onReport;
 		if (!state || !state.connected || !target) return;
 		const waiting = state.issues.filter((issue) => issue.state === target && !isClosed(state.scheme, issue));
-		const key = (issue: Issue): string => `${issue.number}:${issue.result?.at ?? 0}`;
+		const key = resultKey;
 		const before = this.inReview;
 		this.inReview = new Set(waiting.map(key));
 		if (!before) return;
@@ -1317,8 +1324,15 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private async handResult(issue: Issue): Promise<void> {
 		const state = this.work?.state();
 		const mine = this.tending(issue.number);
-		if (!state || !mine) return;
+		if (!state) return;
 		const theirs = this.tendedElsewhere(issue.number);
+		if (!mine) {
+			// A result nobody checks stays where it is for good, and nothing on the screen says why: say so, where a session here worked on it.
+			if (!theirs && this.store.listNodes().some((node) => node.issue === issue.number && node.owner === this.owner)) {
+				this.emit("log", "warn", `The result on #${issue.number} has nobody to check it: no session here has the coordinator role, so it stays in ${issue.state}. Say what you want about it on the tree (space) and a session is started to tend it, or set roles.root to coordinator for the next tree.`);
+			}
+			return;
+		}
 		if (theirs && theirs.distance < mine.distance) return;
 		const own = reviewed(state.scheme, issue.type);
 		const told = this.reported.delete(issue.number);
@@ -1332,6 +1346,34 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			}
 		} else if (told) return;
 		await this.tell(mine.node.id, this.template("result", values), "followUp");
+	}
+
+	/**
+	 * With a board, agents keep the work, and something must tend it: check what comes back, close
+	 * it, start reviewers. Where the person chose no roles for the first session and nothing here has
+	 * the coordinator role, the session at the root is given it (ADR 0036): a tree's first session
+	 * as it starts, or the root of a tree whose sessions are already on issues, when a board arrives
+	 * after the tree did. Results that waited with nobody to check them are handed on then.
+	 */
+	private crownRoot(adopted?: string): void {
+		const state = this.work?.state();
+		if (!state?.connected || listSetting(this.settings(), "roles.root").length > 0) return;
+		const mine = this.store.listNodes().filter((node) => !node.archived && !isPlanned(node) && node.owner === this.owner);
+		if (mine.some((node) => node.fragments.includes("coordinator"))) return;
+		const onIssues = new Set(mine.flatMap((node) => (node.issue === undefined ? [] : [node.issue])));
+		const root = adopted ? mine.find((node) => node.id === adopted) : onIssues.size > 0 ? mine.find((node) => node.parentId === null && node.issue === undefined && !node.fragments.includes("worker")) : undefined;
+		if (!root) return;
+		this.update(root.id, { fragments: [...root.fragments, "coordinator"] });
+		// Said to the person, not only written down: a session's role changed without their asking.
+		this.emit("log", "warn", `"${root.name}" now has the coordinator role: there is a board, and nothing else here tends its issues.`);
+		const target = state.scheme.rules.onReport;
+		if (!target) return;
+		for (const issue of state.issues) {
+			if (issue.state !== target || isClosed(state.scheme, issue) || !onIssues.has(issue.number)) continue;
+			// Handed on here, so that the look at what is in review does not hand it on a second time.
+			(this.inReview ??= new Set()).add(resultKey(issue));
+			void this.handResult(issue).catch((error: unknown) => this.emit("log", "warn", `The result on #${issue.number} was not handed on: ${error instanceof Error ? error.message : String(error)}`));
+		}
 	}
 
 	/** A teammate said something about an issue a session here tends: it is passed on, as theirs. */

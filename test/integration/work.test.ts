@@ -3,7 +3,8 @@
  * real Pi sessions whose scripted agents use the work tools.
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { boardAddress, liveBoard, readBoard } from "../../packages/app/src/board.ts";
 import { joinAndSave, readAccount, Work } from "../../packages/app/src/work.ts";
@@ -375,5 +376,45 @@ describe("steering the work", () => {
 		expect(reviewer.fragments).toContain("reviewer");
 		await eventually(async () => (await said(h, reviewer.id)).includes('Check the result that came in on #2 "Pay by card" (feature), from claude'), "the reviewer to have its brief");
 	}, 60_000);
-});
 
+	it("gives the root of a tree the coordinator role once its sessions are on a board's issues, so their results are checked, and says so when nothing can check one", async () => {
+		const h = await joined();
+		const logs: string[] = [];
+		h.on("log", (_level: string, message: string) => logs.push(message));
+		const sam = await teammate("sam");
+		await sam.create({ title: "Checkout", type: "epic" });
+		await sam.create({ title: "Pay by card", parent: 1 });
+		await sam.create({ title: "Refunds", parent: 1 });
+		await eventually(() => issues(h).length === 3, "the host to hear of the issues");
+
+		// A plain first session, as a person's is: no roles were chosen for it. It delegates a feature, as a brief told it to.
+		const root = await h.createRoot({ name: "build", cwd: sandbox.work });
+		expect(root.fragments).toEqual(["protocol"]);
+		await ask(h, root.id, tool("spawn_session", { name: "card form", kind: "task", issue: 2, brief: `!tool send_message ${JSON.stringify({ to: "parent", text: "card form done", intent: "result" })}` }));
+		// Nothing here tended the board, and now work is on it: the root does (ADR 0036).
+		await eventually(() => h.node(root.id)?.fragments.includes("coordinator"), "the root to be given the coordinator role");
+		expect(logs.some((line) => line.includes('"build" now has the coordinator role'))).toBe(true);
+		// So the result on the feature gets its reviewer, instead of staying in review for good.
+		const reviewer = await eventually(() => childrenOf(h.nodes(), root.id).find((node) => node.name === "review-2"), "a reviewer to be started");
+		expect(reviewer.fragments).toContain("reviewer");
+	}, 60_000);
+
+	it("leaves the root as the person chose it, and says that a result has nobody to check it", async () => {
+		const h = await joined();
+		const logs: string[] = [];
+		h.on("log", (_level: string, message: string) => logs.push(message));
+		// The person chose the first session's roles, and coordinator is not among them.
+		mkdirSync(join(sandbox.root, "state"), { recursive: true });
+		writeFileSync(join(sandbox.root, "state", "config.json"), JSON.stringify({ roles: { root: ["lifecycle"] } }));
+		const sam = await teammate("sam");
+		await sam.create({ title: "Checkout", type: "epic" });
+		await sam.create({ title: "Pay by card", parent: 1 });
+		await eventually(() => issues(h).length === 2, "the host to hear of the issues");
+		const root = await h.createRoot({ name: "build", cwd: sandbox.work });
+		await ask(h, root.id, tool("spawn_session", { name: "card form", kind: "task", issue: 2, brief: `!tool send_message ${JSON.stringify({ to: "parent", text: "card form done", intent: "result" })}` }));
+		await eventually(() => sam.issue(2)?.state === "review", "the result to land");
+		await eventually(() => logs.some((line) => line.includes("The result on #2 has nobody to check it")), "the host to say that nothing checks it");
+		expect(h.node(root.id)?.fragments).not.toContain("coordinator");
+		expect(childrenOf(h.nodes(), root.id).some((node) => node.name === "review-2")).toBe(false);
+	}, 60_000);
+});
