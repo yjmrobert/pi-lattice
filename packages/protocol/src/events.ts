@@ -82,6 +82,11 @@ export interface LatticeEvents {
 		away(): boolean;
 		/** How bright the canopy is drawn, from 0 to 1: less while a session is open over it. */
 		dim?(): number;
+		/**
+		 * Where there is no tree yet and a first message would start one: the repository's name, and
+		 * whether that is happening now. The canopy then takes the first message itself (ADR 0035).
+		 */
+		first?(): { repo: string; starting: boolean } | undefined;
 		view?: {
 			render(width: number): string[];
 			key(data: string): void;

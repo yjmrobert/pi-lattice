@@ -294,11 +294,33 @@ function homeAble(): boolean {
 	const terminal = shared.tui?.terminal;
 	// The canopy starts after the pane in a session, so it may not have been there to ask the first time.
 	if (shared.canopy?.pi !== shared.pi) mountCanopy();
-	if (!shared.wrapped || !shared.canopy || !terminal || shared.links.size === 0 || shared.at === undefined) return false;
+	if (!shared.wrapped || !shared.canopy || !terminal || (shared.links.size === 0 && !firstHere()) || shared.at === undefined) return false;
 	if (terminal.columns < HOME_FLOOR.cols || terminal.rows < HOME_FLOOR.rows) return false;
 	const now = Date.now();
 	if (!shared.homeChosen || now - shared.homeChosen.at > 1000) shared.homeChosen = { value: settings().settings.values["pane.home"] !== "chat", at: now };
 	return shared.homeChosen.value;
+}
+
+/**
+ * Where there is no tree yet and the first message here would start one or join one: the
+ * repository's name, and whether a tree is being started for it now. The canopy then opens
+ * empty and takes that message itself (ADR 0035).
+ */
+function firstHere(): { repo: string; starting: boolean } | undefined {
+	try {
+		const ctx = shared.ctx;
+		if (!ctx?.hasUI || shared.current) return undefined;
+		const link = homeLink();
+		// A tree that is here, or not yet read: what it has is drawn, not a first message.
+		if (link && (!link.state || link.state.nodes.some((node) => !node.archived))) return undefined;
+		const repo = basename(projectRoot(ctx.cwd));
+		if (shared.starting) return { repo, starting: true };
+		if (link) return toggleSetting(settings().settings, "pane.autoJoin") ? { repo, starting: false } : undefined;
+		// The same conditions as the first message itself: see before_agent_start.
+		return autoStarts() && !process.env.LATTICE_STATE_DIR ? { repo, starting: false } : undefined;
+	} catch {
+		return undefined; // the session that context belonged to has ended
+	}
 }
 
 /** Whether the canopy is showing: it steps aside while the pane has the keyboard. */
@@ -407,6 +429,7 @@ function mountCanopy(): void {
 		away: () => shared.at === "chat",
 		// Behind an open session the tree is still read, and does not compete with it.
 		dim: () => 1 - 0.62 * shared.grow,
+		first: firstHere,
 	};
 	emitEvent(pi.events, "lattice:canopy:mount", request);
 	if (!request.view) return; // the canopy has not started in this session yet, or is not installed
@@ -1038,9 +1061,10 @@ export default function paneExtension(pi: ExtensionAPI): void {
 			shared.scanner = setInterval(() => void scan(), SCAN_MS);
 			shared.scanner.unref?.();
 		}
-		// With a tree already here, Pi opens on it. Without one it opens on the chat, and the tree joins it when there is one.
+		// With a tree already here, Pi opens on it; so it does where the first message would start one, and the canopy takes that message (ADR 0035).
+		// Elsewhere it opens on the chat, and the tree joins it when there is one.
 		if (shared.at === undefined) {
-			shared.at = shared.links.size > 0 ? "tree" : "chat";
+			shared.at = shared.links.size > 0 || firstHere() ? "tree" : "chat";
 		}
 		if (ctx.mode === "tui") {
 			ctx.ui.setWidget("lattice-pane-anchor", (tui, theme) => {

@@ -10,6 +10,7 @@ import { emitEvent, type LatticeEvents, onEvent, SETTINGS } from "@pi-lattice/pr
 import { type Animation, advance, happenings, type Motion } from "./animate.ts";
 import type { Shape } from "./layout.ts";
 import { buildWorld, type World } from "./model.ts";
+import { type FirstKey, firstKey, renderFirst } from "./first.ts";
 import { BEAT } from "./paint.ts";
 import type { Layout } from "./layout.ts";
 import { reordered } from "./order.ts";
@@ -25,11 +26,25 @@ const FRAME_MS = Math.round(1000 / FPS);
 /** How often the world is asked for again while nothing moves. */
 const LOOK_EVERY = 10;
 const SAY_MS = 4000;
+/** How long the canopy waits for a tree after the first message before it says that none came. */
+const FIRST_MS = 30_000;
 /** How long a fold or an unfold takes, and how often it is drawn while it does: as often as Pi draws. */
 const MORPH_MS = 420;
 const MORPH_FRAME_MS = 16;
 const NAMED = ["up", "down", "left", "right", "shift+up", "shift+down", "shift+left", "shift+right", "home", "tab", "enter", "escape", "backspace"] as const;
 const DEFAULT_LEVELS = (SETTINGS.find((setting) => setting.key === "canopy.levels")?.default as string[] | undefined) ?? ["epic", "feature", "story", "task"];
+
+/** A key press as the first message sees it. Anything that is not a key it acts on is text, pasted text included. */
+function firstKeyOf(data: string): FirstKey | undefined {
+	if (matchesKey(data, "shift+enter") || matchesKey(data, "alt+enter")) return "newline";
+	if (matchesKey(data, "enter")) return "enter";
+	if (matchesKey(data, "backspace")) return "backspace";
+	if (matchesKey(data, "escape")) return "escape";
+	// Pasted text arrives between markers; other escape sequences are keys the message has no use for.
+	const text = data.replace(/\x1b\[20[01]~/g, "").replace(/\r\n?/g, "\n");
+	if (text === "" || text.includes("\x1b") || /[\x00-\x08\x0b-\x1f\x7f]/.test(text)) return undefined;
+	return { text };
+}
 
 function keyOf(data: string): CanopyKey | undefined {
 	const named = NAMED.find((key) => matchesKey(data, key));
@@ -70,6 +85,8 @@ export default function (pi: ExtensionAPI) {
 		away?(): boolean;
 		/** How bright it is drawn: less while something is open over it. */
 		dim?(): number;
+		/** Where there is no tree yet and a first message would start one (ADR 0035). */
+		first?(): { repo: string; starting: boolean } | undefined;
 		memory?: { state?: unknown };
 	}
 
@@ -103,6 +120,27 @@ export default function (pi: ExtensionAPI) {
 		/** A fold or unfold under way: the tree as it was drawn when the key was pressed. */
 		let morph: { from: Layout; camera: { col: number; row: number }; start: number } | undefined;
 		let again: ReturnType<typeof setTimeout> | undefined;
+		/** The first message, while it is written, and once sent, until the tree it starts is drawn. */
+		let draft = "";
+		let sent: { text: string; at: number; started: boolean } | undefined;
+		/** Whether the first message is what the canopy shows now, and what is drawn while it is. */
+		const firstNow = (): { repo: string; starting: boolean } | undefined => {
+			const first = place.first?.();
+			if (!first) {
+				sent = undefined;
+				return undefined;
+			}
+			if (sent) {
+				if (first.starting) sent.started = true;
+				// A tree was being started and stopped without one, or none was ever started: the message is back to be sent again.
+				else if (sent.started || Date.now() - sent.at > FIRST_MS) {
+					draft = sent.text;
+					sent = undefined;
+					said = { text: "No tree started. alt+l shows the chat, and /lattice doctor says why.", until: Date.now() + SAY_MS * 2 };
+				}
+			}
+			return first;
+		};
 		const timer = setInterval(() => {
 			if (!context) return;
 			frames++;
@@ -122,6 +160,16 @@ export default function (pi: ExtensionAPI) {
 				// The room changed, because the chat slid in or out or the terminal was resized: place the window again.
 				if (columns !== width) state = { ...state, framed: false };
 				width = columns;
+				const first = firstNow();
+				if (first) {
+					const lines = renderFirst({ repo: first.repo, draft, ...(sent ? { sent: sent.text } : first.starting ? { sent: "" } : {}), leave: place.keys?.().filter((entry) => !entry.run).map((entry) => [entry.key, entry.does] as const) ?? [], ...(place.away?.() ? { away: true } : {}), dim: Math.max(0, Math.min(1, place.dim?.() ?? 1)) }, width, place.height(), motion === "off" ? 0 : beat());
+					if (said && lines.length > 0) {
+						const text = said.text.slice(0, Math.max(0, width - 2));
+						lines[lines.length - 1] = ` \x1b[38;2;243;246;251m${text}\x1b[0m${" ".repeat(Math.max(0, width - 1 - text.length))}`;
+					}
+					drawn = lines;
+					return lines;
+				}
 				const before = world;
 				({ world, current } = look());
 				const now = Date.now();
@@ -154,6 +202,20 @@ export default function (pi: ExtensionAPI) {
 				return lines;
 			},
 			key(data) {
+				// Before there is a tree, every key is for the first message: there is nothing else to move to.
+				if (context && firstNow()) {
+					const key = firstKeyOf(data);
+					if (!key || sent) return;
+					const next = firstKey(draft, key);
+					draft = next.draft;
+					if (next.send !== undefined) {
+						// A command is run, as it would be from the editor; anything else is the message that starts the tree.
+						if (!next.send.startsWith("/")) sent = { text: next.send, at: Date.now(), started: false };
+						send(next.send);
+					}
+					tui.requestRender();
+					return;
+				}
 				const key = keyOf(data);
 				if (!key || !context) return;
 				// A key the place added, unless a line is being typed: then every key is for the line.
@@ -203,6 +265,17 @@ export default function (pi: ExtensionAPI) {
 			frame: (nodeId, columns, rows, leave) => sessionFrame(world, nodeId, columns, rows, leave, motion === "off" ? 0 : beat()),
 		};
 	}
+
+	/** Send what was written as this session's own message, as if typed into its editor. */
+	const send = (text: string): void => {
+		const ctx = context;
+		if (!ctx) return;
+		try {
+			pi.sendUserMessage(text, ctx.isIdle() ? { expandPromptTemplates: true } : { expandPromptTemplates: true, deliverAs: "steer" });
+		} catch {
+			// The session ended between the key press and now.
+		}
+	};
 
 	/** Hand a command to `/lattice`, through the input path, which runs it even while the agent is working. */
 	const run = (command: string): void => {
@@ -257,7 +330,7 @@ export default function (pi: ExtensionAPI) {
 	// Where the canopy is what Pi opens on, the pane gives it a place in its layout and the keys.
 	onEvent(pi.events, "lattice:canopy:mount", (request) => {
 		if (!context || context.mode !== "tui" || request.view) return;
-		const view = screen(request.tui as TUI, undefined, { height: () => (request.tui as TUI).terminal.rows, back: request.back, open: request.open, keys: request.keys, away: request.away, memory: request.memory, ...(request.dim ? { dim: request.dim } : {}) });
+		const view = screen(request.tui as TUI, undefined, { height: () => (request.tui as TUI).terminal.rows, back: request.back, open: request.open, keys: request.keys, away: request.away, memory: request.memory, ...(request.dim ? { dim: request.dim } : {}), ...(request.first ? { first: request.first } : {}) });
 		request.view = view;
 	});
 

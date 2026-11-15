@@ -2,7 +2,8 @@
  * The canopy as what Pi opens on (ADR 0031), in the real Pi terminal interface: the tree where
  * the chat was, the chat sliding in beside it, and the keyboard moving between the two.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSandbox, eventually, extensionPaths, piCli, type Sandbox } from "../support/harness.ts";
@@ -214,4 +215,37 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		pi.press(KEY.altL);
 		await pi.see("say what you want");
 	}, 90_000);
+
+	it("opens on an empty canopy in a repository with no tree, and starts the tree with a first message pasted there", async () => {
+		// A git repository of its own, with no tree yet: the first message starts one, so Pi opens on the canopy and takes that message (ADR 0035).
+		const shop = join(sandbox.root, "shop");
+		mkdirSync(shop);
+		execFileSync("git", ["init", "-q"], { cwd: shop });
+		stateDir = join(realpathSync(shop), ".lattice");
+		// No LATTICE_STATE_DIR: the tree is kept in the repository, as it is outside tests.
+		const env = { LATTICE_PI_COMMAND: JSON.stringify([process.execPath, piCli]), LATTICE_PI_ARGS: JSON.stringify(fauxArgs), LATTICE_EXTENSION_PATHS: JSON.stringify([extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]) };
+		tui = PiTui.start(sandbox, { cols: 120, rows: 36, cwd: shop, extensions: [extensionPaths.launcher, extensionPaths.pane, extensionPaths.canopy, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph], env });
+		const pi = tui;
+
+		const empty = await pi.see("Your first message starts the tree.");
+		expect(empty[0]).toMatch(/^ ◆ shop/);
+		expect(empty.join("\n")).not.toContain("[Extensions]");
+		expect(empty.at(-1)).toMatch(/⏎\s+start the tree.*alt\+l\s+chat/);
+
+		// Letters are the message's, not keys: p does not open the sessions. A paste keeps its lines.
+		pi.press("plan ");
+		pi.press("\x1b[200~the refunds\nand the invoices\x1b[201~");
+		const written = await pi.see("and the invoices▏");
+		expect(written.join("\n")).toContain("plan the refunds");
+		expect(written.join("\n")).toContain("2 lines");
+
+		pi.press(KEY.enter);
+		// The session takes it as its own message, the tree starts with it, and the canopy draws that tree.
+		const tree = await pi.see(/p\s+sessions/, 30_000);
+		expect(tree.join("\n")).not.toContain("Your first message starts the tree.");
+		expect(tree.join("\n")).toContain("plan the refunds and the invoices");
+		await eventually(() => existsSync(join(stateDir, "host.db")), "the tree to be kept in the repository", 10_000);
+		pi.press(KEY.altL);
+		await pi.see(/echo\[user\].*plan the refunds/, 30_000);
+	}, 120_000);
 });
