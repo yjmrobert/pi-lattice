@@ -13,6 +13,9 @@ conflicts: [planning]     # advisory
 suggests: [worker]        # hint about children this role tends to spawn
 slot: review              # at most one fragment of a slot is applied
 keep: true                # setting the roles leaves it applied
+includes: [house-rules]   # fragments that are part of this one
+when: [board]             # applied only while these facts hold
+unless: [issue]           # and none of these do
 ---
 Review the change for injection, authorisation and secret-handling flaws.
 Report findings with file and line, most severe first.
@@ -22,7 +25,28 @@ Report findings with file and line, most severe first.
 - `requires` and `conflicts` produce a note when a combination looks odd. They never block anything.
 - `slot` says the fragment is one of a kind of which a session has one at a time. Applying it takes off whichever fragment holds the same slot. The built-in slots are `phase` (grilling, planning, implementation, verification), `scope` (feature, story, task) and `stance` (coordinator, worker, reviewer); any name makes a new one.
 - `keep` says that replacing the roles leaves this one applied. `protocol` and `reporting` are kept: they tell a session how the tree it is in works, whatever else it is doing.
-- The body is what the model sees. Write it as instructions to the agent.
+- `includes` names fragments that are part of this one. Applying it applies them after it, each as a section of its own, and they are not listed separately: `coordinator` is a short core that includes what a coordinator does with and without a server. A part is an ordinary fragment. It can be applied alone, shown, and changed without touching the rest.
+- `when` and `unless` name facts (below). The fragment is written into the prompt only while every fact in `when` holds and none in `unless` does, and its parts with it. It stays applied all the while: when the facts change, it comes and goes by itself.
+- The body is what the model sees. Write it as instructions to the agent. `{{name}}` in it becomes the text of that fact; name the fact in `when` too, or the braces are shown where the fact is missing.
+
+## Facts
+
+A fact is something that is so for a session and stays so: where it is in the tree, whether the team has a server, which tools it has. A session's host tells it, and the session knows its own tools. A fact holds when it has a text.
+
+| Fact | Its text | For example |
+|---|---|---|
+| `name` | The session's name in the tree. | `card form` |
+| `kind` | The kind of work it was created for. | `task` |
+| `parent.name` | The name of the session it reports to. Absent for the first session of a tree. | `checkout` |
+| `issue` | The number of the issue it is on. Absent when it is on none. | `38` |
+| `board` | The team keeps its work as issues on a server, and this session's host has joined it. | `yes` |
+| `levels` | The levels of work, largest first: the team's issue types by level where there is a server, else the `canopy.levels` setting. | `epic, feature, story, task` |
+| `types` | Every issue type of the team's scheme. Absent without a server. | `epic, feature, story, task, bug` |
+| `tool.<name>` | The session has that tool. | `tool.spawn_session` |
+
+A session with no host has only the tool facts, so a fragment that needs anything else is not applied there. Facts are never a status or a time: a prompt that changed every turn would lose its cache.
+
+Decide whether a paragraph applies by making it a fragment with `when`, not with a condition inside the text. A fragment then stays something a person can read whole and change whole.
 
 ## Where fragments live
 
@@ -56,7 +80,7 @@ Order matters: fragments are injected in list order, and where two disagree the 
 
 ## How it reaches the model
 
-Each applied fragment becomes one system prompt section, `<lattice-role-NAME>`, after an index section `<lattice-roles>` that lists them and says they are guidance the user can overrule. Pi patches only the sections that changed, so changing roles mid-session keeps the prompt cache where the provider supports it ([ADR 0003](decisions/0003-roles-as-prompt-sections.md)).
+A list of names becomes prompt sections in steps: each fragment and then its parts, less the ones whose `when` and `unless` do not hold, with the facts filled in. Each fragment that is left becomes one system prompt section, `<lattice-role-NAME>`, after an index section `<lattice-roles>` that lists them and says they are guidance the user can overrule. Pi patches only the sections that changed, so changing roles mid-session keeps the prompt cache where the provider supports it ([ADR 0003](decisions/0003-roles-as-prompt-sections.md)).
 
 The applied list is stored in the session, survives resume, and carries over `/new`.
 
