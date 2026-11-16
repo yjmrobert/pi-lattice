@@ -107,7 +107,7 @@ node scripts/release.ts
 
 ## Not done yet
 
-- **A run with a real model.** Every flow is tested against a scripted model, which checks the mechanics, not how well a model follows the role fragments. That matters most for steering: whether a model reads "this first" and reorders the work, tells a rule from an errand, and answers in one sentence. `npm run eval` is written for delegation and has not been run yet; [the hand test](docs/testing.md) has the steps for steering.
+- **Models of other providers, and larger work.** The mechanics are tested against a scripted model. Whether a model does what the roles, the notes and the tool guidelines say is checked with eleven small scenarios on Claude Haiku 5.5 and Sonnet 5.5, which pass ([ADR 0039](docs/decisions/0039-what-agents-are-told-is-measured.md)). Nothing has been run on another provider's models, or on work the size of a real feature. [The hand test](docs/testing.md) has the steps for the pane.
 - **Two real machines.** Sharing is tested with two isolated hosts on one machine ([manual script](docs/two-machine-handoff.md)).
 - **Sharing across arbitrary networks.** The two machines must reach each other directly (LAN, VPN, SSH tunnel). Hole-punching is not built ([ADR 0012](docs/decisions/0012-peer-to-peer-collab.md)).
 - **The side pane relies on Pi internals.** It falls back to a compact list if they change ([ADR 0013](docs/decisions/0013-pane-inside-pi.md)).

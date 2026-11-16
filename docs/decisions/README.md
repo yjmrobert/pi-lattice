@@ -42,3 +42,6 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0035 | The first message is written on the canopy | built: where a first message would start a tree, Pi opens on an empty canopy that says so and takes that message, typed or pasted |
 | 0036 | A board is tended | built: with a board, the root of a tree is its coordinator unless `roles.root` says otherwise, results that waited are handed on, and a result nobody can check is said |
 | 0037 | A push to main releases | built, and not yet run: the version is worked out from the conventional commits since the last release tag, published, tagged, and written up as a GitHub release; nothing is committed back |
+| 0038 | Roles are composed in steps | built: a fragment may hold a slot, be kept, be made of parts, apply only where facts hold, mention them, and add to the one beneath it; each is one line of its header and one pure function |
+| 0039 | What agents are told is measured, and each rule has one place | built, and run on two models: tools, templates and roles each own one kind of rule; a change is checked as text, with real models in scenarios, and in counts from use |
+| 0040 | A type of issue names the roles for a session put on it | built: the scheme's types may carry roles, used when none were chosen; the default names them for a task and a bug |

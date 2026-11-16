@@ -18,6 +18,9 @@
  *
  * Each scenario runs in its own directory under the system's temporary directory, which is left
  * behind so the sessions can be read. What was found is written to .dev/eval/.
+ *
+ * Do not edit the role, messaging or tree packages while it runs: each session loads them when
+ * it starts, so a run would be of two versions at once.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";

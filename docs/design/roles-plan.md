@@ -1,6 +1,6 @@
 # Roles: composed in steps, one owner per rule, measured
 
-What the role instructions need next, and how to build it. Status: proposed, nothing built. It builds on [0003](../decisions/0003-roles-as-prompt-sections.md), [0017](../decisions/0017-settings-and-orchestration.md) and [0036](../decisions/0036-a-board-is-tended.md), and keeps what [the roles guide](../roles.md) says a role is: a list of fragments, chosen by a person or a coordinator, changeable at any time.
+What the role instructions needed next, and how it was built. Status: built, all six phases. The decisions are [0038](../decisions/0038-roles-are-composed-in-steps.md), [0039](../decisions/0039-what-agents-are-told-is-measured.md) and [0040](../decisions/0040-a-type-of-issue-names-its-roles.md), which have the evidence; [what differed from this plan](#what-differed-when-it-was-built) is at the end. It builds on [0003](../decisions/0003-roles-as-prompt-sections.md), [0017](../decisions/0017-settings-and-orchestration.md) and [0036](../decisions/0036-a-board-is-tended.md), and keeps what [the roles guide](../roles.md) says a role is: a list of fragments, chosen by a person or a coordinator, changeable at any time.
 
 ## What was looked at
 
@@ -249,7 +249,10 @@ Each phase ends green on `npm run check`, with small conventional commits, and i
 
 Phases 5 and 6 depend on nothing after 1 and can swap. A decision record is written as each is built, with its evidence: roles are composed in steps (1, 3, 6), what tools, templates and roles each say (4), roles by issue type (5).
 
-## Decisions that are yours
+## Decisions that were yours
+
+All five were taken as recommended. For the fifth, the baseline ran on Haiku 5.5, which is what Pi was set up with here and what children run on, and on Sonnet 5.5 as the stronger one.
+
 
 1. **`/role set` keeps `keep` fragments for a person too.** Recommended: yes, one rule for person and agent. Today `/role set worker` silently takes `protocol` off a session in a tree. `/role remove` and `/role clear` still take anything off.
 2. **A type's roles live in the team's scheme.** Recommended: yes, beside `rules.review`, since it says how this team works. The other place is a person's settings, which would let each person differ and would need a setting whose keys are not fixed.
@@ -269,3 +272,14 @@ Phases 5 and 6 depend on nothing after 1 and can swap. A decision record is writ
 - **The host knows `coordinator` by name** (`host.ts`, where it finds what tends an issue). A person's own coordinating role is not seen as tending. A `provides` key would fix it, but the host does not read fragments today, and that is a seam to decide by itself.
 - **A background session does not take up a role it is given after it started** ([0036](../decisions/0036-a-board-is-tended.md), not done). The facts request gives the graph extension the channel to carry it; it is a small follow-up.
 - **Roles for agents that are not Pi sessions.** `pi-lattice work prime` stays as it is.
+
+## What differed when it was built
+
+- **The first run with a real model found three defects before any wording was looked at.** No tool showed an issue's description, though the reviewer is told to read it. A parent's thanks for a result made its child owe a report again. A reviewer's report counted as a new result on the issue it had just sent back, and another reviewer was started, and another. Each is fixed, with a test. The baseline was taken after them, so that it measures the text.
+- **One rule went back where it was** (finding 5). "Answer a person who steers in one sentence" was moved out of `coordinator`, since the note that arrives asks for it. Sonnet then answered in three sentences, 3 runs in 11. With the line back, none in 11. The rule of thumb is now in [0039](../decisions/0039-what-agents-are-told-is-measured.md): what to do about an event belongs to the note, but how to answer, against a model's habit, also stands in the role.
+- **`select` is not a step of its own.** A fragment that does not apply takes its parts with it, so applying is decided while expanding: `expand(applied, catalog, facts)`.
+- **Eleven scenarios, not eight.** Laying out a plan, and a result on a task that holds and one that does not, were added for the text that was moved. A scenario's `run` both sets the world up and checks it.
+- **`pi-lattice roles report` was not built.** The command line has no connection to a running host. The counts are in `/lattice doctor`, which has one.
+- **`tool.<name>` facts come from the tools registered, not the ones active,** which settles the risk named above: a tool search that switches tools on and off does not change them.
+- **A copy's mark is written quoted.** A hash of digits only was read from the header as a number.
+- **Three tests of the pane and of sharing timed out in some full runs** while this was built (`teammates`, `home`, `tui`), each passing alone and in most runs. They wait on a fixed number of seconds, and the suite is now seventy tests longer. Nothing here changed what they test.
