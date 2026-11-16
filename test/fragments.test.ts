@@ -3,29 +3,16 @@
  * costs does not grow by accident, and one rule is not written out twice. None of this says
  * whether a model follows them; `npm run eval` is for that.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FACTS, isKnownFact, TEMPLATES } from "../packages/protocol/src/index.ts";
 import { expand } from "../packages/roles/src/index.ts";
-import { builtinCatalog, COMBINATIONS, compose, words } from "../scripts/roles-doc.ts";
+import { builtinCatalog, COMBINATIONS, compose, registeredTools, words } from "../scripts/roles-doc.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const catalog = builtinCatalog();
-
-function sources(dir: string): string[] {
-	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? sources(join(dir, entry.name)) : entry.name.endsWith(".ts") ? [join(dir, entry.name)] : []));
-}
-
-/** Every tool an extension of this repository registers, read from the sources. */
-function registeredTools(): Set<string> {
-	const tools = new Set<string>();
-	for (const name of readdirSync(join(root, "packages"))) {
-		for (const file of sources(join(root, "packages", name, "src"))) for (const match of readFileSync(file, "utf8").matchAll(/registerTool\(\{\s*name:\s*"([a-z_]+)"/g)) tools.add(match[1] as string);
-	}
-	return tools;
-}
 
 /** Names with an underscore that are not tools: the parameters a fragment may speak of. */
 const PARAMETERS = new Set(["waits_on"]);
@@ -36,6 +23,7 @@ const PARAMETERS = new Set(["waits_on"]);
  */
 const CEILINGS: Record<string, number> = {
 	"first session": 1100,
+	"coordinator, no server": 1100,
 	"feature coordinator": 1536,
 	child: 718,
 	"grilling child": 1080,

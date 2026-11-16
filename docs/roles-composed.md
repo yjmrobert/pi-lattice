@@ -6,20 +6,29 @@ What a session is told by its roles, for the usual combinations with the default
 
 ## Combinations
 
-| Combination | When | Roles | Words |
-|---|---|---|---|
-| first session | The session that starts a tree where there is a board: the host gives it `coordinator`. | `protocol + coordinator` | 1100 |
-| feature coordinator | The root of a feature taken through the four phases. | `protocol + coordinator + lifecycle + feature` | 1536 |
-| child | A child created with no roles. | `protocol + reporting + worker` | 718 |
-| grilling child | A child that interrogates one story. | `protocol + reporting + worker + grilling + story` | 1080 |
-| planning child | A child that plans one story. | `protocol + reporting + worker + planning + story` | 991 |
-| task child | A child that builds one task. | `protocol + reporting + worker + implementation + task` | 1051 |
-| verification child | A child that checks what another built. | `protocol + reporting + worker + verification + story` | 1061 |
-| reviewer | A session the host starts to check a result on an issue. | `protocol + reporting + reviewer` | 755 |
+| Combination | When | Roles | Server | Words |
+|---|---|---|---|---|
+| first session | The session that starts a tree where there is a server: the host gives it `coordinator`. | `protocol + coordinator` | yes | 1100 |
+| coordinator, no server | A coordinator where the work is not on a server: it lays the work out on the tree. | `protocol + coordinator` | no | 1100 |
+| feature coordinator | The root of a feature taken through the four phases, with a server. | `protocol + coordinator + lifecycle + feature` | yes | 1536 |
+| child | A child created with no roles. | `protocol + reporting + worker` | no | 718 |
+| grilling child | A child that interrogates one story. | `protocol + reporting + worker + grilling + story` | no | 1080 |
+| planning child | A child that plans one story. | `protocol + reporting + worker + planning + story` | no | 991 |
+| task child | A child that builds one task. | `protocol + reporting + worker + implementation + task` | no | 1051 |
+| verification child | A child that checks what another built. | `protocol + reporting + worker + verification + story` | no | 1061 |
+| reviewer | A session the host starts to check a result on an issue. | `protocol + reporting + reviewer` | yes | 755 |
 
-The words are those of the role sections only: the index that lists the roles, then one section for each.
+The words are those of the role sections only: the index that lists the roles, then one section for each fragment that applies. A role's parts each have a section of their own, and a part is left out where what it needs is not so.
 
 ### first session
+
+| Section | Words |
+|---|---|
+| `lattice-roles` | 51 |
+| `lattice-role-protocol` | 323 |
+| `lattice-role-coordinator` | 726 |
+
+### coordinator, no server
 
 | Section | Words |
 |---|---|
