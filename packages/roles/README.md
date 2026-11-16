@@ -21,5 +21,5 @@ See [docs/roles.md](../../docs/roles.md) for the fragment format, lookup order a
 | For | Name | Does |
 |---|---|---|
 | Human | `/role` | Show, list, add, remove, set or clear the applied fragments |
-| Model | `apply_role` | The same, as a tool |
+| Model | `apply_role` | Add (the default), remove or set, as a tool. A fragment with a `slot`, such as a phase, takes the place of the one applied; fragments marked `keep` stay when the list is set |
 | Other extensions | `lattice:roles:set`, `lattice:roles:changed` | Set the list; observe changes |

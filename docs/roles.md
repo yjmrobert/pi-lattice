@@ -11,6 +11,8 @@ summary: Look for vulnerabilities before anything else
 requires: [worker]        # advisory
 conflicts: [planning]     # advisory
 suggests: [worker]        # hint about children this role tends to spawn
+slot: review              # at most one fragment of a slot is applied
+keep: true                # setting the roles leaves it applied
 ---
 Review the change for injection, authorisation and secret-handling flaws.
 Report findings with file and line, most severe first.
@@ -18,6 +20,8 @@ Report findings with file and line, most severe first.
 
 - `name` is lowercase letters, digits and dashes. Without frontmatter the file name is used.
 - `requires` and `conflicts` produce a note when a combination looks odd. They never block anything.
+- `slot` says the fragment is one of a kind of which a session has one at a time. Applying it takes off whichever fragment holds the same slot. The built-in slots are `phase` (grilling, planning, implementation, verification), `scope` (feature, story, task) and `stance` (coordinator, worker, reviewer); any name makes a new one.
+- `keep` says that replacing the roles leaves this one applied. `protocol` and `reporting` are kept: they tell a session how the tree it is in works, whatever else it is doing.
 - The body is what the model sees. Write it as instructions to the agent.
 
 ## Where fragments live
@@ -35,10 +39,10 @@ Subfolders are searched, so you can group files as `base/`, `phase/`, `scope/`. 
 ```
 /role                      show what is applied
 /role list                 show what is available
-/role add coordinator planning
+/role add coordinator planning   apply these as well; planning takes the place of any other phase
 /role remove planning
-/role set worker implementation
-/role clear
+/role set worker implementation  replace the roles, except the ones marked keep
+/role clear                      take everything off
 /role show worker          print a fragment in full, with the file it comes from
 /role edit worker          open it in Pi's editor; saving writes your own copy
 /role edit worker project  the same, into this project's folder
@@ -46,7 +50,7 @@ Subfolders are searched, so you can group files as `base/`, `phase/`, `scope/`. 
 
 Saving a fragment empty removes your copy, and the one under it is used again. `/lattice prompt` shows everything the session you are in has been told, roles included.
 
-The model can do the same with the `apply_role` tool. A session spawned by a host takes its starting fragments from `LATTICE_FRAGMENTS`.
+The model can do the same with the `apply_role` tool, which adds unless told otherwise: a model that names the next phase gets that phase in place of the last one, and keeps its other roles. A session spawned by a host takes its starting fragments from `LATTICE_FRAGMENTS`.
 
 Order matters: fragments are injected in list order, and where two disagree the later one wins.
 
@@ -93,4 +97,4 @@ They are ordinary fragments: they show in the inspector, `/role remove protocol`
 
 ## What roles are not
 
-There is no enum of agent types, no validation that a combination makes sense, and no gate the code enforces. The gates a fragment describes (for example "do not implement before the plan is approved") are guidance the agent follows and the human can overrule.
+There is no enum of agent types, no validation that a combination makes sense beyond one fragment per slot, and no gate the code enforces. The gates a fragment describes (for example "do not implement before the plan is approved") are guidance the agent follows and the human can overrule.
