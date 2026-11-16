@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SCHEME, fieldProblem, firstState, type Issue, isClosed, ladder, misfit, misplaced, normalizeScheme, type Scheme, schemeProblems, stateKind, wouldLoop } from "../src/index.ts";
+import { DEFAULT_SCHEME, describeScheme, fieldProblem, firstState, type Issue, isClosed, ladder, misfit, misplaced, normalizeScheme, rolesOfType, type Scheme, schemeProblems, stateKind, wouldLoop } from "../src/index.ts";
 
 const issue = (number: number, type: string, parent?: number, state = "todo"): Issue => ({ number, title: `#${number}`, body: "", type, state, ...(parent !== undefined ? { parent } : {}), labels: [], fields: {}, rank: number, author: "yan", createdAt: 0, updatedAt: 0, rev: number });
 
@@ -27,6 +27,30 @@ describe("the default scheme", () => {
 		expect(isClosed(DEFAULT_SCHEME, { state: "done" })).toBe(true);
 		expect(isClosed(DEFAULT_SCHEME, { state: "dropped" })).toBe(true);
 		expect(isClosed(DEFAULT_SCHEME, { state: "todo" })).toBe(false);
+	});
+});
+
+describe("the roles a type names", () => {
+	it("are, by default, those of a session that builds one piece, for a task and for a bug", () => {
+		expect(rolesOfType(DEFAULT_SCHEME, "task")).toEqual(["worker", "implementation", "task"]);
+		expect(rolesOfType(DEFAULT_SCHEME, "bug")).toEqual(["worker", "implementation", "task"]);
+		// Larger pieces are left to whoever creates the session.
+		expect(rolesOfType(DEFAULT_SCHEME, "story")).toEqual([]);
+		expect(rolesOfType(DEFAULT_SCHEME, "no such type")).toEqual([]);
+	});
+
+	it("are said with the scheme, the types that share them together", () => {
+		expect(describeScheme(DEFAULT_SCHEME)).toContain("Roles: a session put on a task or bug is given worker + implementation + task, unless whoever creates it chooses others.");
+		const none: Scheme = { ...DEFAULT_SCHEME, types: DEFAULT_SCHEME.types.map(({ roles: _roles, ...type }) => type) };
+		expect(describeScheme(none)).not.toContain("Roles:");
+	});
+
+	it("are kept when a scheme is saved, and must be role names", () => {
+		const own: Scheme = { ...DEFAULT_SCHEME, rules: {}, types: [{ name: "goal", level: 0, under: [], top: true, roles: ["coordinator", "lifecycle"] }, { name: "step", level: 1, under: ["goal"], top: false, roles: [] }] };
+		expect(schemeProblems(own)).toEqual([]);
+		expect(normalizeScheme(own).types).toEqual([{ name: "goal", level: 0, under: [], top: true, roles: ["coordinator", "lifecycle"] }, { name: "step", level: 1, under: ["goal"], top: false }]);
+		expect(schemeProblems({ ...own, types: [{ name: "goal", level: 0, under: [], top: true, roles: "coordinator" }] })).toEqual(['Type "goal": "roles" is a list of role names, in lower-case letters, digits and dashes: the roles a session put on such an issue is given.']);
+		expect(schemeProblems({ ...own, types: [{ name: "goal", level: 0, under: [], top: true, roles: ["Not A Role"] }] })).toHaveLength(1);
 	});
 });
 

@@ -71,4 +71,13 @@ describe("settings", () => {
 		expect(rolesFor(bare, "child")).toEqual([]);
 		expect(rolesFor(bare, "root")).toEqual(["coordinator"]);
 	});
+
+	it("gives a session put on an issue the roles its type names, unless roles were chosen for it", () => {
+		const settings = resolveSettings();
+		const typed = ["worker", "implementation", "task"];
+		expect(rolesFor(settings, "child", [], typed)).toEqual(["protocol", "reporting", "worker", "implementation", "task"]);
+		// What whoever created it chose still wins, and a type that names nothing leaves the default.
+		expect(rolesFor(settings, "child", ["reviewer"], typed)).toEqual(["protocol", "reporting", "reviewer"]);
+		expect(rolesFor(settings, "child", [], [])).toEqual(["protocol", "reporting", "worker"]);
+	});
 });

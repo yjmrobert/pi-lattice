@@ -18,6 +18,11 @@ export interface IssueType {
 	under: string[];
 	/** Whether it may have no parent. */
 	top: boolean;
+	/**
+	 * The roles a session is given when it is put on an issue of this type and whoever created
+	 * it chose none: role fragments by name. One a machine has no fragment for adds nothing there.
+	 */
+	roles?: string[];
 }
 
 export interface IssueState {
@@ -269,8 +274,9 @@ export const DEFAULT_SCHEME: Scheme = {
 		{ name: "epic", level: 0, under: [], top: true },
 		{ name: "feature", level: 1, under: ["epic"], top: false },
 		{ name: "story", level: 2, under: ["feature"], top: false },
-		{ name: "task", level: 3, under: ["story"], top: false },
-		{ name: "bug", level: 3, under: ["epic", "feature", "story", "task"], top: true },
+		// A session on a task or a bug builds one piece: nobody has to remember to say so when they create it.
+		{ name: "task", level: 3, under: ["story"], top: false, roles: ["worker", "implementation", "task"] },
+		{ name: "bug", level: 3, under: ["epic", "feature", "story", "task"], top: true, roles: ["worker", "implementation", "task"] },
 	],
 	states: [
 		{ name: "todo", kind: "open" },
@@ -289,6 +295,8 @@ export const DEFAULT_SCHEME: Scheme = {
 const KINDS: readonly string[] = ["open", "active", "done", "dropped"];
 const FIELD_TYPES: readonly string[] = ["text", "number", "date", "person", "choice"];
 const NAME = /^[a-z0-9][a-z0-9 _-]{0,31}$/;
+/** What a role fragment may be called. */
+const ROLE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every((entry) => typeof entry === "string");
 
@@ -315,6 +323,7 @@ export function schemeProblems(value: unknown): string[] {
 		if (!Number.isInteger(type.level) || (type.level as number) < 0 || (type.level as number) > 12) out.push(`Type "${type.name}" needs a level from 0 to 12.`);
 		if (!strings(type.under)) out.push(`Type "${type.name}" needs "under": the types it may sit under.`);
 		if (typeof type.top !== "boolean") out.push(`Type "${type.name}" needs "top": whether it may have no parent.`);
+		if (type.roles !== undefined && !(strings(type.roles) && type.roles.every((role) => ROLE.test(role)))) out.push(`Type "${type.name}": "roles" is a list of role names, in lower-case letters, digits and dashes: the roles a session put on such an issue is given.`);
 	}
 	unique("types", typeNames);
 	for (const type of types) {
@@ -365,7 +374,7 @@ export function schemeProblems(value: unknown): string[] {
 export function normalizeScheme(value: Scheme): Scheme {
 	const rules = value.rules ?? {};
 	return {
-		types: value.types.map((type) => ({ name: type.name, level: type.level, under: [...type.under], top: type.top })),
+		types: value.types.map((type) => ({ name: type.name, level: type.level, under: [...type.under], top: type.top, ...(type.roles && type.roles.length > 0 ? { roles: [...type.roles] } : {}) })),
 		states: value.states.map((state) => ({ name: state.name, kind: state.kind })),
 		fields: (value.fields ?? []).map((field) => ({ name: field.name, type: field.type, ...(field.choices ? { choices: [...field.choices] } : {}), ...(field.on ? { on: [...field.on] } : {}), ...(field.required ? { required: true } : {}) })),
 		rules: { ...(typeof rules.onStart === "string" ? { onStart: rules.onStart } : {}), ...(typeof rules.onReport === "string" ? { onReport: rules.onReport } : {}), ...(typeof rules.take === "string" ? { take: rules.take } : {}), ...(strings(rules.review) ? { review: [...rules.review] } : {}) },
@@ -373,6 +382,9 @@ export function normalizeScheme(value: Scheme): Scheme {
 }
 
 export const typeOf = (scheme: Scheme, name: string): IssueType | undefined => scheme.types.find((type) => type.name === name);
+
+/** The roles the scheme names for a session put on an issue of this type. None when it names none. */
+export const rolesOfType = (scheme: Scheme, name: string): string[] => typeOf(scheme, name)?.roles ?? [];
 
 /** What a state means. A state the scheme no longer has counts as open, so its work is not lost from view. */
 export const stateKind = (scheme: Scheme, name: string): StateKind => scheme.states.find((state) => state.name === name)?.kind ?? "open";
@@ -510,6 +522,10 @@ export function describeScheme(scheme: Scheme): string {
 		scheme.rules.onReport ? ((scheme.rules.review ?? []).length > 0 ? `a result on ${(scheme.rules.review ?? []).join(", ")} is checked by a reviewer session, on anything else by the session tending the branch` : "results are checked by the session tending the branch") : "",
 	].filter(Boolean);
 	if (rules.length > 0) lines.push(`Rules: ${rules.join("; ")}.`);
+	// Types given the same roles are said together.
+	const roled = new Map<string, string[]>();
+	for (const type of scheme.types) if (type.roles && type.roles.length > 0) roled.set(type.roles.join(" + "), [...(roled.get(type.roles.join(" + ")) ?? []), type.name]);
+	if (roled.size > 0) lines.push(`Roles: ${[...roled].map(([roles, names]) => `a session put on a ${names.join(" or ")} is given ${roles}`).join("; ")}, unless whoever creates it chooses others.`);
 	if (scheme.fields.length > 0) lines.push(`Fields: ${scheme.fields.map((field) => `${field.name} (${field.type === "choice" ? (field.choices ?? []).join("|") : field.type}${field.on ? `, on ${field.on.join(", ")}` : ""}${field.required ? ", required" : ""})`).join("; ")}.`);
 	return lines.join("\n");
 }

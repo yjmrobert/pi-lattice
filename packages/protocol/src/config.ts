@@ -57,7 +57,7 @@ export const SETTINGS: readonly Setting[] = [
 	{ key: "roles.tree", section: "Roles", label: "Every session", help: "Role fragments every session in a tree is given. `protocol` is what tells sessions how to talk to each other.", kind: "list", default: ["protocol"], applies: NEW_SESSIONS },
 	{ key: "roles.children", section: "Roles", label: "Every child", help: "Role fragments every child session is given as well, whatever roles were chosen for it. `reporting` is what tells a child how to answer its parent.", kind: "list", default: ["reporting"], applies: NEW_SESSIONS },
 	{ key: "roles.root", section: "Roles", label: "First session", help: "Roles for the session that starts a tree, for example coordinator. Empty leaves it as a plain Pi session; with a board, it is then given coordinator, so that results are checked.", kind: "list", default: [], applies: NEW_SESSIONS },
-	{ key: "roles.child", section: "Roles", label: "Child with no roles", help: "Roles for a child that was created without any.", kind: "list", default: ["worker"], applies: NEW_SESSIONS },
+	{ key: "roles.child", section: "Roles", label: "Child with no roles", help: "Roles for a child that was created without any, on an issue whose type names none.", kind: "list", default: ["worker"], applies: NEW_SESSIONS },
 
 	{ key: "approval", section: "Messaging", label: "Approval", help: "Which messages between agents wait for you: those from other people's sessions (cross-owner), all of them (always), or none (never).", kind: "choice", choices: APPROVAL_POLICIES, default: "cross-owner", env: "LATTICE_APPROVAL", applies: "Applies at once to the session open here, and to background sessions started from now on." },
 	{ key: "reports.remind", section: "Messaging", label: "Remind a child", help: "When a background child ends its turn without reporting to its parent, remind it once; if it still says nothing, tell its parent.", kind: "toggle", default: true, applies: AT_ONCE },
@@ -265,9 +265,11 @@ export const repoConfigPath = (stateDir: string): string => `${stateDir}/${CONFI
 
 /**
  * The roles a new session is given: the ones every session gets, the ones every child gets,
- * then the ones chosen for it, or the default for its place when none were chosen.
+ * then its own. Its own are the ones chosen for it; with none chosen, the ones the team's
+ * scheme names for the type of issue it was put on (`typed`); with none of those, the default
+ * for its place.
  */
-export function rolesFor(settings: Settings, place: "root" | "child", chosen: readonly string[] = []): string[] {
-	const own = chosen.length > 0 ? chosen : listSetting(settings, place === "root" ? "roles.root" : "roles.child");
+export function rolesFor(settings: Settings, place: "root" | "child", chosen: readonly string[] = [], typed: readonly string[] = []): string[] {
+	const own = chosen.length > 0 ? chosen : typed.length > 0 ? typed : listSetting(settings, place === "root" ? "roles.root" : "roles.child");
 	return [...new Set([...listSetting(settings, "roles.tree"), ...(place === "child" ? listSetting(settings, "roles.children") : []), ...own])];
 }
