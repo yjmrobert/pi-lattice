@@ -7,6 +7,7 @@ export * from "./lease.ts";
 export * from "./limits.ts";
 export * from "./node.ts";
 export * from "./client.ts";
+export * from "./facts.ts";
 export * from "./wire.ts";
 export * from "./tree.ts";
 export * from "./registry.ts";

@@ -50,6 +50,13 @@ export interface LatticeEvents {
 	 */
 	"lattice:prompt:describe": { parts: Array<{ title: string; source: string; where: string; text: string }> };
 	/**
+	 * Ask what is so for this session: the facts a role fragment may depend on or mention. The asker
+	 * passes an empty table and whoever knows something fills it in. An answer that has to be fetched
+	 * is handed over as a promise in `pending`, which fills the table in when it settles; the asker waits
+	 * for those, briefly. With no answer the table stays empty, and only what needs nothing applies.
+	 */
+	"lattice:facts:query": { facts: Record<string, string>; pending?: Array<Promise<unknown>> };
+	/**
 	 * Ask what the settings in effect here are. The asker leaves `values` out; whoever reads
 	 * the settings files fills it in, by setting name. With no answer, each extension falls back
 	 * to its own environment and defaults.

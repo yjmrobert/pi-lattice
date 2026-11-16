@@ -46,6 +46,8 @@ export interface RequestMap {
 	list: { params: Record<string, never>; result: { self: string; nodes: NodeMeta[] } };
 	/** Read or change the team's work on the server. */
 	work: { params: { request: WorkRequest }; result: WorkResult };
+	/** What is so for the asking session: where it is in the tree, and whether the team has a server. See `facts.ts`. */
+	facts: { params: Record<string, never>; result: { facts: Record<string, string> } };
 	/** Control requests from a person's Pi. Only accepted on the `ui` channel. */
 	ui: { params: { method: string; params: unknown }; result: unknown };
 }
