@@ -349,6 +349,14 @@ describe("sessions that know how to talk to each other", () => {
 		expect(h.traffic({ node: root.id }).some((record) => record.envelope.intent === "stopped")).toBe(false);
 		expect(h.roleTallies()).toEqual([{ roles: ["protocol", "reporting", "worker"], model: "default", sessions: 1, reminded: 0, stopped: 0, sentBack: 0 }]);
 
+		// Its parent answers the result with thanks. That is not more work: the child stays done, and is not reminded to report.
+		const reported = h.traffic({ node: root.id }).find((record) => record.envelope.intent === "result" && record.envelope.from === kid.id)?.envelope.id as string;
+		await h.prompt(root.id, `!tool send_message ${JSON.stringify({ to: kid.id, text: "thanks, nothing more", replyTo: reported })}`);
+		await eventually(async () => (await userMessages(h, kid.id)).includes("thanks, nothing more"), "the thanks to arrive");
+		await settled(h, kid.id);
+		expect(h.node(kid.id)?.done).toBe(true);
+		expect(await userMessages(h, kid.id)).not.toContain("You ended your turn without reporting");
+
 		// More work from its parent: it is not done any more, until it sends another result.
 		await h.prompt(root.id, sendTool(kid.id, "!reply noted"));
 		await eventually(async () => (await assistantTexts(h, root.id)).includes("noted"), "the answer to the extra work");

@@ -1928,6 +1928,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		for (const id of recipients) {
 			const recipient = this.store.getNode(id);
 			if (!recipient || reportsTo(all, recipient)?.id !== sender.id || recipient.owner !== this.owner) continue;
+			// A parent that answers its child's result with something it need not answer has acknowledged it, not given it more to do.
+			if (envelope.intent === "inform" && envelope.causationId !== undefined && this.store.traffic({ node: id, limit: 200 }).some((record) => record.envelope.id === envelope.causationId && record.envelope.from === id && record.envelope.intent === "result")) continue;
 			// More work from its parent: it owes an answer again.
 			this.owing.set(id, { reminded: false });
 			if (recipient.done) this.update(id, { done: false });
