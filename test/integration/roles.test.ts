@@ -171,7 +171,7 @@ describe("roles", () => {
 		await trusted.command("/role add house-style");
 		expect(await rolesSeen(trusted, "q1")).toBe("lattice-role-house-style");
 	});
-	it("shows a role in full with where it comes from, and edits it into the person's own copy", async () => {
+	it("shows a role in full with where it comes from, and adds to it without copying it", async () => {
 		const child = await start();
 		const own = join(sandbox.agentDir, "lattice", "roles", "worker.md");
 		const editor = async (after: number, command: string, answer: (prefill: string) => Record<string, unknown>) => {
@@ -187,19 +187,68 @@ describe("roles", () => {
 		expect(shown).toContain("You have been given one bounded piece of work.");
 		expect(shown).toContain("a stance: applying it takes the place of any other stance");
 
-		// The editor opens on the built-in text; saving writes a copy of the person's own, which then wins.
-		const first = await editor(0, "/role edit worker", (prefill) => ({ value: prefill.replace("You have been given one bounded piece of work.", "You have been given exactly one job.") }));
+		// The editor opens on an empty addition, not on a copy of the built-in text.
+		const first = await editor(0, "/role edit worker", (prefill) => ({ value: `${prefill}Run npm run check before you report.\n` }));
+		expect(String(first.title)).toContain('Adding to role "worker"');
 		expect(String(first.title)).toContain(own);
-		expect(String(first.prefill)).toContain("name: worker");
-		await child.waitFor(() => child.notifications().find((text) => text.startsWith(`Saved ${own}`)), "the save");
+		expect(String(first.prefill)).toBe("---\nname: worker\nmode: append\n---\n");
+		await child.waitFor(() => child.notifications().find((text) => text.startsWith(`Saved ${own}. It adds to the built in "worker", which stays as it is.`)), "the save");
+		expect(readFileSync(own, "utf8")).toBe("---\nname: worker\nmode: append\n---\nRun npm run check before you report.\n");
+		// The role is the built-in text with the addition after it, and still everything else the built-in says it is.
+		await child.command("/role show worker");
+		const added = await child.waitFor(() => child.notifications().find((text) => text.startsWith("worker · built in, with yours added")), "the addition to be in use");
+		expect(added).toContain("You have been given one bounded piece of work.");
+		expect(added).toContain("Run npm run check before you report.");
+		expect(added).toContain("a stance: applying it takes the place of any other stance");
+		await child.command("/role add worker");
+		expect(await rolesSeen(child, "q1")).toBe("lattice-role-worker");
+
+		// Opened again, it is the addition that is edited. Saved with nothing under the header, nothing is saved.
+		const again = await editor(1, "/role edit worker", () => ({ value: "---\nname: worker\nmode: append\n---\n" }));
+		expect(String(again.prefill)).toContain("Run npm run check before you report.");
+		await child.waitFor(() => child.notifications().find((text) => text.includes('nothing to add to "worker"')), "the refusal of an empty addition");
+		expect(readFileSync(own, "utf8")).toContain("Run npm run check before you report.");
+
+		// Saving it empty removes it, and the built-in one is back by itself.
+		await editor(2, "/role edit worker", () => ({ value: "" }));
+		await child.waitFor(() => child.notifications().find((text) => text.includes('"worker" is the built in one again')), "the removal");
+		expect(existsSync(own)).toBe(false);
+	});
+
+	it("makes a full copy of a role when asked, and says when the role it was copied from has changed", async () => {
+		const child = await start();
+		const own = join(sandbox.agentDir, "lattice", "roles", "worker.md");
+		const editor = async (after: number, command: string, answer: (prefill: string) => Record<string, unknown>) => {
+			const flow = child.command(command);
+			const dialog = await child.waitFor(() => child.events.filter((e) => e.type === "extension_ui_request" && e.method === "editor")[after], "the editor");
+			child.answer(dialog.id, answer(String(dialog.prefill ?? "")));
+			await flow;
+			return dialog;
+		};
+
+		// The editor opens on the built-in text, marked with what it was copied from; saving writes a copy, which then wins.
+		const first = await editor(0, "/role edit worker replace", (prefill) => ({ value: prefill.replace("You have been given one bounded piece of work.", "You have been given exactly one job.") }));
+		expect(String(first.title)).toContain("a full copy, used in place of the built in one");
+		expect(String(first.title)).toContain(own);
+		expect(String(first.prefill)).toMatch(/^---\nname: worker\nsummary: .+\nbase: "[0-9a-f]{12}"\nslot: stance\n---\n/);
+		await child.waitFor(() => child.notifications().find((text) => text.startsWith(`Saved ${own}. It is used in place of the built in "worker".`)), "the save");
 		expect(readFileSync(own, "utf8")).toContain("You have been given exactly one job.");
 		await child.command("/role show worker");
-		await child.waitFor(() => child.notifications().find((text) => text.startsWith("worker · yours") && text.includes("exactly one job")), "the person's copy to be the one in use");
+		const mine = await child.waitFor(() => child.notifications().find((text) => text.startsWith("worker · yours ·") && text.includes("exactly one job")), "the person's copy to be the one in use");
+		expect(mine).not.toContain("has changed since");
 
 		// A copy that names another role is refused, so one file cannot quietly replace another role.
 		await editor(1, "/role edit worker", (prefill) => ({ value: prefill.replace("name: worker", "name: boss") }));
 		await child.waitFor(() => child.notifications().find((text) => text.includes('names the role "boss"')), "the refusal");
 		expect(readFileSync(own, "utf8")).toContain("name: worker");
+
+		// The built-in moves on, which here is the copy remembering an older one: the copy is said to be stale wherever it is shown.
+		writeFileSync(own, readFileSync(own, "utf8").replace(/base: "[0-9a-f]{12}"/, 'base: "000000000000"'));
+		await child.command("/role show worker");
+		const stale = await child.waitFor(() => child.notifications().find((text) => text.startsWith("worker · yours, a copy of one that has changed since")), "the copy to be said to be stale");
+		expect(stale).toContain("saving it empty goes back to the one beneath");
+		await child.command("/role list");
+		await child.waitFor(() => child.notifications().find((text) => text.includes("worker (yours, a copy of one that has changed since; stance)")), "the list to say so");
 
 		// Saving it empty removes the copy, and the built-in one is back.
 		await editor(2, "/role edit worker", () => ({ value: "" }));
@@ -207,8 +256,8 @@ describe("roles", () => {
 		expect(existsSync(own)).toBe(false);
 
 		// A name nobody has yet starts a new role.
-		await editor(3, "/role edit reviewer", (prefill) => ({ value: prefill.replace("What a session with this role should do.", "Read the diff before the description.") }));
-		await child.command("/role add reviewer");
-		expect(await rolesSeen(child, "q1")).toBe("lattice-role-reviewer");
+		await editor(3, "/role edit auditor", (prefill) => ({ value: prefill.replace("What a session with this role should do.", "Read the diff before the description.") }));
+		await child.command("/role add auditor");
+		expect(await rolesSeen(child, "q1")).toBe("lattice-role-auditor");
 	});
 });

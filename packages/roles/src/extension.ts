@@ -12,12 +12,20 @@ import { assignmentFromEnv, emitEvent, type Facts, HOST_ENV, type HostAssignment
 import { Type } from "typebox";
 import { advisories, editRoles, INDEX_SECTION, type RoleEdit, roleSections, SECTION_PREFIX } from "./compose.ts";
 import { gatherFacts } from "./facts.ts";
+import { bodyHash } from "./catalog.ts";
 import { type Fragment, fragmentRoots, isFragmentName, loadFragments, parseFragment } from "./fragments.ts";
 
 const ROLES_ENTRY = "lattice:roles";
 
 /** Where a fragment comes from, in a person's words. */
 const SOURCE_WORDS: Record<string, string> = { builtin: "built in", user: "yours", project: "this project's" };
+const sourceWord = (source: string): string => SOURCE_WORDS[source] ?? source;
+
+/** Where a fragment comes from, with what its file does to the one beneath it. */
+function origin(fragment: Fragment): string {
+	if (fragment.addsTo) return `${sourceWord(fragment.addsTo.source)}, with ${sourceWord(fragment.source)} added`;
+	return fragment.stale ? `${sourceWord(fragment.source)}, a copy of one that has changed since` : sourceWord(fragment.source);
+}
 
 function rolesIn(entries: Iterable<{ type?: string; customType?: string; data?: unknown }>): string[] | undefined {
 	let found: string[] | undefined;
@@ -132,7 +140,7 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 		for (const fragment of available.values()) {
 			if (request.names.includes(fragment.name)) continue;
 			request.names.push(fragment.name);
-			(request.fragments ??= []).push({ name: fragment.name, summary: fragment.summary, source: fragment.source, path: fragment.path });
+			(request.fragments ??= []).push({ name: fragment.name, summary: fragment.summary, source: fragment.source, path: fragment.path, ...(fragment.stale ? { stale: true } : {}) });
 		}
 	});
 
@@ -144,7 +152,7 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 			const fragment = key.startsWith(SECTION_PREFIX) ? available.get(key.slice(SECTION_PREFIX.length)) : undefined;
 			request.parts.push({
 				title: fragment ? `Role: ${fragment.name}` : "Roles",
-				source: fragment ? `${SOURCE_WORDS[fragment.source] ?? fragment.source} · ${fragment.path}` : "written by pi-lattice from the list of roles",
+				source: fragment ? `${origin(fragment)} · ${fragment.path}` : "written by pi-lattice from the list of roles",
 				where: `system prompt, section <${key}>`,
 				text,
 			});
@@ -165,8 +173,10 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 		}
 		ctx.ui.notify(
 			[
-				`${fragment.name} · ${SOURCE_WORDS[fragment.source] ?? fragment.source} · ${fragment.path}`,
+				`${fragment.name} · ${origin(fragment)} · ${fragment.path}`,
 				fragment.summary,
+				...(fragment.addsTo ? [`the text after the last blank line is added by ${fragment.path}; the rest is ${fragment.addsTo.path}`] : []),
+				...(fragment.stale ? [`this copy replaces a role that has changed since the copy was made: /role edit ${fragment.name} shows it, and saving it empty goes back to the one beneath`] : []),
 				...(fragment.requires.length > 0 ? [`usually with: ${fragment.requires.join(", ")}`] : []),
 				...(fragment.conflicts.length > 0 ? [`competes with: ${fragment.conflicts.join(", ")}`] : []),
 				...(fragment.slot ? [`a ${fragment.slot}: applying it takes the place of any other ${fragment.slot}`] : []),
@@ -176,63 +186,91 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 				"",
 				fragment.body,
 				"",
-				`/role edit ${fragment.name} opens it for editing.`,
+				`/role edit ${fragment.name} adds to it; /role edit ${fragment.name} replace makes a copy of your own.`,
 			].join("\n"),
 			"info",
 		);
 	};
 
+	/** The fragments in the places beneath a person's own or this project's: what a file there adds to or replaces. */
+	const beneath = (ctx: ExtensionContext, scope: "user" | "project"): Map<string, Fragment> => {
+		const roots = fragmentRoots({ cwd: ctx.cwd, agentDir: getAgentDir(), projectTrusted: ctx.isProjectTrusted() });
+		return loadFragments(roots.slice(roots.findIndex((root) => root.source === scope) + 1));
+	};
+
+	/** A full copy of a fragment as a file's text, marked with what it was copied from. */
+	const copyOf = (fragment: Fragment): string => {
+		const lines = [`name: ${fragment.name}`, ...(fragment.summary ? [`summary: ${fragment.summary}`] : []), `base: "${bodyHash(fragment.body)}"`];
+		if (fragment.slot) lines.push(`slot: ${fragment.slot}`);
+		if (fragment.keep) lines.push("keep: true");
+		for (const key of ["requires", "conflicts", "includes", "when", "unless"] as const) if (fragment[key].length > 0) lines.push(`${key}: [${fragment[key].join(", ")}]`);
+		return `---\n${lines.join("\n")}\n---\n${fragment.body}\n`;
+	};
+
 	/**
-	 * Edit a fragment in Pi's editor. Saving writes the person's own copy, which is used in place
-	 * of the built-in one; saving it empty removes that copy, so the one under it is used again.
+	 * Edit a role in Pi's editor. What is saved is the person's own file, or this project's.
+	 *
+	 * Where the role exists beneath, the file is an addition by default: its text is added after
+	 * the role's own, which stays as it is and keeps improving. `replace` makes a full copy
+	 * instead, which is used in place of the one beneath. A file that is already there is opened
+	 * as it is. Saving it empty removes it, so the one beneath is used again.
 	 */
-	const edit = async (ctx: ExtensionContext, name: string, scopeWord: string | undefined): Promise<void> => {
+	const edit = async (ctx: ExtensionContext, name: string, options: string[]): Promise<void> => {
+		const usage = "Usage: /role edit <name> [replace] [user|project]";
 		if (!isFragmentName(name)) {
 			ctx.ui.notify(`"${name}" cannot be a role name. Use lowercase letters, digits and dashes.`, "warning");
 			return;
 		}
-		if (scopeWord !== undefined && scopeWord !== "user" && scopeWord !== "project") {
-			ctx.ui.notify("Usage: /role edit <name> [user|project]", "warning");
+		if (options.some((word) => word !== "user" && word !== "project" && word !== "replace")) {
+			ctx.ui.notify(usage, "warning");
 			return;
 		}
-		const scope = scopeWord ?? "user";
+		const scope = options.includes("project") ? "project" : "user";
 		if (scope === "project" && !ctx.isProjectTrusted()) {
-			ctx.ui.notify("This project is not trusted, so its roles are not read. Trust it first, or edit your own copy with /role edit <name>.", "warning");
+			ctx.ui.notify("This project is not trusted, so its roles are not read. Trust it first, or edit your own with /role edit <name>.", "warning");
 			return;
 		}
 		reload(ctx);
-		const existing = available.get(name);
+		const under = beneath(ctx, scope).get(name);
 		const path = ownPath(ctx, name, scope);
-		const starting = existsSync(path)
-			? readFileSync(path, "utf8")
-			: existing
-				? readFileSync(existing.path, "utf8")
-				: `---\nname: ${name}\nsummary: One line saying what this role is for.\n---\nWhat a session with this role should do.\n`;
-		const where = scope === "user" ? "your own copy, used in every repository" : "this project's copy";
-		const text = await ctx.ui.editor(`Role "${name}" · saving writes ${where}: ${path} · save it empty to remove that copy`, starting);
+		const where = scope === "user" ? "yours, used in every repository" : "this project's";
+		const own = existsSync(path) ? readFileSync(path, "utf8") : undefined;
+		const adding = own !== undefined ? parseFragment(own, path, scope)?.mode === "append" : under !== undefined && !options.includes("replace");
+		const starting =
+			own ??
+			(under === undefined
+				? `---\nname: ${name}\nsummary: One line saying what this role is for.\n---\nWhat a session with this role should do.\n`
+				: adding
+					? `---\nname: ${name}\nmode: append\n---\n`
+					: copyOf(under));
+		const title = adding
+			? `Adding to role "${name}" · what is written under the header is added after the ${under ? sourceWord(under.source) : "role's own"} text, which stays as it is · ${where}: ${path} · save it empty to remove it · /role edit ${name} replace makes a full copy instead`
+			: `Role "${name}" · ${under ? `a full copy, used in place of the ${sourceWord(under.source)} one` : "a new role"} · ${where}: ${path} · save it empty to remove it`;
+		const text = await ctx.ui.editor(title, starting);
 		if (text === undefined) return;
 		if (text.trim() === "") {
 			if (!existsSync(path)) {
-				ctx.ui.notify(`There is no copy of "${name}" at ${path} to remove.`, "info");
+				ctx.ui.notify(`There is no file for "${name}" at ${path} to remove.`, "info");
 				return;
 			}
 			unlinkSync(path);
 			reload(ctx);
 			const now = available.get(name);
-			ctx.ui.notify(now ? `Removed ${path}. "${name}" is the ${SOURCE_WORDS[now.source] ?? now.source} one again.` : `Removed ${path}. There is no "${name}" role any more.`, "info");
+			ctx.ui.notify(now ? `Removed ${path}. "${name}" is the ${origin(now)} one again.` : `Removed ${path}. There is no "${name}" role any more.`, "info");
 			return;
 		}
 		const parsed = parseFragment(text, path, scope);
 		if (!parsed || parsed.name !== name) {
-			ctx.ui.notify(parsed ? `Not saved: the file names the role "${parsed.name}", but it is being saved as "${name}". Change the name line back.` : "Not saved: a role needs some text under its header.", "warning");
+			ctx.ui.notify(parsed ? `Not saved: the file names the role "${parsed.name}", but it is being saved as "${name}". Change the name line back.` : adding ? `Not saved: nothing was written under the header, so there is nothing to add to "${name}".` : "Not saved: a role needs some text under its header.", "warning");
 			return;
 		}
 		mkdirSync(dirname(path), { recursive: true });
 		writeFileSync(path, text.endsWith("\n") ? text : `${text}\n`);
 		reload(ctx);
 		const used = available.get(name);
-		const shadowed = used && used.path !== path ? ` Another copy wins here: ${used.path}.` : "";
-		ctx.ui.notify(`Saved ${path}.${shadowed} Sessions with the "${name}" role use it from their next turn.`, "info");
+		const shadowed = used && used.path !== path ? ` Another file wins here: ${used.path}.` : "";
+		const does = parsed.mode === "append" && under ? ` It adds to the ${sourceWord(under.source)} "${name}", which stays as it is.` : under ? ` It is used in place of the ${sourceWord(under.source)} "${name}".` : "";
+		ctx.ui.notify(`Saved ${path}.${does}${shadowed} Sessions with the "${name}" role use it from their next turn.`, "info");
 	};
 
 	onEvent(pi.events, "lattice:roles:set", (request) => {
@@ -278,7 +316,7 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("role", {
-		description: "Compose this session's roles, and read or edit a role. Usage: /role [show [name]|list|add <names>|remove <names>|set <names>|clear|edit <name> [user|project]]",
+		description: "Compose this session's roles, and read or edit a role. Usage: /role [show [name]|list|add <names>|remove <names>|set <names>|clear|edit <name> [replace] [user|project]]",
 		getArgumentCompletions: (prefix) => {
 			const words = prefix.split(/\s+/);
 			if (words.length <= 1) {
@@ -296,14 +334,14 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 			const [verb = "show", ...names] = args.trim().split(/[\s,+]+/).filter(Boolean);
 			if (verb === "show" && names[0]) show(ctx, names[0]);
 			else if (verb === "edit") {
-				if (!names[0]) ctx.ui.notify("Usage: /role edit <name> [user|project]", "warning");
-				else await edit(ctx, names[0], names[1]);
+				if (!names[0]) ctx.ui.notify("Usage: /role edit <name> [replace] [user|project]", "warning");
+				else await edit(ctx, names[0], names.slice(1));
 			} else if (verb === "show") {
 				reload(ctx);
 				ctx.ui.notify([`Roles: ${describe()}.`, ...advisories(applied, available).map((note) => `Note: ${note}`)].join("\n"), "info");
 			} else if (verb === "list") {
 				reload(ctx);
-				const lines = [...available.values()].map((f) => `${applied.includes(f.name) ? "*" : " "} ${f.name} (${[f.source, ...(f.slot ? [f.slot] : []), ...(f.keep ? ["kept"] : [])].join(", ")}): ${f.summary || "(no summary)"}`);
+				const lines = [...available.values()].map((f) => `${applied.includes(f.name) ? "*" : " "} ${f.name} (${[origin(f), ...(f.slot ? [f.slot] : []), ...(f.keep ? ["kept"] : [])].join("; ")}): ${f.summary || "(no summary)"}`);
 				ctx.ui.notify(lines.length > 0 ? lines.join("\n") : "No role fragments are installed.", "info");
 			} else if (verb === "add" || verb === "remove" || verb === "set") {
 				if (names.length === 0) {
@@ -315,7 +353,7 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 			} else if (verb === "clear") {
 				ctx.ui.notify(change("clear", []).text, "info");
 			} else {
-				ctx.ui.notify("Usage: /role [show [name]|list|add <names>|remove <names>|set <names>|clear|edit <name> [user|project]]", "warning");
+				ctx.ui.notify("Usage: /role [show [name]|list|add <names>|remove <names>|set <names>|clear|edit <name> [replace] [user|project]]", "warning");
 			}
 		},
 	});

@@ -42,7 +42,7 @@ export interface LatticeEvents {
 	/** The session's applied role fragments changed. */
 	"lattice:roles:changed": { fragments: string[] };
 	/** Ask which role fragments exist here. The asker passes an empty list; the roles extension fills it in. */
-	"lattice:roles:available": { names: string[]; fragments?: Array<{ name: string; summary: string; source: string; path: string }> };
+	"lattice:roles:available": { names: string[]; fragments?: Array<{ name: string; summary: string; source: string; path: string; stale?: boolean }> };
 	/**
 	 * Ask what this session has been told beyond what the person typed. The asker passes an
 	 * empty list; each extension that writes into the prompt adds its parts, with where each
