@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { advisories, builtinFragmentsDir, editRoles, type Fragment, fragmentRoots, loadFragments, parseFragment, roleSections } from "../src/index.ts";
 
 const fragment = (name: string, over: Partial<Fragment> = {}): Fragment => ({
-	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], suggests: [], includes: [], when: [], unless: [], keep: false, source: "test", path: `/x/${name}.md`, ...over,
+	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], includes: [], when: [], unless: [], keep: false, source: "test", path: `/x/${name}.md`, ...over,
 });
 const available = new Map(
 	[

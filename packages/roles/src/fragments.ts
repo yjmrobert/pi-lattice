@@ -18,8 +18,6 @@ export interface Fragment {
 	requires: string[];
 	/** Advisory: fragments this one sits badly with. Shown to the human, never enforced. */
 	conflicts: string[];
-	/** Hints about child sessions this role tends to spawn. Hints, not commands. */
-	suggests: string[];
 	/** Fragments that are part of this one: applying it applies them after it, and they are not listed separately. */
 	includes: string[];
 	/** Facts that must all hold for it to be applied. With none, it always is. See `facts.ts` in the protocol. */
@@ -67,7 +65,6 @@ export function parseFragment(content: string, path: string, source: string): Fr
 		body: body.trim(),
 		requires: list(frontmatter.requires),
 		conflicts: list(frontmatter.conflicts),
-		suggests: list(frontmatter.suggests),
 		includes: list(frontmatter.includes).filter(isFragmentName),
 		when: list(frontmatter.when).filter(isFactName),
 		unless: list(frontmatter.unless).filter(isFactName),

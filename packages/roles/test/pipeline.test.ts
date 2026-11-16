@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { expand, type Fragment, render, roleSections } from "../src/index.ts";
 
 const fragment = (name: string, over: Partial<Fragment> = {}): Fragment => ({
-	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], suggests: [], includes: [], when: [], unless: [], keep: false, source: "builtin", path: `/b/${name}.md`, ...over,
+	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], includes: [], when: [], unless: [], keep: false, source: "builtin", path: `/b/${name}.md`, ...over,
 });
 const catalog = (...fragments: Fragment[]): Map<string, Fragment> => new Map(fragments.map((f) => [f.name, f]));
 const names = (fragments: readonly Fragment[]): string[] => fragments.map((f) => f.name);

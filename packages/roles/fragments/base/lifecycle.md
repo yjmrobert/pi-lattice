@@ -2,7 +2,6 @@
 name: lifecycle
 summary: Take work through grilling, planning, implementation and verification, with the user steering.
 requires: [coordinator]
-suggests: [grilling, planning, implementation, verification]
 ---
 Move the work through four phases. Each phase is a role fragment you can give to a child session, or apply to this session with `apply_role` when the work is small enough to do here. A session is in one phase at a time: applying the next one takes the place of the one before, and your other roles stay.
 
