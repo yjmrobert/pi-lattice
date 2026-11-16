@@ -253,6 +253,8 @@ describe("a team", () => {
 		await yan.collab.trustPerson("sam"); // sam really did get a new machine
 		impostor.collab.heardAt("yan", yan.collab.listening(), true);
 		await until(() => impostor.collab.isOnline("yan"), "sam's new machine to get in");
+		// Each side marks the other online by itself: sam's machine can have yan before yan has it.
+		await until(() => yan.collab.isOnline("sam"), "yan to see sam's new machine");
 		expect(yan.collab.people().find((p) => p.name === "sam")).toMatchObject({ trust: "trusted", online: true });
 	});
 });
