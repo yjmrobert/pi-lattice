@@ -100,7 +100,9 @@ A fragment is text a model reads, so a change to one is checked three ways, chea
 |---|---|---|
 | `protocol` | base | Given to every session in a tree: who is speaking, how messages work, how to delegate |
 | `reporting` | base | Given to every child: how to answer the session that created it |
-| `coordinator` | base | Breaking work down, delegating to children, tracking, reporting; with a server, keeping the issues under it and doing what a person says about them |
+| `coordinator` | base | Breaking work down, delegating to children, tracking, reporting. Made of the two below, of which one applies |
+| `tending` | base | Part of `coordinator` where the team has a server: keeping the issues under the one it is on, and acting on what people and sessions say about them |
+| `plan-items` | base | Part of `coordinator` where it has not: laying the work out on the tree before any of it starts |
 | `worker` | base | One bounded piece of work, reported back when done or blocked |
 | `reviewer` | base | Checking one result against what its issue says done means, then closing it, sending it back, or asking |
 | `lifecycle` | base | Moving work through the four phases below, with the user steering |

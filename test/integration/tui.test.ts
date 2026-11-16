@@ -232,7 +232,8 @@ describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 			await pi.submit("after");
 			await pi.see(/echo\[user\] roles=\[[\w,-]+\] after/, 30_000);
 			await pi.submit("again");
-			await pi.see(/echo\[user\] roles=\[lattice-role-protocol,lattice-role-coordinator\] again/, 30_000);
+			// With the role comes its part for a team with a server: the session is told there is one.
+			await pi.see(/echo\[user\] roles=\[lattice-role-protocol,lattice-role-coordinator,lattice-role-tending\] again/, 30_000);
 		} finally {
 			sam.stop();
 			await server.stop();

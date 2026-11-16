@@ -22,9 +22,9 @@ const PARAMETERS = new Set(["waits_on"]);
  * freely. Raising one is saying, on purpose, that every such session should read more.
  */
 const CEILINGS: Record<string, number> = {
-	"first session": 1100,
-	"coordinator, no server": 1100,
-	"feature coordinator": 1536,
+	"first session": 848,
+	"coordinator, no server": 702,
+	"feature coordinator": 1284,
 	child: 718,
 	"grilling child": 1080,
 	"planning child": 991,
