@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { isFactName } from "@pi-lattice/protocol";
+import { layer } from "./catalog.ts";
 
 export interface Fragment {
 	/** Unique name, also used in the prompt section tag. Lowercase letters, digits and dashes. */
@@ -28,9 +29,20 @@ export interface Fragment {
 	slot?: string;
 	/** Replacing the applied list leaves this one applied. Only removing it by name, or clearing the list, takes it off. */
 	keep: boolean;
-	/** Where it was found: "project", "user" or "builtin". */
+	/**
+	 * What its file does to the fragment of the same name beneath it: `replace` it, or `append`
+	 * its text to it and leave the rest as it is. Only matters where there is one beneath.
+	 */
+	mode: "replace" | "append";
+	/** For a copy: what tells the text it was copied from, so that a copy whose original moved on can be told. */
+	base?: string;
+	/** Where it was found: "project", "user" or "builtin". For an addition, where the addition was found. */
 	source: string;
 	path: string;
+	/** For an addition: the fragment it adds to. */
+	addsTo?: { source: string; path: string };
+	/** It is a copy of one beneath it that has changed since the copy was made. */
+	stale?: true;
 }
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -70,6 +82,9 @@ export function parseFragment(content: string, path: string, source: string): Fr
 		unless: list(frontmatter.unless).filter(isFactName),
 		...(isFragmentName(frontmatter.slot) ? { slot: frontmatter.slot } : {}),
 		keep: frontmatter.keep === true || frontmatter.keep === "true",
+		mode: frontmatter.mode === "append" ? "append" : "replace",
+		// Written quoted, so that a mark made only of digits is not read as a number. One that was is still a mark.
+		...(typeof frontmatter.base === "string" && frontmatter.base.trim() !== "" ? { base: frontmatter.base.trim() } : typeof frontmatter.base === "number" ? { base: String(frontmatter.base) } : {}),
 		source,
 		path,
 	};
@@ -114,20 +129,26 @@ export function fragmentRoots(options: { cwd: string; agentDir: string; projectT
 	return roots;
 }
 
-/** Load every fragment from the roots. Earlier roots override later ones by name. */
-export function loadFragments(roots: FragmentRoot[]): Map<string, Fragment> {
-	const found = new Map<string, Fragment>();
-	for (const root of roots) {
-		for (const path of markdownFiles(root.dir)) {
-			let content: string;
-			try {
-				content = readFileSync(path, "utf8");
-			} catch {
-				continue;
-			}
-			const fragment = parseFragment(content, path, root.source);
-			if (fragment && !found.has(fragment.name)) found.set(fragment.name, fragment);
+/** The fragments in one place, in the order of their paths. */
+function readRoot(root: FragmentRoot): Fragment[] {
+	const found: Fragment[] = [];
+	for (const path of markdownFiles(root.dir)) {
+		let content: string;
+		try {
+			content = readFileSync(path, "utf8");
+		} catch {
+			continue;
 		}
+		const fragment = parseFragment(content, path, root.source);
+		if (fragment) found.push(fragment);
 	}
-	return new Map([...found].sort(([a], [b]) => a.localeCompare(b)));
+	return found;
+}
+
+/**
+ * Load every fragment from the roots, most specific first. A file in an earlier root replaces
+ * the fragment of that name in a later one, or adds to it when it says so. See `catalog.ts`.
+ */
+export function loadFragments(roots: FragmentRoot[]): Map<string, Fragment> {
+	return layer([...roots].reverse().map(readRoot));
 }

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { advisories, builtinFragmentsDir, editRoles, type Fragment, fragmentRoots, loadFragments, parseFragment, roleSections } from "../src/index.ts";
 
 const fragment = (name: string, over: Partial<Fragment> = {}): Fragment => ({
-	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], includes: [], when: [], unless: [], keep: false, source: "test", path: `/x/${name}.md`, ...over,
+	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], includes: [], when: [], unless: [], keep: false, mode: "replace", source: "test", path: `/x/${name}.md`, ...over,
 });
 const available = new Map(
 	[
@@ -87,6 +87,25 @@ describe("loadFragments", () => {
 		expect(found.get("reviewer")?.source).toBe("user");
 		expect(found.has("readme")).toBe(false);
 		expect(found.get("worker")?.source).toBe("builtin");
+	});
+
+	it("lets a file add to the role beneath it, and marks a copy whose original has changed", () => {
+		write("user", "worker.md", "---\nname: worker\nmode: append\n---\nRun the checks before you report.");
+		write("user", "reviewer.md", "---\nname: reviewer\nsummary: mine\nbase: \"0123456789ab\"\n---\nMy own reviewer.");
+		const builtin = loadFragments([{ dir: builtinFragmentsDir(), source: "builtin" }]);
+		const found = loadFragments([
+			{ dir: join(root, "user"), source: "user" },
+			{ dir: builtinFragmentsDir(), source: "builtin" },
+		]);
+		// The addition is after the built-in text, and everything else about the role is the built-in's.
+		expect(found.get("worker")?.body).toBe(`${builtin.get("worker")?.body}\n\nRun the checks before you report.`);
+		expect(found.get("worker")).toMatchObject({ source: "user", slot: "stance", summary: builtin.get("worker")?.summary, addsTo: { source: "builtin" } });
+		// A copy that says what it was copied from, which the built-in no longer is.
+		expect(found.get("reviewer")).toMatchObject({ source: "user", body: "My own reviewer.", stale: true });
+		expect(parseFragment("---\nname: x\nmode: append\nbase: abc\n---\nText.", "/r/x.md", "user")).toMatchObject({ mode: "append", base: "abc" });
+		expect(parseFragment("Text.", "/r/x.md", "user")?.mode).toBe("replace");
+		// A mark of digits only, written without quotes, is read as a number and is still a mark.
+		expect(parseFragment("---\nname: x\nbase: 123456\n---\nText.", "/r/x.md", "user")?.base).toBe("123456");
 	});
 
 	it("reads project fragments only when the project is trusted", () => {

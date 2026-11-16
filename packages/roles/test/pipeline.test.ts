@@ -1,9 +1,9 @@
-/** How a list of role names becomes prompt sections: parts, conditions and values. */
+/** How a list of role names becomes prompt sections: parts, conditions and values; and the layers a role is read from. */
 import { describe, expect, it } from "vitest";
-import { expand, type Fragment, render, roleSections } from "../src/index.ts";
+import { bodyHash, expand, type Fragment, layer, render, roleSections } from "../src/index.ts";
 
 const fragment = (name: string, over: Partial<Fragment> = {}): Fragment => ({
-	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], includes: [], when: [], unless: [], keep: false, source: "builtin", path: `/b/${name}.md`, ...over,
+	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], includes: [], when: [], unless: [], keep: false, mode: "replace", source: "builtin", path: `/b/${name}.md`, ...over,
 });
 const catalog = (...fragments: Fragment[]): Map<string, Fragment> => new Map(fragments.map((f) => [f.name, f]));
 const names = (fragments: readonly Fragment[]): string[] => fragments.map((f) => f.name);
@@ -92,5 +92,50 @@ describe("roleSections", () => {
 
 	it("with nothing known, writes only what needs nothing", () => {
 		expect(Object.keys(roleSections(["protocol", "coordinator"], all))).toEqual(["lattice-roles", "lattice-role-protocol", "lattice-role-coordinator"]);
+	});
+});
+
+describe("layer", () => {
+	const builtin = fragment("worker", { body: "Do one piece of work.", summary: "One piece", slot: "stance" });
+
+	it("lets a higher place replace a role, as before", () => {
+		const mine = fragment("worker", { body: "Mine.", source: "user", path: "/u/worker.md" });
+		expect(layer([[builtin], [mine]]).get("worker")).toMatchObject({ body: "Mine.", source: "user", path: "/u/worker.md" });
+	});
+
+	it("lets a higher place add to a role, keeping everything else about it", () => {
+		const addition = fragment("worker", { body: "Run npm run check before you report.", mode: "append", source: "project", path: "/p/worker.md", summary: "", keep: true });
+		const layered = layer([[builtin], [addition]]).get("worker");
+		expect(layered).toMatchObject({ body: "Do one piece of work.\n\nRun npm run check before you report.", summary: "One piece", slot: "stance", keep: false, source: "project", path: "/p/worker.md", addsTo: { source: "builtin", path: "/b/worker.md" } });
+	});
+
+	it("adds in every place that adds, lowest first", () => {
+		const user = fragment("worker", { body: "User rule.", mode: "append", source: "user", path: "/u/worker.md" });
+		const project = fragment("worker", { body: "Project rule.", mode: "append", source: "project", path: "/p/worker.md" });
+		expect(layer([[builtin], [user], [project]]).get("worker")?.body).toBe("Do one piece of work.\n\nUser rule.\n\nProject rule.");
+	});
+
+	it("takes an addition with nothing beneath it as the role itself", () => {
+		const alone = fragment("house", { body: "House rules.", mode: "append", source: "user", path: "/u/house.md" });
+		const layered = layer([[builtin], [alone]]).get("house");
+		expect(layered).toMatchObject({ body: "House rules.", source: "user" });
+		expect(layered?.addsTo).toBeUndefined();
+	});
+
+	it("marks a copy whose original has changed since it was made, and no other", () => {
+		const fresh = fragment("worker", { body: "Mine.", source: "user", path: "/u/worker.md", base: bodyHash(builtin.body) });
+		const old = fragment("worker", { body: "Mine.", source: "user", path: "/u/worker.md", base: bodyHash("Do one job.") });
+		const unmarked = fragment("worker", { body: "Mine.", source: "user", path: "/u/worker.md" });
+		expect(layer([[builtin], [fresh]]).get("worker")?.stale).toBeUndefined();
+		expect(layer([[builtin], [old]]).get("worker")?.stale).toBe(true);
+		expect(layer([[builtin], [unmarked]]).get("worker")?.stale).toBeUndefined();
+	});
+
+	it("uses the first of a name within one place, and sorts by name", () => {
+		const first = fragment("b", { body: "first" });
+		const second = fragment("b", { body: "second" });
+		const layered = layer([[first, second, fragment("a")]]);
+		expect([...layered.keys()]).toEqual(["a", "b"]);
+		expect(layered.get("b")?.body).toBe("first");
 	});
 });
