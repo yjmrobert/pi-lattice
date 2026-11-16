@@ -1,2 +1,2 @@
-export { advisories, editRoles, type EditResult, INDEX_SECTION, type RoleEdit, roleSections, SECTION_PREFIX } from "./compose.ts";
+export { advisories, editRoles, type EditResult, expand, INDEX_SECTION, render, type RoleEdit, roleSections, SECTION_PREFIX } from "./compose.ts";
 export { builtinFragmentsDir, type Fragment, type FragmentRoot, fragmentRoots, isFragmentName, loadFragments, parseFragment } from "./fragments.ts";

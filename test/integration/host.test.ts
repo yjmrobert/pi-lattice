@@ -319,6 +319,26 @@ describe("sessions that know how to talk to each other", () => {
 		expect(h.template("handover")).toContain("moved between the background and a terminal");
 	});
 
+	it("tells each session what is so for it, so a role applies only where it fits", async () => {
+		const dir = join(sandbox.agentDir, "lattice", "roles");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "child-only.md"), "---\nname: child-only\nsummary: For a session with a parent\nwhen: [parent.name]\n---\nYou report to {{parent.name}}.");
+		writeFileSync(join(dir, "root-only.md"), "---\nname: root-only\nsummary: For the first session\nunless: [parent.name]\n---\nYou are the first session.");
+		writeFileSync(join(dir, "boarded.md"), "---\nname: boarded\nsummary: For a team with a server\nwhen: [board]\n---\nThere is a board.");
+		const h = await startHost();
+		writeFileSync(join(h.stateDir, "config.json"), JSON.stringify({ reports: { remind: false }, roles: { tree: ["protocol", "child-only", "root-only", "boarded"] } }));
+		const root = await h.createRoot({ name: "root", cwd: sandbox.work });
+		await h.prompt(root.id, "what do you see");
+		const kid = await h.spawnChild(root.id, { name: "kid", brief: "what do you see" });
+		await eventually(async () => (await assistantTexts(h, kid.id)).includes("roles=["), "the child's first turn");
+		// Every session was given all three roles. Each is written into the prompt only where what it needs is so.
+		expect(h.node(kid.id)?.fragments).toEqual(["protocol", "child-only", "root-only", "boarded", "reporting", "worker"]);
+		expect(await assistantTexts(h, root.id)).toContain("roles=[lattice-role-protocol,lattice-role-root-only]");
+		expect(await assistantTexts(h, kid.id)).toContain("roles=[lattice-role-protocol,lattice-role-child-only,lattice-role-reporting,lattice-role-worker]");
+		expect(h.factsOf(h.node(kid.id) as NodeMeta)).toEqual({ name: "kid", kind: "task", "parent.name": "root", levels: "epic, feature, story, task" });
+		expect(h.factsOf(h.node(root.id) as NodeMeta)).toEqual({ name: "root", kind: "feature", levels: "epic, feature, story, task" });
+	});
+
 	it("reminds a child that ends its turn without reporting, then tells its parent", async () => {
 		const h = await startHost();
 		writeFileSync(join(h.stateDir, "config.json"), JSON.stringify({ reports: { remind: true } }));

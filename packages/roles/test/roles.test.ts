@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { advisories, builtinFragmentsDir, editRoles, type Fragment, fragmentRoots, loadFragments, parseFragment, roleSections } from "../src/index.ts";
 
 const fragment = (name: string, over: Partial<Fragment> = {}): Fragment => ({
-	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], suggests: [], keep: false, source: "test", path: `/x/${name}.md`, ...over,
+	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], suggests: [], includes: [], when: [], unless: [], keep: false, source: "test", path: `/x/${name}.md`, ...over,
 });
 const available = new Map(
 	[
@@ -32,6 +32,12 @@ describe("parseFragment", () => {
 		expect(parseFragment("---\nname: planning\nslot: phase\n---\nPlan.", "/r/x.md", "user")).toMatchObject({ slot: "phase", keep: false });
 		expect(parseFragment("---\nname: protocol\nkeep: true\n---\nTalk.", "/r/x.md", "user")).toMatchObject({ keep: true });
 		expect(parseFragment("---\nname: odd\nslot: Not A Slot\n---\nText.", "/r/x.md", "user")?.slot).toBeUndefined();
+	});
+
+	it("reads what a fragment is made of and what must be so for it to apply", () => {
+		const parsed = parseFragment("---\nname: lead\nincludes: [tending, Not A Name]\nwhen: [board, tool.work_list]\nunless: plain\n---\nLead.", "/r/x.md", "user");
+		expect(parsed).toMatchObject({ includes: ["tending"], when: ["board", "tool.work_list"], unless: ["plain"] });
+		expect(parseFragment("Just guidance.", "/r/my-role.md", "user")).toMatchObject({ includes: [], when: [], unless: [] });
 	});
 
 	it("rejects names that could not be a section tag, and empty bodies", () => {
@@ -137,6 +143,11 @@ describe("advisories", () => {
 
 	it("notes two fragments of one slot in a list that was not made by applying them", () => {
 		expect(advisories(["grilling", "planning"], available)).toContain('"grilling" and "planning" are both a phase; applying one again takes the other off.');
+	});
+
+	it("notes a part that is not installed", () => {
+		const withPart = new Map([...available, ["lead", fragment("lead", { includes: ["gone"] })]]);
+		expect(advisories(["lead"], withPart)).toEqual(['"lead" includes "gone", but no such fragment is installed; that part adds nothing.']);
 	});
 
 	it("notes an applied fragment that is not installed", () => {

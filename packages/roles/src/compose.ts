@@ -1,4 +1,11 @@
-/** Composition of applied fragments: list edits, advisory notes and prompt sections. Pure. */
+/**
+ * Composition of applied fragments: list edits, advisory notes and prompt sections. Pure.
+ *
+ * A list of names becomes prompt sections in steps, each one a function of data:
+ *
+ *   applied names -> expand (parts, and what applies) -> render (values) -> sections
+ */
+import { applies, type Facts, renderTemplate } from "@pi-lattice/protocol";
 import type { Fragment } from "./fragments.ts";
 
 export type RoleEdit = "set" | "add" | "remove" | "clear";
@@ -59,6 +66,9 @@ export function advisories(applied: readonly string[], available: ReadonlyMap<st
 		for (const conflict of fragment.conflicts) {
 			if (applied.includes(conflict)) notes.push(`"${name}" and "${conflict}" give competing guidance.`);
 		}
+		for (const part of fragment.includes) {
+			if (!available.has(part)) notes.push(`"${name}" includes "${part}", but no such fragment is installed; that part adds nothing.`);
+		}
 	}
 	// A list made before slots were known, or written by hand, may hold two of one slot.
 	const holders = new Map<string, string>();
@@ -72,16 +82,44 @@ export function advisories(applied: readonly string[], available: ReadonlyMap<st
 	return notes;
 }
 
+/**
+ * The fragments a list of names stands for, in the order they are written into the prompt:
+ * each one, then its parts, then theirs. Each fragment once, where it first comes; a name that
+ * is not installed is passed over.
+ *
+ * With `facts`, a fragment is left out while what it needs is not so (`when`, `unless`), and
+ * its parts with it. Without, every fragment is given: what there is, not what applies now.
+ */
+export function expand(applied: readonly string[], available: ReadonlyMap<string, Fragment>, facts?: Facts): Fragment[] {
+	const out: Fragment[] = [];
+	const seen = new Set<string>();
+	const visit = (name: string): void => {
+		const fragment = available.get(name);
+		if (!fragment || seen.has(name)) return;
+		seen.add(name);
+		if (facts !== undefined && !applies(fragment, facts)) return;
+		out.push(fragment);
+		for (const part of fragment.includes) visit(part);
+	};
+	for (const name of applied) visit(name);
+	return out;
+}
+
+/** A fragment's text with what is so filled in: `{{name}}` becomes the fact's text. A name nobody gave is left as it was written. */
+export function render(fragment: Fragment, facts: Facts): string {
+	return renderTemplate(fragment.body, facts);
+}
+
 export const SECTION_PREFIX = "lattice-role-";
 export const INDEX_SECTION = "lattice-roles";
 
 /**
  * The system prompt sections for an applied list: one index section, then one section per
- * fragment in list order. Keys are XML tag names, so Pi can patch exactly the sections
- * that changed and keep the cached prefix (ADR 0003).
+ * fragment that applies, parts included, in order. Keys are XML tag names, so Pi can patch
+ * exactly the sections that changed and keep the cached prefix (ADR 0003).
  */
-export function roleSections(applied: readonly string[], available: ReadonlyMap<string, Fragment>): Record<string, string> {
-	const present = applied.map((name) => available.get(name)).filter((fragment): fragment is Fragment => fragment !== undefined);
+export function roleSections(applied: readonly string[], available: ReadonlyMap<string, Fragment>, facts: Facts = {}): Record<string, string> {
+	const present = expand(applied, available, facts);
 	if (present.length === 0) return {};
 	const sections: Record<string, string> = {
 		[INDEX_SECTION]: [
@@ -89,6 +127,6 @@ export function roleSections(applied: readonly string[], available: ReadonlyMap<
 			`Each has a section below named ${SECTION_PREFIX}<name>. Follow them together. Where two disagree, the later one wins. They are guidance: the user can overrule any of it at any time, and the set of roles can change during the session.`,
 		].join("\n"),
 	};
-	for (const fragment of present) sections[`${SECTION_PREFIX}${fragment.name}`] = fragment.body;
+	for (const fragment of present) sections[`${SECTION_PREFIX}${fragment.name}`] = render(fragment, facts);
 	return sections;
 }

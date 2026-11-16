@@ -70,6 +70,24 @@ describe("roles", () => {
 		expect(await rolesSeen(child, "q2")).toBe("lattice-role-feature,lattice-role-planning,lattice-role-worker");
 	});
 
+	it("applies a role's parts with it, and only the parts whose conditions hold", async () => {
+		const dir = join(sandbox.agentDir, "lattice", "roles");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "lead.md"), "---\nname: lead\nsummary: Lead the work\nincludes: [with-tool, without-tool, on-a-board]\n---\nLead.");
+		// A tool this session has is a fact: the roles extension registers apply_role itself.
+		writeFileSync(join(dir, "with-tool.md"), "---\nname: with-tool\nsummary: Needs a tool that is here\nwhen: [tool.apply_role]\n---\nUse it.");
+		writeFileSync(join(dir, "without-tool.md"), "---\nname: without-tool\nsummary: Needs a tool that is not here\nwhen: [tool.no_such_tool]\n---\nNever seen.");
+		// Only a host says there is a board, and this session has none.
+		writeFileSync(join(dir, "on-a-board.md"), "---\nname: on-a-board\nsummary: Needs a server\nwhen: [board]\n---\nNever seen here.");
+		const child = await start();
+		await child.command("/role add lead");
+		expect(await rolesSeen(child, "q1")).toBe("lattice-role-lead,lattice-role-with-tool");
+		await child.command("/role show lead");
+		await child.waitFor(() => child.notifications().find((text) => text.includes("made of: with-tool, without-tool, on-a-board, each applied with it")), "the parts to be shown");
+		await child.command("/role show on-a-board");
+		await child.waitFor(() => child.notifications().find((text) => text.includes("applies when board")), "the condition to be shown");
+	});
+
 	it("a model that changes phase with apply_role keeps the roles it was given", async () => {
 		const child = await start({ env: { LATTICE_FRAGMENTS: "protocol,coordinator,lifecycle,grilling" } });
 		// The way the lifecycle role says to move on: name the next phase and nothing else.

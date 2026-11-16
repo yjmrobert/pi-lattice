@@ -8,9 +8,10 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { assignmentFromEnv, emitEvent, HOST_ENV, type HostAssignment, onEvent, PROTOCOL_VERSION } from "@pi-lattice/protocol";
+import { assignmentFromEnv, emitEvent, type Facts, HOST_ENV, type HostAssignment, onEvent, PROTOCOL_VERSION } from "@pi-lattice/protocol";
 import { Type } from "typebox";
 import { advisories, editRoles, INDEX_SECTION, type RoleEdit, roleSections, SECTION_PREFIX } from "./compose.ts";
+import { gatherFacts } from "./facts.ts";
 import { type Fragment, fragmentRoots, isFragmentName, loadFragments, parseFragment } from "./fragments.ts";
 
 const ROLES_ENTRY = "lattice:roles";
@@ -48,6 +49,8 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 	let assigned: HostAssignment | undefined;
 	/** Whether this session has ever had roles chosen for it, so a late assignment does not override them. */
 	let everSet = false;
+	/** What was so when the last turn started: the tools this session has and what its host said of it. */
+	let facts: Facts = {};
 
 	const reload = (ctx: ExtensionContext): void => {
 		available = loadFragments(fragmentRoots({ cwd: ctx.cwd, agentDir: getAgentDir(), projectTrusted: ctx.isProjectTrusted() }));
@@ -107,7 +110,9 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 		for (const key of Object.keys(sections)) {
 			if (key === INDEX_SECTION || key.startsWith(SECTION_PREFIX)) delete sections[key];
 		}
-		Object.assign(sections, roleSections(applied, available));
+		if (applied.length === 0) return;
+		facts = await gatherFacts(pi, facts);
+		Object.assign(sections, roleSections(applied, available, facts));
 	});
 
 	// A session opened as a node after it started takes the node's roles, unless it already has its own.
@@ -134,7 +139,7 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 	// Whoever shows a person what this session has been told asks each extension for its part.
 	onEvent(pi.events, "lattice:prompt:describe", (request) => {
 		if (!context) return;
-		const sections = roleSections(applied, available);
+		const sections = roleSections(applied, available, facts);
 		for (const [key, text] of Object.entries(sections)) {
 			const fragment = key.startsWith(SECTION_PREFIX) ? available.get(key.slice(SECTION_PREFIX.length)) : undefined;
 			request.parts.push({
@@ -165,6 +170,8 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 				...(fragment.requires.length > 0 ? [`usually with: ${fragment.requires.join(", ")}`] : []),
 				...(fragment.conflicts.length > 0 ? [`competes with: ${fragment.conflicts.join(", ")}`] : []),
 				...(fragment.slot ? [`a ${fragment.slot}: applying it takes the place of any other ${fragment.slot}`] : []),
+				...(fragment.includes.length > 0 ? [`made of: ${fragment.includes.join(", ")}, each applied with it`] : []),
+				...(fragment.when.length > 0 || fragment.unless.length > 0 ? [`applies ${[...(fragment.when.length > 0 ? [`when ${fragment.when.join(" and ")}`] : []), ...(fragment.unless.length > 0 ? [`unless ${fragment.unless.join(" or ")}`] : [])].join(", ")}`] : []),
 				...(fragment.keep ? ["kept: setting the roles leaves it applied; /role remove takes it off"] : []),
 				"",
 				fragment.body,

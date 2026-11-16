@@ -6,6 +6,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { isFactName } from "@pi-lattice/protocol";
 
 export interface Fragment {
 	/** Unique name, also used in the prompt section tag. Lowercase letters, digits and dashes. */
@@ -19,6 +20,12 @@ export interface Fragment {
 	conflicts: string[];
 	/** Hints about child sessions this role tends to spawn. Hints, not commands. */
 	suggests: string[];
+	/** Fragments that are part of this one: applying it applies them after it, and they are not listed separately. */
+	includes: string[];
+	/** Facts that must all hold for it to be applied. With none, it always is. See `facts.ts` in the protocol. */
+	when: string[];
+	/** Facts none of which may hold for it to be applied. */
+	unless: string[];
 	/** At most one fragment of a slot is applied: applying this one takes the other off. For example `phase`. */
 	slot?: string;
 	/** Replacing the applied list leaves this one applied. Only removing it by name, or clearing the list, takes it off. */
@@ -61,6 +68,9 @@ export function parseFragment(content: string, path: string, source: string): Fr
 		requires: list(frontmatter.requires),
 		conflicts: list(frontmatter.conflicts),
 		suggests: list(frontmatter.suggests),
+		includes: list(frontmatter.includes).filter(isFragmentName),
+		when: list(frontmatter.when).filter(isFactName),
+		unless: list(frontmatter.unless).filter(isFactName),
 		...(isFragmentName(frontmatter.slot) ? { slot: frontmatter.slot } : {}),
 		keep: frontmatter.keep === true || frontmatter.keep === "true",
 		source,

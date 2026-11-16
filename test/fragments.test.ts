@@ -7,7 +7,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { TEMPLATES } from "../packages/protocol/src/index.ts";
+import { FACTS, isKnownFact, TEMPLATES } from "../packages/protocol/src/index.ts";
+import { expand } from "../packages/roles/src/index.ts";
 import { builtinCatalog, COMBINATIONS, compose, words } from "../scripts/roles-doc.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -71,6 +72,36 @@ describe("the built-in role fragments", () => {
 		const missing: string[] = [];
 		for (const fragment of catalog.values()) for (const other of [...fragment.requires, ...fragment.conflicts]) if (!catalog.has(other)) missing.push(`${fragment.name}: ${other}`);
 		expect(missing).toEqual([]);
+	});
+
+	it("are made only of fragments that exist, and never of two that hold one slot", () => {
+		const problems: string[] = [];
+		for (const fragment of catalog.values()) {
+			for (const part of fragment.includes) if (!catalog.has(part)) problems.push(`${fragment.name} includes ${part}, which does not exist`);
+			const slots = expand([fragment.name], catalog).map((part) => part.slot).filter((slot) => slot !== undefined);
+			if (new Set(slots).size !== slots.length) problems.push(`${fragment.name} has two parts of one slot`);
+		}
+		expect(problems).toEqual([]);
+	});
+
+	it("depend only on facts that mean something, and mention only facts they are sure to have", () => {
+		const problems: string[] = [];
+		for (const fragment of catalog.values()) {
+			for (const name of [...fragment.when, ...fragment.unless]) if (!isKnownFact(name)) problems.push(`${fragment.name} depends on ${name}, which nothing gives`);
+			// A fragment says whether it applies in its header. Inside it only values are filled in.
+			if (/\{\{[#/]/.test(fragment.body)) problems.push(`${fragment.name} has a conditional block: make the part a fragment of its own with \`when\``);
+			for (const match of fragment.body.matchAll(/\{\{([\w.-]+)\}\}/g)) {
+				const name = match[1] as string;
+				if (!isKnownFact(name)) problems.push(`${fragment.name} mentions {{${name}}}, which nothing gives`);
+				else if (!fragment.when.includes(name)) problems.push(`${fragment.name} mentions {{${name}}} without \`when: [${name}]\`: where the fact is missing the braces would be shown`);
+			}
+		}
+		expect(problems).toEqual([]);
+	});
+
+	it("can count on facts the guide describes: every fact a host gives is in its table, as the contract words it", () => {
+		const guide = readFileSync(join(root, "docs", "roles.md"), "utf8");
+		expect(FACTS.filter((fact) => !guide.includes(`| \`${fact.name}\` | ${fact.says} | \`${fact.example}\` |`)).map((fact) => fact.name)).toEqual([]);
 	});
 
 	it("are all in the guide's table", () => {

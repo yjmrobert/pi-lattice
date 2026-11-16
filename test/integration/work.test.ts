@@ -75,6 +75,8 @@ describe("the team's work", () => {
 		const h = await joined();
 		const sam = await teammate("sam");
 		const root = await h.createRoot({ name: "checkout", cwd: sandbox.work, fragments: ["coordinator"] });
+		// A session of a host that has joined a server is told so, with the team's own levels and types: roles can depend on it.
+		expect(h.factsOf(root)).toEqual({ name: "checkout", kind: "feature", board: "yes", levels: "epic, feature, story, task", types: "epic, feature, story, task, bug" });
 
 		await ask(h, root.id, tool("work_add", { title: "Checkout", type: "epic", body: "People can pay." }));
 		await eventually(() => issues(h).length === 1, "the epic");
