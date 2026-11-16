@@ -140,6 +140,39 @@ describe("the team's work", () => {
 		expect(await said(h, root.id)).toContain("There is no issue #99.");
 	}, 60_000);
 
+	it("gives a child put on an issue the roles the team's scheme names for that type, unless roles were chosen for it", async () => {
+		const h = await joined();
+		const sam = await teammate("sam");
+		await sam.create({ title: "Checkout", type: "epic" });
+		await sam.create({ title: "Total is wrong", type: "bug", parent: 1 });
+		await sam.create({ title: "Pay by card", parent: 1 });
+		await eventually(() => issues(h).length === 3, "the host to hear of the issues");
+		const root = await h.createRoot({ name: "checkout", cwd: sandbox.work, fragments: ["coordinator"] });
+		const made = async (name: string) => (await eventually(() => childrenOf(h.nodes(), root.id).find((node) => node.name === name), `the child ${name}`)).fragments;
+
+		// A bug names the roles of a session that builds one piece: the coordinator did not have to say so.
+		await ask(h, root.id, tool("spawn_session", { name: "fix total", issue: 2, brief: "say ok" }));
+		expect(await made("fix total")).toEqual(["protocol", "reporting", "worker", "implementation", "task"]);
+		// What it does choose is what the child gets.
+		await ask(h, root.id, tool("spawn_session", { name: "look first", issue: 2, fragments: ["worker", "grilling"], brief: "say ok" }));
+		expect(await made("look first")).toEqual(["protocol", "reporting", "worker", "grilling"]);
+		// A feature names none in the default scheme, and a child with no issue of its own is not on one: both get the default.
+		await ask(h, root.id, tool("spawn_session", { name: "card form", issue: 3, brief: "say ok" }));
+		expect(await made("card form")).toEqual(["protocol", "reporting", "worker"]);
+		await ask(h, root.id, tool("spawn_session", { name: "helper", brief: "say ok" }));
+		expect(await made("helper")).toEqual(["protocol", "reporting", "worker"]);
+
+		// The team says otherwise in its scheme, and the next child gets what it says.
+		const scheme = sam.state().scheme;
+		await sam.setScheme({ ...scheme, types: scheme.types.map((type) => (type.name === "feature" ? { ...type, roles: ["coordinator", "lifecycle", "feature"] } : type)) });
+		await eventually(() => h.uiState().work?.scheme.types.find((type) => type.name === "feature")?.roles?.length === 3, "the host to hear of the scheme");
+		await ask(h, root.id, tool("spawn_session", { name: "card lead", issue: 3, brief: "say ok" }));
+		expect(await made("card lead")).toEqual(["protocol", "reporting", "coordinator", "lifecycle", "feature"]);
+		// The agent reads the same when it looks at the work.
+		await ask(h, root.id, tool("work_list", {}));
+		expect(await said(h, root.id)).toContain("Roles: a session put on a feature is given coordinator + lifecycle + feature; a session put on a task or bug is given worker + implementation + task, unless whoever creates it chooses others.");
+	}, 60_000);
+
 	it("gives an agent the next issue that is ready, puts its session on it, and leaves what waits and what is for people", async () => {
 		const h = await joined();
 		const sam = await teammate("sam");

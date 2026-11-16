@@ -64,6 +64,7 @@ import {
 	type Steer,
 	directionsFor,
 	reviewed,
+	rolesOfType,
 	isClosed,
 	type Issue,
 	type WorkRequest,
@@ -538,8 +539,11 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const workspace = spec.workspace ?? "shared";
 		if (!(WORKSPACE_MODES as readonly string[]).includes(workspace)) throw new Error(`Unknown workspace "${workspace}". Use shared or worktree.`);
 		const chosen = (spec.fragments ?? []).filter((name) => typeof name === "string" && name.trim() !== "").map((name) => name.trim());
+		// A child put on an issue of its own, with no roles chosen, gets the ones the team's scheme names for that type of issue.
+		const work = this.work?.state();
+		const typed = spec.issue !== undefined && work ? rolesOfType(work.scheme, work.issues.find((entry) => entry.number === spec.issue)?.type ?? "") : [];
 		// Every child is told how to talk to the tree and how to answer its parent, whatever else it was given.
-		const fragments = rolesFor(this.settings(), "child", chosen);
+		const fragments = rolesFor(this.settings(), "child", chosen, typed);
 		const model = typeof spec.model === "string" && spec.model.trim() !== "" ? spec.model.trim() : undefined;
 		const waitsOn = this.resolveWaitsOn(all, parent, spec.waitsOn);
 		const held = planned || waitsOn.some((other) => !other.done);

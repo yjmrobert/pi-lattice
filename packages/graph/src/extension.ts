@@ -140,7 +140,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 			name: Type.String({ description: "Short name for the child, shown in the tree" }),
 			brief: Type.String({ description: "What the child should do: goal, context, constraints, and what to send back" }),
 			kind: Type.Optional(Type.String({ description: "Free-form label for the kind of work, for example grilling, planning, task" })),
-			fragments: Type.Optional(Type.Array(Type.String(), { description: "Role fragments to apply to the child, in order" })),
+			fragments: Type.Optional(Type.Array(Type.String(), { description: "Role fragments to apply to the child, in order. Leave out and a child given an issue gets the roles the team names for that type of issue, and any other child the default" })),
 			workspace: Type.Optional(Type.String({ description: 'Where the child works: "shared" (this directory, the default) or "worktree" (its own git worktree and branch)' })),
 			model: Type.Optional(Type.String({ description: "Model for the child, for example a cheaper one for routine work. Leave out to use the default" })),
 			waits_on: Type.Optional(Type.Array(Type.String(), { description: "Sessions in this tree, by id or name, whose result the child needs first. It starts when each has sent its result" })),
