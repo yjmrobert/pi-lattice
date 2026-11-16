@@ -2031,9 +2031,12 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		const read = settings();
 		const set = SETTINGS.filter((setting) => read.settings.sources[setting.key] !== "default").map((setting) => `${setting.key} ${formatSetting(read.settings.values[setting.key])}`);
 		check(read.problems.length === 0, `Settings: ${set.length > 0 ? set.join(", ") : "defaults"}`, read.problems.join(" "));
-		const roles = { names: [] as string[] };
+		const roles: LatticeEvents["lattice:roles:available"] = { names: [] };
 		emitEvent(pi.events, "lattice:roles:available", roles);
 		check(roles.names.length > 0 ? true : "warn", `Roles: ${roles.names.length} available`, "The roles extension is not loaded, so sessions cannot be given roles.");
+		// A full copy of a role does not get what the role it was copied from has gained since.
+		const stale = (roles.fragments ?? []).filter((fragment) => fragment.stale);
+		if (stale.length > 0) check("warn", `Roles: ${stale.map((fragment) => fragment.name).join(", ")} ${stale.length === 1 ? "is a copy of a role" : "are copies of roles"} that changed after the copy was made`, "/role show <name> says where each is. Saving it empty with /role edit <name> goes back to the one it was copied from, and /role edit <name> then adds to that one instead.");
 		const others = [...shared.links.keys()].filter((dir) => dir !== shared.home).length;
 		check(true, `Other repositories: ${others} running, ${shared.asleep.length} asleep`);
 		// How the roles have done here: a combination whose sessions keep having to be reminded has a fragment that is not being followed.
