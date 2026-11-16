@@ -109,6 +109,22 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		await queue(async () => disconnect());
 	});
 
+	// What is so for this session, for the roles that depend on it: its host knows. What it last said stands when it cannot be asked.
+	let known: Record<string, string> = {};
+	onEvent(pi.events, "lattice:facts:query", (request) => {
+		if (!context || !client || client.isClosed) return;
+		const fill = (facts: Record<string, string>): void => void Object.assign(request.facts, facts);
+		(request.pending ??= []).push(
+			client.request("facts", {}).then(
+				({ facts }) => {
+					known = facts;
+					fill(facts);
+				},
+				() => fill(known),
+			),
+		);
+	});
+
 	pi.registerTool({
 		name: "spawn_session",
 		label: "Spawn session",
