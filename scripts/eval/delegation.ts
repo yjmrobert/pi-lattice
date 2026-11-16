@@ -39,5 +39,8 @@ export const delegation: Scenario = {
 		check(child?.done === true, "the child is marked done");
 		check(!childHistory.includes("You ended your turn without reporting"), "the child did not have to be reminded");
 		check(stopped.length === 0, "the parent was never told a child went quiet", stopped[0]?.envelope.payload.text.slice(0, 200) ?? "");
+		// A result needs no answer. One that is answered starts the child again, for nothing.
+		const thanks = child ? world.host.traffic({ node: child.id, limit: 1000 }).filter((record) => record.recipient === child.id && record.envelope.from === first.id && results.some((result) => result.envelope.id === record.envelope.causationId)) : [];
+		check(thanks.length === 0, "the coordinator did not answer a result that needed no answer", thanks[0]?.envelope.payload.text.slice(0, 200) ?? "");
 	},
 };
