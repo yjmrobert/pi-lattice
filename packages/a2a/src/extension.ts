@@ -406,7 +406,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 			to: Type.String({ description: "Recipient: a node id such as nd_..., or parent, children, root" }),
 			text: Type.String({ description: "The message body" }),
 			intent: Type.Optional(Type.String({ description: "What kind of message this is, for example ask, inform, result. Defaults to inform." })),
-			replyTo: Type.Optional(Type.String({ description: "Id of the received message this answers" })),
+			replyTo: Type.Optional(Type.String({ description: "The id of the received message this answers, as its <lattice-message id> gives it. Leave it out when this answers no message: it takes an id and nothing else" })),
 		}),
 		async execute(_toolCallId, params) {
 			const result = await send(params);

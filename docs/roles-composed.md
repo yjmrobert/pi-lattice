@@ -8,15 +8,15 @@ What a session is told by its roles, for the usual combinations with the default
 
 | Combination | When | Roles | Server | Words |
 |---|---|---|---|---|
-| first session | The session that starts a tree where there is a server: the host gives it `coordinator`. | `protocol + coordinator` | yes | 848 |
-| coordinator, no server | A coordinator where the work is not on a server: it lays the work out on the tree. | `protocol + coordinator` | no | 702 |
-| feature coordinator | The root of a feature taken through the four phases, with a server. | `protocol + coordinator + lifecycle + feature` | yes | 1284 |
-| child | A child created with no roles. | `protocol + reporting + worker` | no | 718 |
-| grilling child | A child that interrogates one story. | `protocol + reporting + worker + grilling + story` | no | 1080 |
-| planning child | A child that plans one story. | `protocol + reporting + worker + planning + story` | no | 991 |
-| task child | A child that builds one task. | `protocol + reporting + worker + implementation + task` | no | 1051 |
-| verification child | A child that checks what another built. | `protocol + reporting + worker + verification + story` | no | 1061 |
-| reviewer | A session the host starts to check a result on an issue. | `protocol + reporting + reviewer` | yes | 755 |
+| first session | The session that starts a tree where there is a server: the host gives it `coordinator`. | `protocol + coordinator` | yes | 785 |
+| coordinator, no server | A coordinator where the work is not on a server: it lays the work out on the tree. | `protocol + coordinator` | no | 639 |
+| feature coordinator | The root of a feature taken through the four phases, with a server. | `protocol + coordinator + lifecycle + feature` | yes | 1221 |
+| child | A child created with no roles. | `protocol + reporting + worker` | no | 655 |
+| grilling child | A child that interrogates one story. | `protocol + reporting + worker + grilling + story` | no | 1017 |
+| planning child | A child that plans one story. | `protocol + reporting + worker + planning + story` | no | 928 |
+| task child | A child that builds one task. | `protocol + reporting + worker + implementation + task` | no | 988 |
+| verification child | A child that checks what another built. | `protocol + reporting + worker + verification + story` | no | 998 |
+| reviewer | A session the host starts to check a result on an issue. | `protocol + reporting + reviewer` | yes | 692 |
 
 The words are those of the role sections only: the index that lists the roles, then one section for each fragment that applies. A role's parts each have a section of their own, and a part is left out where what it needs is not so.
 
@@ -25,7 +25,7 @@ The words are those of the role sections only: the index that lists the roles, t
 | Section | Words |
 |---|---|
 | `lattice-roles` | 52 |
-| `lattice-role-protocol` | 323 |
+| `lattice-role-protocol` | 260 |
 | `lattice-role-coordinator` | 239 |
 | `lattice-role-tending` | 234 |
 
@@ -34,7 +34,7 @@ The words are those of the role sections only: the index that lists the roles, t
 | Section | Words |
 |---|---|
 | `lattice-roles` | 52 |
-| `lattice-role-protocol` | 323 |
+| `lattice-role-protocol` | 260 |
 | `lattice-role-coordinator` | 239 |
 | `lattice-role-plan-items` | 88 |
 
@@ -43,7 +43,7 @@ The words are those of the role sections only: the index that lists the roles, t
 | Section | Words |
 |---|---|
 | `lattice-roles` | 54 |
-| `lattice-role-protocol` | 323 |
+| `lattice-role-protocol` | 260 |
 | `lattice-role-coordinator` | 239 |
 | `lattice-role-tending` | 234 |
 | `lattice-role-lifecycle` | 328 |
@@ -54,7 +54,7 @@ The words are those of the role sections only: the index that lists the roles, t
 | Section | Words |
 |---|---|
 | `lattice-roles` | 52 |
-| `lattice-role-protocol` | 323 |
+| `lattice-role-protocol` | 260 |
 | `lattice-role-reporting` | 192 |
 | `lattice-role-worker` | 151 |
 
@@ -63,7 +63,7 @@ The words are those of the role sections only: the index that lists the roles, t
 | Section | Words |
 |---|---|
 | `lattice-roles` | 54 |
-| `lattice-role-protocol` | 323 |
+| `lattice-role-protocol` | 260 |
 | `lattice-role-reporting` | 192 |
 | `lattice-role-worker` | 151 |
 | `lattice-role-grilling` | 264 |
@@ -74,7 +74,7 @@ The words are those of the role sections only: the index that lists the roles, t
 | Section | Words |
 |---|---|
 | `lattice-roles` | 54 |
-| `lattice-role-protocol` | 323 |
+| `lattice-role-protocol` | 260 |
 | `lattice-role-reporting` | 192 |
 | `lattice-role-worker` | 151 |
 | `lattice-role-planning` | 175 |
@@ -85,7 +85,7 @@ The words are those of the role sections only: the index that lists the roles, t
 | Section | Words |
 |---|---|
 | `lattice-roles` | 54 |
-| `lattice-role-protocol` | 323 |
+| `lattice-role-protocol` | 260 |
 | `lattice-role-reporting` | 192 |
 | `lattice-role-worker` | 151 |
 | `lattice-role-implementation` | 252 |
@@ -96,7 +96,7 @@ The words are those of the role sections only: the index that lists the roles, t
 | Section | Words |
 |---|---|
 | `lattice-roles` | 54 |
-| `lattice-role-protocol` | 323 |
+| `lattice-role-protocol` | 260 |
 | `lattice-role-reporting` | 192 |
 | `lattice-role-worker` | 151 |
 | `lattice-role-verification` | 245 |
@@ -107,7 +107,7 @@ The words are those of the role sections only: the index that lists the roles, t
 | Section | Words |
 |---|---|
 | `lattice-roles` | 52 |
-| `lattice-role-protocol` | 323 |
+| `lattice-role-protocol` | 260 |
 | `lattice-role-reporting` | 192 |
 | `lattice-role-reviewer` | 188 |
 
@@ -131,16 +131,9 @@ Messaging:
 - `send_message` reaches another session: `parent`, `children`, `root`, or an id from `list_sessions`.
 - Delivery is asynchronous. Do not wait or poll for a reply. Carry on with other work or end your turn; the reply arrives later as a `<lattice-message>` and starts a new turn.
 - Say what kind of message it is with `intent`: `ask` when you need an answer, `result` for the final report on work you were given, `inform` for something the other should know that needs no answer.
+- Answer an `ask`. Do not answer a `result` or an `inform` to say it arrived, to agree with it, or to thank its sender: every message starts a turn in the session that gets it, and an answer with nothing to act on spends that turn for nothing.
 - When you answer a message, set `replyTo` to its id.
 - The reader has none of your conversation. Lead with the point, and name files, branches and commands exactly.
-
-Delegating:
-
-- `spawn_session` creates a child session with a brief. The child sees only the brief, so it must stand on its own: the goal, the context and files that matter, the constraints, and what to send back.
-- Give a child that edits files while other sessions are editing its own worktree (`workspace: "worktree"`).
-- A child sends one `result` when it is done, or an `ask` when it is blocked. If a child stops without reporting, pi-lattice tells you.
-- A child's report is a claim. Check the parts that matter before building on it.
-- Do small or tightly coupled work yourself. Delegating costs a brief and a wait.
 ```
 
 ### coordinator

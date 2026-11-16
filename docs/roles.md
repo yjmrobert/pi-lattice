@@ -98,7 +98,7 @@ A fragment is text a model reads, so a change to one is checked three ways, chea
 
 | Name | Folder | Use it for |
 |---|---|---|
-| `protocol` | base | Given to every session in a tree: who is speaking, how messages work, how to delegate |
+| `protocol` | base | Given to every session in a tree: who is speaking and how messages work |
 | `reporting` | base | Given to every child: how to answer the session that created it |
 | `coordinator` | base | Breaking work down, delegating to children, tracking, reporting. Made of the two below, of which one applies |
 | `tending` | base | Part of `coordinator` where the team has a server: keeping the issues under the one it is on, and acting on what people and sessions say about them |
