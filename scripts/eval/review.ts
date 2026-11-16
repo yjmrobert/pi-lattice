@@ -87,3 +87,56 @@ export const reviewFail: Scenario = {
 		check(verdict.comments.some((comment) => /heliotrope|magenta/i.test(comment)), "what is missing is written on the issue", verdict.comments.join(" | ").slice(0, 300));
 	},
 };
+
+/**
+ * A result on a task: no reviewer is started for it. The session tending the branch is told,
+ * with what was reported, and checks it itself.
+ */
+async function tended(world: World, check: Check, content: string): Promise<{ state: string; fixed: boolean; comments: string[]; calls: ToolCall[] }> {
+	world.file("FACT.txt", `${content}\n`);
+	const planner = await world.client("planner");
+	await planner.create({ title: "Facts", type: "epic" });
+	await planner.create({ title: "Colours", parent: 1 });
+	await planner.create({ title: "Named colours", parent: 2 });
+	await planner.create({ title: "The colour file", parent: 3, body: STORY });
+	await world.until(() => world.issues().length === 4);
+	const lead = await world.host.createRoot({ name: "lead", cwd: world.work, fragments: ["coordinator"] });
+	const taken = await planner.next({ repo: "work", lease: true, type: "task" }, { as: "builder" });
+	await planner.done(taken.issue?.number ?? 4, { summary: "FACT.txt holds the word heliotrope.", checks: "cat FACT.txt" }, { as: "builder" });
+	const done = await world.until(async () => world.quiet() && world.issue(4)?.state !== "review" && (await world.tools(lead.id)).length > 0);
+	const calls = await world.tools(lead.id);
+	const comments = (await planner.read(4)).comments.map((comment) => comment.body);
+
+	check(world.blocked === "", "nobody waited on a question", world.blocked);
+	check(done, "the session tending the branch checked the result", `the issue is ${world.issue(4)?.state}`);
+	check(childrenOf(world.nodes(), lead.id).every((node) => !node.fragments.includes("reviewer")), "no reviewer was started: a task is checked by the session tending it");
+	check(calls.some((call) => call.name === "work_list" && call.args.under === 4) || calls.some((call) => call.name === "bash" && /FACT/.test(String(call.args.command ?? ""))), "it looked at the issue or the work before deciding", calls.map((call) => call.name).join(" "));
+	return { state: world.issue(4)?.state ?? "", fixed: world.read("FACT.txt")?.trim() === "heliotrope", comments, calls };
+}
+
+/** The work does what the task says: the session tending it closes it, saying why. */
+export const resultPass: Scenario = {
+	name: "result-pass",
+	about: "A result on a task that holds is closed by the session tending the branch, with a reason.",
+	exercises: ["coordinator", "tending", "protocol", "template:result", "tools"],
+	board: true,
+	async run(world, check) {
+		const { state, calls } = await tended(world, check, "heliotrope");
+		const closing = calls.filter((call) => call.name === "work_update" && call.args.state === "done");
+		check(state === "done", "the issue is closed as done", `it is ${state}`);
+		check(closing.length > 0 && closing.every((call) => typeof call.args.why === "string" && call.args.why.trim() !== ""), "it said why", JSON.stringify(closing.map((call) => call.args)).slice(0, 300));
+	},
+};
+
+/** The work does not: it is not closed as it stands. It is sent back with what is missing, or put right first. */
+export const resultFail: Scenario = {
+	name: "result-fail",
+	about: "A result on a task that does not hold is not closed as it stands: it is sent back with what is missing, or put right.",
+	exercises: ["coordinator", "tending", "protocol", "template:result", "tools"],
+	board: true,
+	async run(world, check) {
+		const { state, fixed, comments } = await tended(world, check, "magenta");
+		check(state !== "done" || fixed, "a result that does not hold was not closed as it stands", `it is ${state}, and the file ${fixed ? "was put right" : "still holds the wrong word"}`);
+		check(fixed || comments.some((comment) => /heliotrope|magenta/i.test(comment)), "what is missing is written on the issue, or the work was put right", comments.join(" | ").slice(0, 300));
+	},
+};

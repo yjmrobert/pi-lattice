@@ -165,6 +165,11 @@ function compare(): void {
 	};
 	for (const name of names) {
 		const [was, is] = [passed(before.runs, name), passed(after.runs, name)];
+		// A scenario that only one of the runs had says nothing about a change.
+		if (was === "0/0" || is === "0/0") {
+			console.log(`  ${name.padEnd(16)} ${was === "0/0" ? `not run before → ${is}` : `${was} → not run after`}`);
+			continue;
+		}
 		console.log(`${was === is ? " " : "≠"} ${name.padEnd(16)} ${was.padEnd(5)} → ${is}`);
 		const checks = [...new Set([...before.runs, ...after.runs].filter((run) => run.scenario === name).flatMap((run) => run.checks.map((check) => check.what)))];
 		for (const what of checks) {
