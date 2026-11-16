@@ -49,7 +49,8 @@ writeFileSync(
 	`${JSON.stringify(
 		{
 			name: "pi-lattice",
-			version: app.version,
+			// A release is given its version, worked out from the commits (scripts/release.ts); a build by hand is 0.0.0.
+			version: process.env.RELEASE_VERSION ?? app.version,
 			description: top.description,
 			type: "module",
 			keywords: top.keywords,

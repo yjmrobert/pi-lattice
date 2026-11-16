@@ -1,11 +1,13 @@
 name: Release
 
-# Pushing a tag `v1.2.3` publishes that version of `pi-lattice` to npm, after the whole suite has
-# passed on the tagged commit. The tag must be the version in packages/app/package.json, which is
-# the version the built package carries (ADR 0025).
+# A push to main releases what it brought, when it brought something to release (ADR 0037). The
+# version is worked out from the conventional commits since the last release tag: a `feat` is a
+# minor version, a `fix` a patch, and `docs`, `test`, `chore` and the like release nothing. The
+# whole suite passes on that commit first; then the package is published to npm, and the commit is
+# tagged `v1.2.3` with a GitHub release that lists what changed.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 # One release at a time, and never cancelled half way through a publish.
 concurrency:
@@ -13,19 +15,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  next:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+      notes: ${{ steps.next.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The tags and the commits since the last one are what the version is worked out from.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Work out the next version
+        id: next
+        run: node scripts/release.ts
+
   publish:
+    needs: next
+    if: needs.next.outputs.version != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The environment npm is told to trust. If the trusted publisher on npm names one, a job
     # without it is refused; if it names none, this does no harm.
     environment: npm-pi-lattice
     permissions:
-      contents: read
+      # To tag the commit and write the release.
+      contents: write
       # Lets npm verify that this workflow in this repository is the publisher, with no stored
       # token (trusted publishing), and sign where the package was built (provenance).
       id-token: write
     env:
-      HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+      # The version the built package carries (scripts/pack.mjs).
+      RELEASE_VERSION: ${{ needs.next.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,30 +62,19 @@ jobs:
       # Trusted publishing needs npm 11.5.1 or newer.
       - run: npm install --global npm@latest
       - run: npm ci
-      - name: The tag is the version
-        run: |
-          version="$(node -p 'require("./packages/app/package.json").version')"
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in packages/app/package.json."
-            exit 1
-          fi
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # A version with a suffix, such as 0.2.0-beta.1, is published as `next` and does not become what people install by default.
-      - name: Choose the tag on npm
+      # Run again after a failure further down, this finds the version already on npm and goes on to the tag.
+      - name: Publish
         run: |
-          case "$GITHUB_REF_NAME" in
-            *-*) echo "DIST_TAG=next" >> "$GITHUB_ENV" ;;
-            *) echo "DIST_TAG=latest" >> "$GITHUB_ENV" ;;
-          esac
-      # With an NPM_TOKEN secret, publish with it: the first release needs this, because npm only
-      # lets a package name a trusted publisher once the package exists.
-      - name: Publish with a token
-        if: env.HAS_TOKEN == 'true'
-        run: npm publish ./dist/pi-lattice --access public --provenance --tag "$DIST_TAG"
+          if [ -n "$(npm view "pi-lattice@$RELEASE_VERSION" version 2>/dev/null)" ]; then
+            echo "pi-lattice@$RELEASE_VERSION is already on npm."
+          else
+            npm publish ./dist/pi-lattice --access public --tag latest
+          fi
+      - name: Tag the commit and write the release
+        run: gh release create "v$RELEASE_VERSION" --target "$GITHUB_SHA" --title "v$RELEASE_VERSION" --notes "$NOTES"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish as a trusted publisher
-        if: env.HAS_TOKEN != 'true'
-        run: npm publish ./dist/pi-lattice --access public --tag "$DIST_TAG"
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ needs.next.outputs.notes }}
