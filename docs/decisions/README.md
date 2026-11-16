@@ -41,3 +41,4 @@ Evidence marked "spike" is reproducible with `npm run spike:phase0` (Pi 1.5.2, s
 | 0034 | A server encrypts by itself, and its address says which server it is | built: a certificate the server makes itself, its fingerprint in the address after the code, TLS and loopback HTTP on one port |
 | 0035 | The first message is written on the canopy | built: where a first message would start a tree, Pi opens on an empty canopy that says so and takes that message, typed or pasted |
 | 0036 | A board is tended | built: with a board, the root of a tree is its coordinator unless `roles.root` says otherwise, results that waited are handed on, and a result nobody can check is said |
+| 0037 | A push to main releases | built, and not yet run: the version is worked out from the conventional commits since the last release tag, published, tagged, and written up as a GitHub release; nothing is committed back |

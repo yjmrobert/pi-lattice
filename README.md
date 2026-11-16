@@ -89,14 +89,20 @@ Requires Node 22.19 or newer and git. Tests and spikes run real Pi processes aga
 
 ### Releasing
 
-Releases are published by GitHub Actions, not from a machine. Set the version in `packages/app/package.json`, commit, then push a tag with the same number:
+Pushing to `main` releases. GitHub Actions works out the next version from the [conventional commits](https://www.conventionalcommits.org) since the last release:
+
+| The commits since the last release include | The next version |
+|---|---|
+| a breaking change (`feat!:`, or a `BREAKING CHANGE:` footer) | a major version; a minor one while the version is `0.x` |
+| a `feat` | a minor version |
+| a `fix` or a `perf` | a patch |
+| only `docs`, `test`, `chore`, `ci`, `refactor` and the like | nothing is released |
+
+The workflow runs the whole suite on the pushed commit, builds the package, publishes it to npm, tags the commit `v1.2.3` and writes a GitHub release that lists the features and fixes. Nothing is committed back, so there is nothing to pull afterwards: the version is in the tags, not in a `package.json`. To see what the next push would release:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+node scripts/release.ts
 ```
-
-The workflow runs the whole suite on the tagged commit, builds the package and publishes it to npm. A tag that does not match the version stops it before anything is published. Versions follow semantic versioning; one with a suffix, such as `v0.2.0-beta.1`, is published under `next` and is not what `pi install npm:pi-lattice` gets.
 
 ## Not done yet
 
