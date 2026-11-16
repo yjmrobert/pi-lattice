@@ -88,7 +88,7 @@ Injection into the model uses `pi.sendMessage` with `deliverAs: "followUp"` and 
 
 ## Roles
 
-A role is a list of fragment names. A fragment is a markdown file with frontmatter: `name`, `summary`, optional `requires`, `conflicts` and `suggests` (all advisory, shown to the human, never enforced).
+A role is a list of fragment names. A fragment is a markdown file with frontmatter: `name`, `summary`, and optionally `requires` and `conflicts` (advisory, shown to the human, never enforced), `slot` and `keep` (what adding and setting roles do to it), `includes` (the fragments it is made of), and `when` and `unless` (the facts it applies under). [The roles guide](roles.md) has each.
 
 Fragments are looked up in order: project `.pi/lattice/roles/`, user `~/.pi/agent/lattice/roles/`, then the package's built-in set. Earlier locations override later ones by name. Adding a fragment is dropping a file.
 

@@ -10,7 +10,6 @@ name: security-review
 summary: Look for vulnerabilities before anything else
 requires: [worker]        # advisory
 conflicts: [planning]     # advisory
-suggests: [worker]        # hint about children this role tends to spawn
 slot: review              # at most one fragment of a slot is applied
 keep: true                # setting the roles leaves it applied
 includes: [house-rules]   # fragments that are part of this one
@@ -128,6 +127,8 @@ A session in a tree is given some roles when it is created, so that sessions kno
 | `roles.children` | `reporting` | Every child, whatever roles were chosen for it |
 | `roles.root` | none | The session that starts a tree |
 | `roles.child` | `worker` | A child created with no roles |
+
+With a server, the team's scheme can name the roles for a type of issue, and a child put on such an issue with no roles chosen gets those in place of `roles.child`. The default scheme names `worker + implementation + task` for a task and for a bug, so a coordinator that puts a session on a task does not have to remember what a task wants. `/lattice scheme edit` changes it: a type takes `"roles": ["worker", "implementation", "task"]`. What whoever creates the session chooses still wins, and a name a machine has no fragment for adds nothing there.
 
 They are ordinary fragments: they show in the inspector, `/role remove protocol` takes one off a session, and `/role edit protocol` changes what it says. The settings are on the settings screen (`,` in the pane). See [ADR 0017](decisions/0017-settings-and-orchestration.md).
 
