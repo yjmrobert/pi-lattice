@@ -1,11 +1,28 @@
-import { childrenOf, isClosed } from "../../packages/protocol/src/index.ts";
+import { childrenOf } from "../../packages/protocol/src/index.ts";
 import type { Check, Scenario } from "./scenario.ts";
-import type { World } from "./world.ts";
+import type { ToolCall, World } from "./world.ts";
 
 const STORY = "FACT.txt in the root of the repository holds the single word heliotrope.\n\nDone means: the file exists and its only content is that word.";
 
-/** A result reported on a story, with the file as it was left, and the reviewer the host starts for it. */
-async function review(world: World, check: Check, content: string): Promise<{ closed: boolean; state: string; comments: string[] }> {
+/** A command that changes the work, as far as its text says. Reading is always allowed. */
+const WRITES = /(>\s*\S*FACT|\bgit\s+(add|commit|reset|checkout|restore)\b|\bsed\s+-i\b|\btee\b|\brm\s|\bmv\s)/;
+
+interface Verdict {
+	/** The state the reviewer moved the issue to, when it moved it. */
+	state: string | undefined;
+	/** What it wrote on the issue. */
+	comments: string[];
+	/** Whether it gave a reason with what it changed. */
+	why: boolean;
+}
+
+/**
+ * A result reported on a story, with the file as it was left, and the reviewer the host starts
+ * for it. What is judged is what that reviewer did until it reported: the session it works for
+ * may then act on the verdict, have the work fixed and have it checked again, and that is not
+ * the reviewer's doing.
+ */
+async function review(world: World, check: Check, content: string): Promise<Verdict> {
 	world.file("FACT.txt", `${content}\n`);
 	const planner = await world.client("planner");
 	await planner.create({ title: "Facts", type: "epic" });
@@ -17,18 +34,32 @@ async function review(world: World, check: Check, content: string): Promise<{ cl
 	const taken = await planner.next({ repo: "work", lease: true, type: "story" }, { as: "builder" });
 	await planner.done(taken.issue?.number ?? 3, { summary: "FACT.txt holds the word heliotrope.", checks: "cat FACT.txt" }, { as: "builder" });
 	const reviewer = (): ReturnType<World["nodes"]>[number] | undefined => childrenOf(world.nodes(), lead.id).find((node) => node.fragments.includes("reviewer"));
-	const done = await world.until(() => world.quiet() && reviewer()?.done === true && world.issue(3)?.state !== "review");
-	const scheme = world.host.uiState().work?.scheme;
-	const issue = world.issue(3);
-	const comments = (await planner.read(3)).comments.map((comment) => comment.body);
-	const toLead = world.host.traffic({ node: lead.id, limit: 1000 }).filter((record) => record.recipient === lead.id && record.envelope.intent === "result");
+	const reported = await world.until(() => reviewer()?.done === true);
+	const id = reviewer()?.id;
+
+	// Everything between the reviewer and the session it works for, oldest first.
+	const mail = id ? world.host.traffic({ node: id, limit: 1000 }).reverse() : [];
+	const heard = mail.findIndex((record) => record.recipient === id);
+	const before = heard === -1 ? mail : mail.slice(0, heard);
+	const reports = before.filter((record) => record.envelope.from === id && record.envelope.intent === "result");
+	// What it did up to its report: the calls before the message that carried it.
+	const calls: ToolCall[] = id ? await world.tools(id) : [];
+	const upTo = calls.findIndex((call) => call.name === "send_message" && call.args.intent === "result" && call.args.to === "parent" && (call.args.replyTo === undefined || /^env_/.test(String(call.args.replyTo))));
+	const own = upTo === -1 ? calls : calls.slice(0, upTo);
+	const updates = own.filter((call) => call.name === "work_update");
+	const wrote = own.filter((call) => call.name === "edit" || call.name === "write" || (call.name === "bash" && WRITES.test(String(call.args.command ?? ""))));
 
 	check(world.blocked === "", "nobody waited on a question", world.blocked);
-	check(reviewer() !== undefined, "a reviewer was started for the result");
-	check(done, "the reviewer decided and reported", `the issue is ${issue?.state}`);
-	check(world.read("FACT.txt") === `${content}\n` && world.changed().length === 0, "the reviewer changed nothing in the work", world.changed().join(", "));
-	check(toLead.length === 1, "it sent the session it works for one report", `${toLead.length} reports`);
-	return { closed: Boolean(scheme && issue && isClosed(scheme, issue)), state: issue?.state ?? "", comments };
+	check(id !== undefined, "a reviewer was started for the result");
+	check(reported, "the reviewer decided and reported", `the issue is ${world.issue(3)?.state}`);
+	check(own.some((call) => call.name === "work_list" && call.args.under === 3), "it read the issue before deciding", own.map((call) => call.name).join(" "));
+	check(wrote.length === 0, "the reviewer changed nothing in the work", wrote.map((call) => `${call.name} ${String(call.args.command ?? call.args.path ?? "")}`).join(" | ").slice(0, 300));
+	check(reports.length === 1, "it sent the session it works for one report", `${reports.length} reports before it heard back`);
+	return {
+		state: updates.map((call) => call.args.state).filter((state): state is string => typeof state === "string").at(-1),
+		comments: updates.map((call) => call.args.comment).filter((comment): comment is string => typeof comment === "string"),
+		why: updates.length > 0 && updates.every((call) => typeof call.args.why === "string" && call.args.why.trim() !== ""),
+	};
 }
 
 /** The work does what the issue says: the reviewer closes it. */
@@ -38,8 +69,9 @@ export const reviewPass: Scenario = {
 	exercises: ["reviewer", "reporting", "protocol", "template:review", "tools"],
 	board: true,
 	async run(world, check) {
-		const { closed, state } = await review(world, check, "heliotrope");
-		check(closed && state === "done", "the issue is closed as done", `it is ${state}`);
+		const verdict = await review(world, check, "heliotrope");
+		check(verdict.state === "done", "the reviewer closed the issue as done", `it moved it to ${verdict.state ?? "nothing"}`);
+		check(verdict.why, "it said what it checked", "no why on the change");
 	},
 };
 
@@ -50,9 +82,8 @@ export const reviewFail: Scenario = {
 	exercises: ["reviewer", "reporting", "protocol", "template:review", "tools"],
 	board: true,
 	async run(world, check) {
-		const { closed, state, comments } = await review(world, check, "magenta");
-		check(!closed, "the issue was not closed", `it is ${state}`);
-		check(state === "todo", "it is back where work is taken from", `it is ${state}`);
-		check(comments.some((comment) => /heliotrope|magenta/i.test(comment)), "what is missing is written on the issue", comments.join(" | ").slice(0, 300));
+		const verdict = await review(world, check, "magenta");
+		check(verdict.state === "todo", "the reviewer put the issue back where work is taken from", `it moved it to ${verdict.state ?? "nothing"}`);
+		check(verdict.comments.some((comment) => /heliotrope|magenta/i.test(comment)), "what is missing is written on the issue", verdict.comments.join(" | ").slice(0, 300));
 	},
 };
