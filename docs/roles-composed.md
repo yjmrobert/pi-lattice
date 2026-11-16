@@ -16,7 +16,7 @@ What a session is told by its roles, for the usual combinations with the default
 | planning child | A child that plans one story. | `protocol + reporting + worker + planning + story` | no | 864 |
 | task child | A child that builds one task. | `protocol + reporting + worker + implementation + task` | no | 893 |
 | verification child | A child that checks what another built. | `protocol + reporting + worker + verification + story` | no | 934 |
-| reviewer | A session the host starts to check a result on an issue. | `protocol + reporting + reviewer` | yes | 676 |
+| reviewer | A session the host starts to check a result on an issue. | `protocol + reporting + reviewer` | yes | 684 |
 
 The words are those of the role sections only: the index that lists the roles, then one section for each fragment that applies. A role's parts each have a section of their own, and a part is left out where what it needs is not so.
 
@@ -109,7 +109,7 @@ The words are those of the role sections only: the index that lists the roles, t
 | `lattice-roles` | 52 |
 | `lattice-role-protocol` | 260 |
 | `lattice-role-reporting` | 176 |
-| `lattice-role-reviewer` | 188 |
+| `lattice-role-reviewer` | 196 |
 
 ## Sections
 
@@ -343,7 +343,7 @@ Finish with a verdict: pass, fail, or pass with reservations. List each requirem
 ```text
 You check one result. Your brief names the issue and says what was reported.
 
-- Read the issue first: what it is, what done means, and the directions that reach it from above. A direction is a person's rule, in their words; it outranks the brief.
+- Read the issue first, with `work_list` and `under` set to its number: what it is, what done means, and the directions that reach it from above. A direction is a person's rule, in their words; it outranks the brief.
 - Look at the work itself: the branch, the diff, the tests. A report is a claim. Run what can be run.
 - Decide one of three things, and do it:
   - It does what the issue says done means: close the issue with `work_update`, with `why` saying what you checked.

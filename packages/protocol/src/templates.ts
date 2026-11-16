@@ -111,7 +111,7 @@ export const TEMPLATES = {
 			"{{directions}}",
 			"{{/directions}}",
 			"",
-			"It is yours to check. Read the issue for what done means, and look at the work, not only at what is claimed. If it holds, close the issue with work_update, saying why. If it does not, comment with what is missing and move it back to be taken again. If a direction sends it to the user, or you cannot tell, ask them.",
+			"It is yours to check. Read the issue (work_list, with under set to its number) for what done means, and look at the work, not only at what is claimed. If it holds, close the issue with work_update, saying why. If it does not, comment with what is missing and move it back to be taken again. If a direction sends it to the user, or you cannot tell, ask them.",
 		].join("\n"),
 	},
 	review: {
@@ -131,7 +131,7 @@ export const TEMPLATES = {
 			"{{directions}}",
 			"{{/directions}}",
 			"",
-			"Read the issue with work_list for what done means. Look at the work itself. Then close it, send it back, or ask the user, as your role says, and report what you decided.",
+			"Read the issue (work_list, with under set to its number) for what done means. Look at the work itself. Then close it, send it back, or ask the user, as your role says, and report what you decided.",
 		].join("\n"),
 	},
 } as const satisfies Record<string, Template>;

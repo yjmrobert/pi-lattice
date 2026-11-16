@@ -30,7 +30,7 @@ const CEILINGS: Record<string, number> = {
 	"planning child": 864,
 	"task child": 893,
 	"verification child": 934,
-	reviewer: 676,
+	reviewer: 684,
 };
 
 /**
