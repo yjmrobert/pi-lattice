@@ -5,10 +5,27 @@
  */
 import { connect, type Socket } from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { assignmentFromEnv, childrenOf, describeScheme, directionsFor, emitEvent, formatTree, formatWork, type HostAssignment, HostClient, type IssueChange, isHeld, issueLine, onEvent, PROTOCOL_VERSION, sameAssignment, WORKSPACE_MODES, type WorkspaceMode, waitingFor } from "@pi-lattice/protocol";
+import { assignmentFromEnv, childrenOf, describeScheme, directionsFor, emitEvent, formatTree, formatWork, type HostAssignment, HostClient, type Issue, type IssueChange, isHeld, issueLine, onEvent, PROTOCOL_VERSION, sameAssignment, WORKSPACE_MODES, type WorkspaceMode, waitingFor } from "@pi-lattice/protocol";
 import { Type } from "typebox";
 
 const GRAPH_ENTRY = "lattice:graph";
+
+/**
+ * An issue as whoever works on it or checks it needs it: what it says, the directions that
+ * reach it, the result reported on it, and what was said on it.
+ */
+function inFull(issue: Issue, all: readonly Issue[], comments: ReadonlyArray<{ author: string; body: string }>, options: { blank?: boolean; result?: boolean } = {}): string[] {
+	const above = directionsFor(issue, new Map(all.map((entry) => [entry.number, entry])));
+	const result = options.result === false ? undefined : issue.result;
+	const parts: string[][] = [
+		issue.body.trim() ? [issue.body.trim()] : options.blank ? [] : ["It has no description: nothing on it says what done means."],
+		above.length > 0 ? ["Directions that reach it. A person gave them; they outrank the issue:", ...above.map((direction) => `- "${direction.text}" (${direction.who}, on #${direction.on})`)] : [],
+		result ? [`Result, from ${result.by}: ${result.summary}`, ...(result.checks ? [`  checked: ${result.checks}`] : []), ...(result.url ? [`  where: ${result.url}`] : [])] : [],
+		comments.map((comment) => `${comment.author}: ${comment.body}`),
+	].filter((part) => part.length > 0);
+	// Each part on its own, with a blank line before it when it follows the line that names the issue.
+	return parts.flatMap((part, index) => (index > 0 || options.blank ? ["", ...part] : part));
+}
 const NO_HOST = "No lattice host is reachable, so nothing was done. Session trees need a host: start one with `pi-lattice` and work inside it.";
 
 export default function graphExtension(pi: ExtensionAPI): void {
@@ -195,22 +212,29 @@ export default function graphExtension(pi: ExtensionAPI): void {
 		name: "work_list",
 		label: "List work",
 		description:
-			"Show the team's work: its issues as a tree, each with its number, type, state, who it is assigned to, what it waits on and which sessions are on it, and the rules for what may go under what. The work lives on the team's server and is shared by everyone.",
+			"Show the team's work: its issues as a tree, each with its number, type, state, who it is assigned to, what it waits on and which sessions are on it, and the rules for what may go under what. With `under`, that issue is also shown in full: what it is and what done means, the directions that reach it, the result reported on it and what was said on it. The work lives on the team's server and is shared by everyone.",
 		promptSnippet: "Show the team's issues and how they are structured",
-		promptGuidelines: ["Call work_list before adding to the team's work or changing it: the types, states and fields are the team's own and may not be what you expect."],
+		promptGuidelines: [
+			"Call work_list before adding to the team's work or changing it: the types, states and fields are the team's own and may not be what you expect.",
+			"To read one issue, call work_list with under set to its number: the tree shows only titles, and what done means is in the issue itself.",
+		],
 		parameters: Type.Object({
-			under: Type.Optional(Type.Number({ description: "Show only this issue and what is under it" })),
+			under: Type.Optional(Type.Number({ description: "Show only this issue and what is under it, with the issue itself in full" })),
 			all: Type.Optional(Type.Boolean({ description: "Include finished work. By default only unfinished work is shown" })),
 		}),
 		async execute(_toolCallId, params) {
 			const { work } = await host().request("work", { request: { do: "look" } });
 			if (!work) throw new Error("The host has no copy of the work.");
 			const mine = work.issues.find((issue) => work.sessions.some((session) => session.id === nodeId && session.issue === issue.number));
+			// One issue asked for by number is read, not only listed: whoever checks it or works on it needs what it says.
+			const asked = params.under !== undefined ? work.issues.find((issue) => issue.number === params.under) : undefined;
+			const read = asked ? await host().request("work", { request: { do: "read", number: asked.number } }).catch(() => undefined) : undefined;
 			const text = [
 				describeScheme(work.scheme),
 				"",
 				formatWork(work, { ...(params.under !== undefined ? { under: params.under } : {}), open: params.all !== true }),
 				"",
+				...(asked ? [`#${asked.number} in full:`, ...inFull(asked, work.issues, read?.comments ?? []), ""] : []),
 				mine ? `This session is on #${mine.number}.` : "This session is on no issue.",
 				...(work.connected ? [] : [`The server cannot be reached (${work.problem ?? "not connected"}): this is what was last heard, and nothing can be changed until it is back.`]),
 			].join("\n");
@@ -340,13 +364,7 @@ export default function graphExtension(pi: ExtensionAPI): void {
 			}
 			const read = await host().request("work", { request: { do: "read", number: issue.number } });
 			const { work } = await host().request("work", { request: { do: "look" } });
-			const above = work ? directionsFor(issue, new Map(work.issues.map((entry) => [entry.number, entry]))) : [];
-			const text = [
-				`This session is on ${issueLine(issue)}.`,
-				...(issue.body.trim() ? ["", issue.body.trim()] : []),
-				...(above.length > 0 ? ["", "Directions that reach it. A person gave them; they outrank the issue:", ...above.map((direction) => `- "${direction.text}" (${direction.who}, on #${direction.on})`)] : []),
-				...((read.comments ?? []).length > 0 ? ["", ...(read.comments ?? []).map((comment) => `${comment.author}: ${comment.body}`)] : []),
-			].join("\n");
+			const text = [`This session is on ${issueLine(issue)}.`, ...inFull(issue, work?.issues ?? [issue], read.comments ?? [], { blank: true, result: false })].join("\n");
 			return { content: [{ type: "text", text }], details };
 		},
 	});

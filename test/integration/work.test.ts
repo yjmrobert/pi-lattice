@@ -82,6 +82,8 @@ describe("the team's work", () => {
 		await ask(h, root.id, tool("work_add", { title: "Loose task", type: "task" }));
 		await ask(h, root.id, tool("work_update", { number: 2, comment: "Stripe's field does most of this." }));
 		await ask(h, root.id, tool("work_list", {}));
+		await ask(h, root.id, tool("work_list", { under: 1 }));
+		await ask(h, root.id, tool("work_list", { under: 2 }));
 
 		const seen = await said(h, root.id);
 		expect(seen).toContain("tool-result: Added #1  epic  Checkout  [todo]. Nobody is on it and nothing has started.");
@@ -92,6 +94,9 @@ describe("the team's work", () => {
 		expect(seen).toContain("Types: epic (at the top); feature (under epic); story (under feature); task (under story); bug (under epic or feature or story or task, or at the top).");
 		expect(seen).toContain("#1  epic  Checkout  [todo]\n  #2  feature  Pay by card  [todo]  @sam  +web");
 		expect(seen).toContain("This session is on no issue.");
+		// An issue asked for by number is shown in full: a session that checks it must be able to read what done means.
+		expect(seen).toContain("#1 in full:\nPeople can pay.\n\nThis session is on no issue.");
+		expect(seen).toContain("#2 in full:\nIt has no description: nothing on it says what done means.\n\ntester: Stripe's field does most of this.");
 
 		await eventually(() => sam.state().issues.length === 2, "sam to see both issues");
 		expect((await sam.read(2)).comments.map((comment) => [comment.author, comment.body])).toEqual([["tester", "Stripe's field does most of this."]]);
