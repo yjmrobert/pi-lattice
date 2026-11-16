@@ -49,7 +49,7 @@ Decide whether a paragraph applies by making it a fragment with `when`, not with
 
 ## Where fragments live
 
-Looked up in this order; the first match for a name wins:
+Looked up in this order. The first file for a name is the one used, unless it is an addition (`mode: append`), which adds its text to the next one down:
 
 1. `<project>/.pi/lattice/roles/`, only when the project is trusted, because fragments are prompt text.
 2. `~/.pi/agent/lattice/roles/`
@@ -67,11 +67,18 @@ Subfolders are searched, so you can group files as `base/`, `phase/`, `scope/`. 
 /role set worker implementation  replace the roles, except the ones marked keep
 /role clear                      take everything off
 /role show worker          print a fragment in full, with the file it comes from
-/role edit worker          open it in Pi's editor; saving writes your own copy
-/role edit worker project  the same, into this project's folder
+/role edit worker          add to it: what you write is added after its text
+/role edit worker replace  make a full copy of your own, used in its place
+/role edit worker project  either of those, into this project's folder
 ```
 
-Saving a fragment empty removes your copy, and the one under it is used again. `/lattice prompt` shows everything the session you are in has been told, roles included.
+Saving it empty removes your file, and the one under it is used again. `/lattice prompt` shows everything the session you are in has been told, roles included.
+
+### Changing a role without forking it
+
+`/role edit worker` opens an addition: a file with `mode: append` in its header and nothing else. What you write under the header is added after the role's own text, and everything else about the role stays as it is. "In this repository, run `npm run check` before you report" is one line in `<project>/.pi/lattice/roles/worker.md`, and the built-in `worker` keeps improving beneath it. Additions stack: your own on the built-in, the project's on yours.
+
+`/role edit worker replace` makes a full copy instead, used in place of the one beneath. The copy's header says what it was copied from (`base`). When the one beneath changes after that, the copy is still used, and `/role show`, `/role list`, `/lattice prompt` and `/lattice doctor` say it is a copy of a role that has changed since. Saving it empty goes back to the one beneath.
 
 The model can do the same with the `apply_role` tool, which adds unless told otherwise: a model that names the next phase gets that phase in place of the last one, and keeps its other roles. A session spawned by a host takes its starting fragments from `LATTICE_FRAGMENTS`.
 

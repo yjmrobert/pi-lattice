@@ -14,7 +14,7 @@ Then, in a session:
 /role list
 ```
 
-Add your own fragment by dropping a markdown file into `~/.pi/agent/lattice/roles/` or `<project>/.pi/lattice/roles/`.
+Add your own fragment by dropping a markdown file into `~/.pi/agent/lattice/roles/` or `<project>/.pi/lattice/roles/`. `/role edit <name>` adds to a role that exists without copying it; `/role edit <name> replace` makes a copy of your own.
 
 See [docs/roles.md](../../docs/roles.md) for the fragment format, lookup order and how composition works.
 

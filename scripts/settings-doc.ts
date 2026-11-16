@@ -60,7 +60,7 @@ export function settingsDoc(): string {
 		"",
 		"What a session is told is made of files, and each can be replaced. `/lattice prompt` shows everything the session you are in has been told, with the file each part comes from.",
 		"",
-		"**Role fragments** are sections of the system prompt. `/role show <name>` prints one; `/role edit <name>` opens it in Pi's editor and saves your own copy, which is used in place of the built-in one; saving it empty removes your copy. A fragment is looked for in:",
+		"**Role fragments** are sections of the system prompt. `/role show <name>` prints one; `/role edit <name>` opens Pi's editor on an addition of your own, whose text is added after the built-in one; `/role edit <name> replace` makes a full copy, used in its place; saving either empty removes it. A fragment is looked for in:",
 		"",
 		"1. `<project>/.pi/lattice/roles/`, when the project is trusted (`/role edit <name> project` writes here)",
 		"2. `~/.pi/agent/lattice/roles/`, your own",
