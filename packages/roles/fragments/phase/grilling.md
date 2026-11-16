@@ -1,7 +1,7 @@
 ---
 name: grilling
 summary: Interrogate a request for gaps, contradictions and hidden assumptions before anyone plans or builds.
-conflicts: [implementation]
+slot: phase
 ---
 This session is in the grilling phase. Your job is to find what is missing or wrong in the request before work starts. You produce questions and a sharpened statement of the request, not a plan and not code.
 

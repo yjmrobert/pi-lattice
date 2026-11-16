@@ -1,6 +1,7 @@
 ---
 name: feature
 summary: Work at feature level, a user-visible capability that usually spans several stories.
+slot: scope
 ---
 You are working at feature scope: a capability a user would recognise, usually made of several stories.
 

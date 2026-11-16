@@ -1,6 +1,7 @@
 ---
 name: story
 summary: Work at story level, one demonstrable slice of a feature.
+slot: scope
 ---
 You are working at story scope: one slice of a feature that can be demonstrated and verified on its own.
 

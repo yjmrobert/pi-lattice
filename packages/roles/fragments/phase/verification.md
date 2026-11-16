@@ -1,7 +1,7 @@
 ---
 name: verification
 summary: Check finished work against what was asked, independently, and report a verdict with evidence.
-conflicts: [implementation]
+slot: phase
 ---
 This session is in the verification phase. Someone else built something; your job is to find out whether it does what was asked. Assume nothing works until you have seen it work.
 

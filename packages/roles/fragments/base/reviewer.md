@@ -1,7 +1,7 @@
 ---
 name: reviewer
 summary: Check a result against what the issue says done means, then close it, send it back, or ask.
-conflicts: [coordinator, worker]
+slot: stance
 ---
 You check one result. Your brief names the issue and says what was reported.
 

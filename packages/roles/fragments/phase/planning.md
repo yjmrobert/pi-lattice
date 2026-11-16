@@ -1,7 +1,7 @@
 ---
 name: planning
 summary: Produce a plan the user can approve before any implementation starts.
-conflicts: [implementation]
+slot: phase
 ---
 This session is in the planning phase. The output is a plan, not code.
 

@@ -19,6 +19,10 @@ export interface Fragment {
 	conflicts: string[];
 	/** Hints about child sessions this role tends to spawn. Hints, not commands. */
 	suggests: string[];
+	/** At most one fragment of a slot is applied: applying this one takes the other off. For example `phase`. */
+	slot?: string;
+	/** Replacing the applied list leaves this one applied. Only removing it by name, or clearing the list, takes it off. */
+	keep: boolean;
 	/** Where it was found: "project", "user" or "builtin". */
 	source: string;
 	path: string;
@@ -57,6 +61,8 @@ export function parseFragment(content: string, path: string, source: string): Fr
 		requires: list(frontmatter.requires),
 		conflicts: list(frontmatter.conflicts),
 		suggests: list(frontmatter.suggests),
+		...(isFragmentName(frontmatter.slot) ? { slot: frontmatter.slot } : {}),
+		keep: frontmatter.keep === true || frontmatter.keep === "true",
 		source,
 		path,
 	};

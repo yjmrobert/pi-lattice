@@ -1,7 +1,7 @@
 ---
 name: implementation
 summary: Build an agreed plan in small verified steps and commit the result.
-conflicts: [planning, grilling]
+slot: phase
 ---
 This session is in the implementation phase. There is an agreed plan or brief; your job is to build it.
 

@@ -1,6 +1,7 @@
 ---
 name: task
 summary: Work at task level, one concrete change with a clear finish line.
+slot: scope
 ---
 You are working at task scope: one concrete change, small enough to finish and check in a single sitting.
 

@@ -5,10 +5,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { advisories, builtinFragmentsDir, editRoles, type Fragment, fragmentRoots, loadFragments, parseFragment, roleSections } from "../src/index.ts";
 
 const fragment = (name: string, over: Partial<Fragment> = {}): Fragment => ({
-	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], suggests: [], source: "test", path: `/x/${name}.md`, ...over,
+	name, summary: `${name} summary`, body: `${name} body`, requires: [], conflicts: [], suggests: [], keep: false, source: "test", path: `/x/${name}.md`, ...over,
 });
 const available = new Map(
-	[fragment("coordinator", { conflicts: ["worker"] }), fragment("worker"), fragment("planning", { requires: ["coordinator"] }), fragment("feature")].map((f) => [f.name, f]),
+	[
+		fragment("coordinator", { conflicts: ["worker"] }),
+		fragment("worker"),
+		fragment("planning", { requires: ["coordinator"], slot: "phase" }),
+		fragment("grilling", { slot: "phase" }),
+		fragment("feature", { slot: "scope" }),
+		fragment("protocol", { keep: true }),
+	].map((f) => [f.name, f]),
 );
 
 describe("parseFragment", () => {
@@ -19,6 +26,12 @@ describe("parseFragment", () => {
 
 	it("falls back to the file name when there is no frontmatter", () => {
 		expect(parseFragment("Just guidance.", "/r/my-role.md", "user")).toMatchObject({ name: "my-role", body: "Just guidance." });
+	});
+
+	it("reads the slot a fragment takes and whether it is kept", () => {
+		expect(parseFragment("---\nname: planning\nslot: phase\n---\nPlan.", "/r/x.md", "user")).toMatchObject({ slot: "phase", keep: false });
+		expect(parseFragment("---\nname: protocol\nkeep: true\n---\nTalk.", "/r/x.md", "user")).toMatchObject({ keep: true });
+		expect(parseFragment("---\nname: odd\nslot: Not A Slot\n---\nText.", "/r/x.md", "user")?.slot).toBeUndefined();
 	});
 
 	it("rejects names that could not be a section tag, and empty bodies", () => {
@@ -42,6 +55,17 @@ describe("loadFragments", () => {
 		const builtin = loadFragments([{ dir: builtinFragmentsDir(), source: "builtin" }]);
 		expect([...builtin.keys()]).toEqual(expect.arrayContaining(["coordinator", "worker", "planning"]));
 		for (const f of builtin.values()) expect(f.summary).not.toBe("");
+	});
+
+	it("marks the built-in phases, scopes and stances as slots, and keeps what every session in a tree is told", () => {
+		const builtin = loadFragments([{ dir: builtinFragmentsDir(), source: "builtin" }]);
+		const inSlot = (slot: string) => [...builtin.values()].filter((f) => f.slot === slot).map((f) => f.name);
+		expect(inSlot("phase")).toEqual(["grilling", "implementation", "planning", "verification"]);
+		expect(inSlot("scope")).toEqual(["feature", "story", "task"]);
+		expect(inSlot("stance")).toEqual(["coordinator", "reviewer", "worker"]);
+		expect([...builtin.values()].filter((f) => f.keep).map((f) => f.name)).toEqual(["protocol", "reporting"]);
+		// Two fragments that cannot be applied together say so with a slot, not with a note.
+		for (const f of builtin.values()) for (const other of f.conflicts) expect(builtin.get(other)?.slot === undefined || builtin.get(other)?.slot !== f.slot, `${f.name} conflicts with ${other}, which shares its slot`).toBe(true);
 	});
 
 	it("lets an earlier root override a later one by name, and finds nested files", () => {
@@ -74,11 +98,28 @@ describe("editRoles", () => {
 	});
 
 	it("applies nothing when a name is unknown", () => {
-		expect(editRoles(["worker"], "add", ["feature", "nope"], available)).toEqual({ fragments: ["worker"], unknown: ["nope"], changed: false });
+		expect(editRoles(["worker"], "add", ["feature", "nope"], available)).toEqual({ fragments: ["worker"], unknown: ["nope"], changed: false, displaced: [] });
 	});
 
 	it("can remove a fragment that is no longer installed", () => {
 		expect(editRoles(["gone", "worker"], "remove", ["gone"], available).fragments).toEqual(["worker"]);
+	});
+
+	it("lets a fragment take the place of the one that holds its slot, and leaves the rest", () => {
+		const result = editRoles(["protocol", "coordinator", "grilling", "feature"], "add", ["planning"], available);
+		expect(result.fragments).toEqual(["protocol", "coordinator", "feature", "planning"]);
+		expect(result.displaced).toEqual([{ name: "grilling", by: "planning", slot: "phase" }]);
+		// Two of one slot asked for at once: the later one is the one applied.
+		expect(editRoles([], "set", ["grilling", "planning"], available).fragments).toEqual(["planning"]);
+		// One that is already applied displaces nothing.
+		expect(editRoles(["planning"], "add", ["planning"], available)).toMatchObject({ changed: false, displaced: [] });
+	});
+
+	it("keeps what is marked kept when the list is set, and takes it off only by name or by clearing", () => {
+		expect(editRoles(["protocol", "coordinator", "grilling"], "set", ["planning"], available).fragments).toEqual(["protocol", "planning"]);
+		expect(editRoles(["coordinator", "protocol"], "set", ["protocol", "worker"], available).fragments).toEqual(["protocol", "worker"]);
+		expect(editRoles(["protocol", "worker"], "remove", ["protocol"], available).fragments).toEqual(["worker"]);
+		expect(editRoles(["protocol", "worker"], "clear", [], available)).toMatchObject({ fragments: [], changed: true });
 	});
 
 	it("reports whether anything changed", () => {
@@ -92,6 +133,10 @@ describe("advisories", () => {
 		expect(advisories(["planning"], available)).toEqual(['"planning" is usually combined with "coordinator".']);
 		expect(advisories(["coordinator", "worker"], available)).toEqual(['"coordinator" and "worker" give competing guidance.']);
 		expect(advisories(["coordinator", "planning", "feature"], available)).toEqual([]);
+	});
+
+	it("notes two fragments of one slot in a list that was not made by applying them", () => {
+		expect(advisories(["grilling", "planning"], available)).toContain('"grilling" and "planning" are both a phase; applying one again takes the other off.');
 	});
 
 	it("notes an applied fragment that is not installed", () => {

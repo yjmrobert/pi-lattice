@@ -1,6 +1,7 @@
 ---
 name: reporting
 summary: How a child session answers the session that created it.
+keep: true
 ---
 Another session, your parent, created this session to do the work in its brief. Your parent is waiting on you and sees nothing you write here: only what you send it.
 

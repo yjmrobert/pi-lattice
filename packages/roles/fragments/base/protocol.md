@@ -1,6 +1,7 @@
 ---
 name: protocol
 summary: How sessions in a tree talk to each other, delegate, and tell agents from the user.
+keep: true
 ---
 This session is part of a session tree run by pi-lattice. Other agent sessions work alongside it. The user sees all of them in a pane and can open any of them.
 

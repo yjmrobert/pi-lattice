@@ -49,10 +49,46 @@ describe("roles", () => {
 	});
 
 	it("shows advisory notes but applies the combination anyway", async () => {
+		const dir = join(sandbox.agentDir, "lattice", "roles");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "fast.md"), "---\nname: fast\nsummary: Go quickly\nconflicts: [careful]\n---\nGo quickly.");
+		writeFileSync(join(dir, "careful.md"), "---\nname: careful\nsummary: Go carefully\n---\nGo carefully.");
 		const child = await start();
-		await child.command("/role set coordinator worker");
+		await child.command("/role set fast careful");
 		await child.waitFor(() => child.notifications().find((text) => text.includes("competing guidance")), "advisory note");
-		expect(await rolesSeen(child, "q1")).toBe("lattice-role-coordinator,lattice-role-worker");
+		expect(await rolesSeen(child, "q1")).toBe("lattice-role-fast,lattice-role-careful");
+	});
+
+	it("applies one fragment of a slot at a time: the next phase takes the place of the one before", async () => {
+		const child = await start();
+		await child.command("/role add coordinator grilling feature");
+		await child.command("/role add planning");
+		await child.waitFor(() => child.notifications().find((text) => text.includes('"planning" takes the place of "grilling": one phase at a time.')), "the note that one took the other's place");
+		expect(await rolesSeen(child, "q1")).toBe("lattice-role-coordinator,lattice-role-feature,lattice-role-planning");
+		// The same for what a session is: one stance at a time.
+		await child.command("/role add worker");
+		expect(await rolesSeen(child, "q2")).toBe("lattice-role-feature,lattice-role-planning,lattice-role-worker");
+	});
+
+	it("a model that changes phase with apply_role keeps the roles it was given", async () => {
+		const child = await start({ env: { LATTICE_FRAGMENTS: "protocol,coordinator,lifecycle,grilling" } });
+		// The way the lifecycle role says to move on: name the next phase and nothing else.
+		await child.prompt('!tool apply_role {"fragments":["planning"]}');
+		expect(await child.waitForAssistant("tool-result")).toContain("Roles: protocol + coordinator + lifecycle + planning.");
+		expect(await rolesSeen(child, "q1")).toBe("lattice-role-protocol,lattice-role-coordinator,lattice-role-lifecycle,lattice-role-planning");
+		// Even a model that asks to replace the list cannot take off what every session in a tree is told.
+		await child.prompt('!tool apply_role {"fragments":["worker","implementation"],"mode":"set"}');
+		expect(await rolesSeen(child, "q2")).toBe("lattice-role-protocol,lattice-role-worker,lattice-role-implementation");
+	});
+
+	it("a person's /role set keeps what is marked kept; /role remove and /role clear take it off", async () => {
+		const child = await start({ env: { LATTICE_FRAGMENTS: "protocol,reporting,worker" } });
+		await child.command("/role set coordinator");
+		expect(await rolesSeen(child, "q1")).toBe("lattice-role-protocol,lattice-role-reporting,lattice-role-coordinator");
+		await child.command("/role remove reporting");
+		expect(await rolesSeen(child, "q2")).toBe("lattice-role-protocol,lattice-role-coordinator");
+		await child.command("/role clear");
+		expect(await rolesSeen(child, "q3")).toBe("");
 	});
 
 	it("refuses unknown fragments and lists what exists", async () => {
@@ -131,7 +167,7 @@ describe("roles", () => {
 		await child.command("/role show worker");
 		const shown = await child.waitFor(() => child.notifications().find((text) => text.startsWith("worker · built in")), "the role shown");
 		expect(shown).toContain("You have been given one bounded piece of work.");
-		expect(shown).toContain("competes with: coordinator");
+		expect(shown).toContain("a stance: applying it takes the place of any other stance");
 
 		// The editor opens on the built-in text; saving writes a copy of the person's own, which then wins.
 		const first = await editor(0, "/role edit worker", (prefill) => ({ value: prefill.replace("You have been given one bounded piece of work.", "You have been given exactly one job.") }));

@@ -76,7 +76,7 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 			emitEvent(pi.events, "lattice:roles:changed", { fragments: [...applied] });
 			refreshStatus();
 		}
-		const notes = advisories(applied, available);
+		const notes = [...result.displaced.map((entry) => `"${entry.by}" takes the place of "${entry.name}": one ${entry.slot} at a time.`), ...advisories(applied, available)];
 		return {
 			ok: true,
 			text: [`Roles: ${describe()}.${result.changed ? " Takes effect on the next turn." : " No change."}`, ...notes.map((note) => `Note: ${note}`)].join("\n"),
@@ -164,6 +164,8 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 				fragment.summary,
 				...(fragment.requires.length > 0 ? [`usually with: ${fragment.requires.join(", ")}`] : []),
 				...(fragment.conflicts.length > 0 ? [`competes with: ${fragment.conflicts.join(", ")}`] : []),
+				...(fragment.slot ? [`a ${fragment.slot}: applying it takes the place of any other ${fragment.slot}`] : []),
+				...(fragment.keep ? ["kept: setting the roles leaves it applied; /role remove takes it off"] : []),
 				"",
 				fragment.body,
 				"",
@@ -246,21 +248,21 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 		name: "apply_role",
 		label: "Apply role",
 		description:
-			"Change the role fragments applied to this session. Roles are composable pieces of guidance; mode set replaces the list, add appends, remove drops. Call with no fragments to see what is applied and what is available.",
+			"Change the role fragments applied to this session. Roles are composable pieces of guidance. Mode add (the default) applies them as well: one that shares a slot with an applied role, such as a phase, takes its place. Mode remove drops them. Mode set replaces the list, except the roles every session keeps. Call with no fragments to see what is applied and what is available.",
 		promptSnippet: "Change which role fragments guide this session",
 		promptGuidelines: ["Use apply_role only when the user asks to change this session's roles, or when an applied role's guidance says to move to another phase."],
 		parameters: Type.Object({
 			fragments: Type.Optional(Type.Array(Type.String(), { description: "Fragment names" })),
-			mode: Type.Optional(Type.String({ description: "set (default), add, or remove" })),
+			mode: Type.Optional(Type.String({ description: "add (default), remove, or set" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			context = ctx;
 			if (!params.fragments || params.fragments.length === 0) {
 				reload(ctx);
-				const lines = [...available.values()].map((fragment) => `${fragment.name}: ${fragment.summary || "(no summary)"}`);
+				const lines = [...available.values()].map((fragment) => `${fragment.name}${fragment.slot ? ` (${fragment.slot})` : ""}: ${fragment.summary || "(no summary)"}`);
 				return { content: [{ type: "text", text: [`Applied: ${describe()}.`, "Available:", ...lines].join("\n") }], details: { fragments: applied } };
 			}
-			const mode = params.mode ?? "set";
+			const mode = params.mode ?? "add";
 			if (mode !== "set" && mode !== "add" && mode !== "remove") throw new Error(`Unknown mode "${mode}". Use set, add or remove.`);
 			const result = change(mode, params.fragments);
 			if (!result.ok) throw new Error(result.text);
@@ -294,7 +296,7 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify([`Roles: ${describe()}.`, ...advisories(applied, available).map((note) => `Note: ${note}`)].join("\n"), "info");
 			} else if (verb === "list") {
 				reload(ctx);
-				const lines = [...available.values()].map((f) => `${applied.includes(f.name) ? "*" : " "} ${f.name} (${f.source}): ${f.summary || "(no summary)"}`);
+				const lines = [...available.values()].map((f) => `${applied.includes(f.name) ? "*" : " "} ${f.name} (${[f.source, ...(f.slot ? [f.slot] : []), ...(f.keep ? ["kept"] : [])].join(", ")}): ${f.summary || "(no summary)"}`);
 				ctx.ui.notify(lines.length > 0 ? lines.join("\n") : "No role fragments are installed.", "info");
 			} else if (verb === "add" || verb === "remove" || verb === "set") {
 				if (names.length === 0) {
@@ -304,7 +306,7 @@ export default function rolesExtension(pi: ExtensionAPI): void {
 				const result = change(verb, names);
 				ctx.ui.notify(result.text, result.ok ? "info" : "warning");
 			} else if (verb === "clear") {
-				ctx.ui.notify(change("set", []).text, "info");
+				ctx.ui.notify(change("clear", []).text, "info");
 			} else {
 				ctx.ui.notify("Usage: /role [show [name]|list|add <names>|remove <names>|set <names>|clear|edit <name> [user|project]]", "warning");
 			}
