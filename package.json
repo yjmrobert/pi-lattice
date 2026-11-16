@@ -24,7 +24,7 @@
     "check": "npm run typecheck && npm test",
     "lattice": "node packages/app/src/cli.ts",
     "dev": "node scripts/dev.mjs",
-    "docs": "node scripts/settings-doc.ts",
+    "docs": "node scripts/settings-doc.ts && node scripts/roles-doc.ts",
     "eval": "node scripts/eval.ts",
     "build": "node scripts/pack.mjs"
   },

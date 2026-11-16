@@ -71,6 +71,7 @@ Each package depends only on `protocol` and works on its own; `app` is the one p
 - [Envelope specification](docs/envelope-spec.md)
 - [Settings, roles files and environment variables](docs/settings.md)
 - [Roles](docs/roles.md)
+- [Roles, as composed](docs/roles-composed.md)
 - [Ownership and handoff](docs/leases.md)
 
 ## Development
@@ -80,7 +81,7 @@ npm install
 npm run check          # typecheck and tests
 npm run dev            # open Pi on this checkout, in a scratch repository under .dev/ (-- --faux for the scripted model)
 npm run eval           # one delegation with a real model, checked for how the sessions talked (spends tokens)
-npm run docs           # rewrite docs/settings.md from the settings table
+npm run docs           # rewrite docs/settings.md from the settings table, and docs/roles-composed.md from the role fragments
 npm run build          # build the package that is published into dist/pi-lattice
 npm run spike:phase0   # re-run the Phase 0 verification against real Pi processes
 ```

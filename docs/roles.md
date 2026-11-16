@@ -60,6 +60,8 @@ Each applied fragment becomes one system prompt section, `<lattice-role-NAME>`, 
 
 The applied list is stored in the session, survives resume, and carries over `/new`.
 
+[Roles, as composed](roles-composed.md) has the whole text for the usual combinations and what each costs in words. It is written from the fragments by `npm run docs`, and a test fails when it is out of date, so a change to a fragment shows there as the prompts it changes.
+
 ## Built-in fragments
 
 | Name | Folder | Use it for |

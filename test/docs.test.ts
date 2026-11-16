@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { rolesComposedDoc } from "../scripts/roles-doc.ts";
 import { settingsDoc } from "../scripts/settings-doc.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -19,5 +20,11 @@ describe("the settings reference", () => {
 			for (const file of sources(join(root, "packages", name, "src"))) for (const match of readFileSync(file, "utf8").matchAll(/\bLATTICE_[A-Z_]+\b/g)) used.add(match[0]);
 		}
 		expect([...used].filter((name) => !doc.includes(`\`${name}\``)).sort()).toEqual([]);
+	});
+});
+
+describe("the composed roles", () => {
+	it("are what the fragments say; run `npm run docs` when this fails", () => {
+		expect(readFileSync(join(root, "docs", "roles-composed.md"), "utf8")).toBe(rolesComposedDoc());
 	});
 });
