@@ -30,6 +30,7 @@ import {
 	limitsOf,
 	listSetting,
 	newNodeId,
+	nodeFacts,
 	parseSettings,
 	repoConfigPath,
 	renderTemplate,
@@ -1838,9 +1839,17 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				return { node: await this.spawnChild(self.id, (params as RequestMap["spawn"]["params"]).spec) } satisfies RequestMap["spawn"]["result"];
 			case "work":
 				return (await this.runWork((params as RequestMap["work"]["params"]).request, self.id)) satisfies RequestMap["work"]["result"];
+			case "facts":
+				return { facts: this.factsOf(self) } satisfies RequestMap["facts"]["result"];
 			default:
 				throw new Error(`Unknown request "${String(op)}".`);
 		}
+	}
+
+	/** What is so for a session, for the role fragments that depend on it or mention it. */
+	factsOf(node: NodeMeta): Record<string, string> {
+		const work = this.work?.state();
+		return nodeFacts({ node, parent: reportsTo(this.store.listNodes(), node), levels: listSetting(this.settings(), "canopy.levels"), work: work?.connected ? { scheme: work.scheme } : undefined });
 	}
 
 	private peersOf(self: NodeMeta): PeerInfo[] {
