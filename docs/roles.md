@@ -62,6 +62,14 @@ The applied list is stored in the session, survives resume, and carries over `/n
 
 [Roles, as composed](roles-composed.md) has the whole text for the usual combinations and what each costs in words. It is written from the fragments by `npm run docs`, and a test fails when it is out of date, so a change to a fragment shows there as the prompts it changes.
 
+## Checking a change to a fragment
+
+A fragment is text a model reads, so a change to one is checked three ways, cheapest first.
+
+1. **As text.** `npm run check` fails when a built-in fragment names a tool that does not exist, when a combination grows past its ceiling in words, or when two fragments of one combination say the same sentence. `npm run docs` rewrites [roles, as composed](roles-composed.md), so the change shows in review as the prompts it changes.
+2. **With a real model.** `npm run eval` gives real sessions small pieces of work and checks what happened, never how it was worded: a child reported once without being reminded, a session that changed phase kept its other roles, a reviewer closed what was done and sent back what was not. `npm run eval -- --changed` runs the scenarios that test what differs from `origin/main`, `--runs 3` repeats each, and `--compare` sets two runs side by side. It uses your Pi login and spends tokens; `npm run eval -- --list` says what there is.
+3. **In use.** The host counts the child sessions that had to be reminded to report, that stopped without reporting, and whose result was sent back. `/lattice doctor` says how many, for each combination of roles and model.
+
 ## Built-in fragments
 
 | Name | Folder | Use it for |
