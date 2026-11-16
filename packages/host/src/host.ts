@@ -1921,15 +1921,17 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				this.update(sender.id, { done: true });
 				// What it reports to is told by the message itself: it is not told again when the issue moves.
 				if (sender.issue !== undefined && above.issue !== undefined && above.fragments.includes("coordinator")) this.reported.add(sender.issue);
-				void this.noteWork(sender.issue, "report", sender);
+				// A reviewer's report is its verdict on a result, not another result: the issue is where the reviewer put it.
+				// Counted as a result, an issue sent back would be up for review again at once, and another reviewer started for it.
+				if (!sender.fragments.includes("reviewer")) void this.noteWork(sender.issue, "report", sender);
 				this.releaseReady();
 			}
 		}
 		for (const id of recipients) {
 			const recipient = this.store.getNode(id);
 			if (!recipient || reportsTo(all, recipient)?.id !== sender.id || recipient.owner !== this.owner) continue;
-			// A parent that answers its child's result with something it need not answer has acknowledged it, not given it more to do.
-			if (envelope.intent === "inform" && envelope.causationId !== undefined && this.store.traffic({ node: id, limit: 200 }).some((record) => record.envelope.id === envelope.causationId && record.envelope.from === id && record.envelope.intent === "result")) continue;
+			// A parent that answers its child's result, and asks nothing, has acknowledged it, not given it more to do.
+			if (envelope.intent !== "ask" && envelope.causationId !== undefined && this.store.traffic({ node: id, limit: 200 }).some((record) => record.envelope.id === envelope.causationId && record.envelope.from === id && record.envelope.intent === "result")) continue;
 			// More work from its parent: it owes an answer again.
 			this.owing.set(id, { reminded: false });
 			if (recipient.done) this.update(id, { done: false });

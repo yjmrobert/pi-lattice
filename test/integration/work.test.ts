@@ -384,6 +384,16 @@ describe("steering the work", () => {
 		expect(reviewer).toMatchObject({ kind: "review", issue: 2 });
 		expect(reviewer.fragments).toContain("reviewer");
 		await eventually(async () => (await said(h, reviewer.id)).includes('Check the result that came in on #2 "Pay by card" (feature), from claude'), "the reviewer to have its brief");
+
+		// The reviewer sends it back and reports. Its report is its verdict, not another result on the feature:
+		// the feature stays where the reviewer put it, and no second reviewer is started for it.
+		await ask(h, reviewer.id, tool("work_update", { number: 2, state: "todo", comment: "Refunds are missing.", why: "it does not do what the feature says" }));
+		await eventually(() => sam.issue(2)?.state === "todo", "the feature to be sent back");
+		await ask(h, reviewer.id, tool("send_message", { to: "parent", text: "sent back: refunds are missing", intent: "result" }));
+		await eventually(async () => (await said(h, root.id)).includes("sent back: refunds are missing"), "the verdict to reach the coordinator");
+		await new Promise((wait) => setTimeout(wait, 800));
+		expect(sam.issue(2)?.state).toBe("todo");
+		expect(childrenOf(h.nodes(), root.id).filter((node) => node.fragments.includes("reviewer"))).toHaveLength(1);
 	}, 60_000);
 
 	it("gives the root of a tree the coordinator role once its sessions are on a board's issues, so their results are checked, and says so when nothing can check one", async () => {
