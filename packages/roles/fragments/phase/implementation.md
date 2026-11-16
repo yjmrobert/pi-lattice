@@ -23,4 +23,4 @@ When something does not go to plan:
 - If a step fails, find out why before trying something else.
 - If the plan turns out to be wrong, stop and report what you found. Changing the design is a planning decision.
 
-Finish with a report: what you built, where it is (files, branch, commits), the checks you ran and their results, and anything you left undone or are unsure about. State failures as plainly as successes.
+When you report, give the checks you ran and their results. State failures as plainly as successes.

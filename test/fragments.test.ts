@@ -25,19 +25,19 @@ const CEILINGS: Record<string, number> = {
 	"first session": 785,
 	"coordinator, no server": 639,
 	"feature coordinator": 1221,
-	child: 655,
-	"grilling child": 1017,
-	"planning child": 928,
-	"task child": 988,
-	"verification child": 998,
-	reviewer: 692,
+	child: 591,
+	"grilling child": 953,
+	"planning child": 864,
+	"task child": 893,
+	"verification child": 934,
+	reviewer: 676,
 };
 
 /**
- * Sentences that two fragments of one combination both say today, word for word. Each is a
- * rule with two owners. Nothing may be added; the list is to be emptied.
+ * Sentences that two fragments of one combination both say, word for word. Each would be a
+ * rule with two owners, so there are none, and none may be added.
  */
-const KNOWN_REPEATS = new Set(["their instructions take priority over the brief;"]);
+const KNOWN_REPEATS = new Set<string>();
 
 /** The sentences of a text long enough to be a rule, without list marks and emphasis. */
 const sentences = (text: string): string[] =>

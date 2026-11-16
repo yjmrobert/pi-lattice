@@ -11,12 +11,12 @@ What a session is told by its roles, for the usual combinations with the default
 | first session | The session that starts a tree where there is a server: the host gives it `coordinator`. | `protocol + coordinator` | yes | 785 |
 | coordinator, no server | A coordinator where the work is not on a server: it lays the work out on the tree. | `protocol + coordinator` | no | 639 |
 | feature coordinator | The root of a feature taken through the four phases, with a server. | `protocol + coordinator + lifecycle + feature` | yes | 1221 |
-| child | A child created with no roles. | `protocol + reporting + worker` | no | 655 |
-| grilling child | A child that interrogates one story. | `protocol + reporting + worker + grilling + story` | no | 1017 |
-| planning child | A child that plans one story. | `protocol + reporting + worker + planning + story` | no | 928 |
-| task child | A child that builds one task. | `protocol + reporting + worker + implementation + task` | no | 988 |
-| verification child | A child that checks what another built. | `protocol + reporting + worker + verification + story` | no | 998 |
-| reviewer | A session the host starts to check a result on an issue. | `protocol + reporting + reviewer` | yes | 692 |
+| child | A child created with no roles. | `protocol + reporting + worker` | no | 591 |
+| grilling child | A child that interrogates one story. | `protocol + reporting + worker + grilling + story` | no | 953 |
+| planning child | A child that plans one story. | `protocol + reporting + worker + planning + story` | no | 864 |
+| task child | A child that builds one task. | `protocol + reporting + worker + implementation + task` | no | 893 |
+| verification child | A child that checks what another built. | `protocol + reporting + worker + verification + story` | no | 934 |
+| reviewer | A session the host starts to check a result on an issue. | `protocol + reporting + reviewer` | yes | 676 |
 
 The words are those of the role sections only: the index that lists the roles, then one section for each fragment that applies. A role's parts each have a section of their own, and a part is left out where what it needs is not so.
 
@@ -55,8 +55,8 @@ The words are those of the role sections only: the index that lists the roles, t
 |---|---|
 | `lattice-roles` | 52 |
 | `lattice-role-protocol` | 260 |
-| `lattice-role-reporting` | 192 |
-| `lattice-role-worker` | 151 |
+| `lattice-role-reporting` | 176 |
+| `lattice-role-worker` | 103 |
 
 ### grilling child
 
@@ -64,8 +64,8 @@ The words are those of the role sections only: the index that lists the roles, t
 |---|---|
 | `lattice-roles` | 54 |
 | `lattice-role-protocol` | 260 |
-| `lattice-role-reporting` | 192 |
-| `lattice-role-worker` | 151 |
+| `lattice-role-reporting` | 176 |
+| `lattice-role-worker` | 103 |
 | `lattice-role-grilling` | 264 |
 | `lattice-role-story` | 96 |
 
@@ -75,8 +75,8 @@ The words are those of the role sections only: the index that lists the roles, t
 |---|---|
 | `lattice-roles` | 54 |
 | `lattice-role-protocol` | 260 |
-| `lattice-role-reporting` | 192 |
-| `lattice-role-worker` | 151 |
+| `lattice-role-reporting` | 176 |
+| `lattice-role-worker` | 103 |
 | `lattice-role-planning` | 175 |
 | `lattice-role-story` | 96 |
 
@@ -86,10 +86,10 @@ The words are those of the role sections only: the index that lists the roles, t
 |---|---|
 | `lattice-roles` | 54 |
 | `lattice-role-protocol` | 260 |
-| `lattice-role-reporting` | 192 |
-| `lattice-role-worker` | 151 |
-| `lattice-role-implementation` | 252 |
-| `lattice-role-task` | 79 |
+| `lattice-role-reporting` | 176 |
+| `lattice-role-worker` | 103 |
+| `lattice-role-implementation` | 234 |
+| `lattice-role-task` | 66 |
 
 ### verification child
 
@@ -97,8 +97,8 @@ The words are those of the role sections only: the index that lists the roles, t
 |---|---|
 | `lattice-roles` | 54 |
 | `lattice-role-protocol` | 260 |
-| `lattice-role-reporting` | 192 |
-| `lattice-role-worker` | 151 |
+| `lattice-role-reporting` | 176 |
+| `lattice-role-worker` | 103 |
 | `lattice-role-verification` | 245 |
 | `lattice-role-story` | 96 |
 
@@ -108,7 +108,7 @@ The words are those of the role sections only: the index that lists the roles, t
 |---|---|
 | `lattice-roles` | 52 |
 | `lattice-role-protocol` | 260 |
-| `lattice-role-reporting` | 192 |
+| `lattice-role-reporting` | 176 |
 | `lattice-role-reviewer` | 188 |
 
 ## Sections
@@ -206,11 +206,11 @@ You are working at feature scope: a capability a user would recognise, usually m
 ```text
 Another session, your parent, created this session to do the work in its brief. Your parent is waiting on you and sees nothing you write here: only what you send it.
 
-- When the work is done, send exactly one message to `parent` with intent `result`. Lead with the outcome, then what changed and where (files, branch, commits), how you checked it, and anything left open. That message is what marks your work as finished.
+- When the work is done, send exactly one message to `parent` with intent `result`. That message is what marks your work as finished, and it is all your parent reads of it.
 - When you cannot continue, or the brief is ambiguous in a way that changes the outcome, send `parent` a message with intent `ask`: what you need and what you tried. Then end your turn; the answer arrives as a message.
 - Do not send progress updates unless the brief asks for them.
 - Ending your turn without a `result` or an `ask` leaves your parent waiting. pi-lattice reminds you once, then tells your parent you stopped.
-- The user may open this session and talk to you directly. Their instructions take priority over the brief; say what changed in your `result`.
+- When the user opens this session and what they say changes the work, say what changed in your `result`.
 - If your parent sends more work after your report, do it and report again.
 ```
 
@@ -220,10 +220,9 @@ Another session, your parent, created this session to do the work in its brief. 
 You have been given one bounded piece of work. Your brief says what it is.
 
 - Stay inside the brief. If you find related problems, note them in your report instead of fixing them.
-- If the brief is ambiguous in a way that changes the outcome, ask before starting: your parent, or the user if they are present in this session.
+- If the brief is ambiguous in a way that changes the outcome, ask before starting.
 - Work until the piece is done or you are blocked. Do not stop to report progress unless asked.
-- Finish with one report: what you did, where it is (files, branch), how you checked it, and anything left open. Lead with the outcome. It goes to your parent as a `result` message; with no parent, give it to the user.
-- The user may talk to you directly. Their instructions take priority over the brief; mention the change in your report so whoever gave you the work knows.
+- Finish with one report, to whoever gave you the work. Lead with the outcome, then what you did and where it is (files, branch, commits), how you checked it, and anything left open.
 ```
 
 ### grilling
@@ -305,7 +304,7 @@ When something does not go to plan:
 - If a step fails, find out why before trying something else.
 - If the plan turns out to be wrong, stop and report what you found. Changing the design is a planning decision.
 
-Finish with a report: what you built, where it is (files, branch, commits), the checks you ran and their results, and anything you left undone or are unsure about. State failures as plainly as successes.
+When you report, give the checks you ran and their results. State failures as plainly as successes.
 ```
 
 ### task
@@ -315,7 +314,6 @@ You are working at task scope: one concrete change, small enough to finish and c
 
 - Do exactly the task. Do not widen it, and do not split it further.
 - The finish line should be checkable: a test passes, a command produces a result, a file exists with the right content. If the task has no such line, ask for one.
-- Report facts: what changed, where, and what you ran to check it.
 ```
 
 ### verification
