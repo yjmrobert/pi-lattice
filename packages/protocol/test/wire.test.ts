@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { encodeFrame, FrameDecoder, HostClient, type HostFrame } from "../src/index.ts";
+import { encodeFrame, FrameDecoder, HostClient, type HostFrame, tallyLine } from "../src/index.ts";
 
 describe("FrameDecoder", () => {
 	it("reassembles frames split across chunks", () => {
@@ -95,5 +95,13 @@ describe("HostClient", () => {
 		client.onFrame((frame) => seen.push(frame.t));
 		receive({ t: "decide", envelopeId: "env_1", action: "approve" });
 		expect(seen).toEqual(["decide"]);
+	});
+});
+
+describe("tallyLine", () => {
+	it("says the roles, the model, how many sessions there were and what went wrong with how many", () => {
+		expect(tallyLine({ roles: ["protocol", "reporting", "worker"], model: "haiku", sessions: 14, reminded: 5, stopped: 1, sentBack: 0 })).toBe("protocol + reporting + worker on haiku: 14 sessions, 5 reminded to report, 1 stopped without reporting");
+		expect(tallyLine({ roles: [], model: "default", sessions: 1, reminded: 0, stopped: 0, sentBack: 2 })).toBe("no roles on default: 1 session, 2 sent back");
+		expect(tallyLine({ roles: ["reviewer"], model: "default", sessions: 3, reminded: 0, stopped: 0, sentBack: 0 })).toBe("reviewer on default: 3 sessions");
 	});
 });

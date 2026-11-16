@@ -121,6 +121,10 @@ describe("the team's work", () => {
 		expect((await sam.read(2)).history.map((event) => [event.who, event.what, event.to])).toEqual([["sam", "created", undefined], ["tester", "state", "doing"], ["tester", "state", "review"]]);
 		expect(sam.issue(1)?.state).toBe("doing");
 
+		// Checked and put back to be done again: the session that reported it is counted as sent back, under the roles it had.
+		await sam.update(2, { state: "todo" });
+		await eventually(() => h.roleTallies().find((tally) => tally.roles.join(" ") === "protocol reporting worker")?.sentBack === 1, "the result to be counted as sent back");
+
 		// A helper with no issue of its own is on its parent's.
 		await ask(h, root.id, tool("spawn_session", { name: "review", kind: "review", brief: "say ok" }));
 		const helper = await eventually(() => childrenOf(h.nodes(), root.id).find((node) => node.name === "review"), "the helper");

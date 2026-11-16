@@ -20,6 +20,8 @@ import {
 	HOST_ENV,
 	type HostAssignment,
 	type InboundState,
+	type Lapse,
+	type RoleTally,
 	isHeld,
 	isPlanned,
 	isRelativeAddress,
@@ -889,6 +891,40 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		this.emit("activity", id);
 	}
 
+	/** Write down that a node's agent did something its roles say not to, so that it can be counted by roles and model. */
+	private lapse(id: string, kind: Lapse): void {
+		try {
+			this.store.addLapse(id, kind);
+		} catch {
+			// Counting must never get in the way of the work.
+		}
+	}
+
+	/**
+	 * How this person's child sessions here have done, by the roles they were given and the
+	 * model they ran on: how many there were, and how many were reminded to report, stopped
+	 * without reporting, or had their result sent back. What a fragment costs in practice.
+	 */
+	roleTallies(): RoleTally[] {
+		const settings = this.settings();
+		const lapses = new Map<string, Set<Lapse>>();
+		for (const { nodeId, kind } of this.store.lapses()) lapses.set(nodeId, (lapses.get(nodeId) ?? new Set<Lapse>()).add(kind));
+		const tallies = new Map<string, RoleTally>();
+		for (const node of this.store.listNodes()) {
+			if (node.owner !== this.owner || node.parentId === null || isPlanned(node) || isHeld(node)) continue;
+			const model = node.model ?? textSetting(settings, "model") ?? "default";
+			const key = `${node.fragments.join(" ")}\n${model}`;
+			const tally = tallies.get(key) ?? { roles: node.fragments, model, sessions: 0, reminded: 0, stopped: 0, sentBack: 0 };
+			const had = lapses.get(node.id);
+			tally.sessions++;
+			if (had?.has("reminded")) tally.reminded++;
+			if (had?.has("stopped")) tally.stopped++;
+			if (had?.has("sent-back")) tally.sentBack++;
+			tallies.set(key, tally);
+		}
+		return [...tallies.values()].sort((a, b) => b.sessions - a.sessions);
+	}
+
 	/** Add to the running total of what a node's agent has used. */
 	addUsage(id: string, tokens: number, cost: number): void {
 		if (!(tokens > 0) && !(cost > 0)) return;
@@ -940,6 +976,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (waitingOn) return;
 		if (!owed.reminded) {
 			owed.reminded = true;
+			this.lapse(id, "reminded");
 			const parent = reportsTo(this.store.listNodes(), node);
 			this.prompt(id, this.template("reminder", { "parent.name": parent?.name ?? node.parentId })).catch(() => {
 				// It could not be reminded; its parent hears about it at the next turn end or exit.
@@ -958,6 +995,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const owed = this.owing.delete(id);
 		if (!node?.parentId || this.stopped) return;
 		if (!owed && (!crashed || node.done)) return;
+		this.lapse(id, "stopped");
 		const last = detail || runtime.recent.filter((line) => !line.startsWith("→ ")).at(-1) || "";
 		const held = this.store.listNodes().filter((other) => !other.archived && other.waitsOn?.includes(id)).map((other) => `"${other.name}" (${other.id})`).join(", ");
 		try {
@@ -1315,6 +1353,12 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const before = this.inReview;
 		this.inReview = new Set(waiting.map(key));
 		if (!before) return;
+		// A result that was waiting to be checked and is open again was sent back: whoever reported it has it to do again.
+		const wasWaiting = new Set([...before].map((entry) => Number(entry.split(":")[0])));
+		for (const issue of state.issues) {
+			if (!wasWaiting.has(issue.number) || issue.state === target || state.scheme.states.find((entry) => entry.name === issue.state)?.kind !== "open") continue;
+			for (const node of this.store.listNodes()) if (node.owner === this.owner && node.issue === issue.number && node.done && !node.fragments.includes("reviewer")) this.lapse(node.id, "sent-back");
+		}
 		for (const issue of waiting) {
 			if (before.has(key(issue)) || before.has(`${issue.number}:0`)) continue;
 			void this.handResult(issue).catch((error: unknown) => this.emit("log", "warn", `The result on #${issue.number} was not handed on: ${error instanceof Error ? error.message : String(error)}`));
@@ -1559,6 +1603,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				if (call("presence").here) this.watchers.delete(connection.id);
 				else this.watchers.add(connection.id);
 				return {};
+			case "tallies":
+				return { tallies: this.roleTallies() };
 			case "shutdown":
 				setTimeout(() => this.emit("log", "info", "shutdown requested"), 0);
 				this.shutdownRequested = true;

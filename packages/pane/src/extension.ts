@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, isKeyRelease, matchesKey, type StackEntry, truncateToWidth, type TUI, visibleWidth, VStack } from "@earendil-works/pi-tui";
-import { describeScheme, emitEvent, issueLine, type Scheme, schemeProblems, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, textSetting, toggleSetting, type UiState, type LatticeEvents } from "@pi-lattice/protocol";
+import { describeScheme, emitEvent, issueLine, type Scheme, schemeProblems, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, tallyLine, textSetting, toggleSetting, type UiState, type LatticeEvents } from "@pi-lattice/protocol";
 import { type ChildForm, type FormKey, formKey, newChildForm, renderForm, waitChoices } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
@@ -2036,6 +2036,13 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		check(roles.names.length > 0 ? true : "warn", `Roles: ${roles.names.length} available`, "The roles extension is not loaded, so sessions cannot be given roles.");
 		const others = [...shared.links.keys()].filter((dir) => dir !== shared.home).length;
 		check(true, `Other repositories: ${others} running, ${shared.asleep.length} asleep`);
+		// How the roles have done here: a combination whose sessions keep having to be reminded has a fragment that is not being followed.
+		const tallies = link && !link.client.isClosed ? await link.client.ui("tallies", {}).then((answer) => answer.tallies, () => []) : [];
+		const lapsed = tallies.filter((tally) => tally.reminded + tally.stopped + tally.sentBack > 0);
+		const counted = tallies.reduce((sum, tally) => sum + tally.sessions, 0);
+		if (counted > 0) {
+			check(lapsed.length === 0 ? true : "warn", lapsed.length === 0 ? `Roles: all ${counted} child session${counted === 1 ? "" : "s"} here reported without being reminded` : `Roles: of ${counted} child session${counted === 1 ? "" : "s"} here, some did not do what their roles say`, lapsed.map(tallyLine).join("\n    "));
+		}
 		try {
 			const recent = readFileSync(join(stateDir, "daemon.log"), "utf8").trim().split("\n").slice(-40).filter((line) => / (error|warn) /.test(line));
 			const last = recent[recent.length - 1];

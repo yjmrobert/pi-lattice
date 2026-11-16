@@ -126,6 +126,37 @@ export interface Steer {
 	answeredAt?: number;
 }
 
+/** What a session did that its roles say not to: the host saw it happen. */
+export const LAPSES = ["reminded", "stopped", "sent-back"] as const;
+export type Lapse = (typeof LAPSES)[number];
+
+/**
+ * How the child sessions with one combination of roles, on one model, have done here. A
+ * session is counted once for each kind of lapse, however often it happened.
+ */
+export interface RoleTally {
+	roles: string[];
+	/** The model, as it was chosen for the session or set for background sessions; `default` when neither was. */
+	model: string;
+	sessions: number;
+	/** Ended a turn without reporting and had to be reminded. */
+	reminded: number;
+	/** Stopped without reporting at all, so its parent had to be told. */
+	stopped: number;
+	/** Reported a result that was checked and put back to be done again. */
+	sentBack: number;
+}
+
+/** A tally in one line, for a person: the roles, the model, how many sessions, and what went wrong with how many. */
+export function tallyLine(tally: RoleTally): string {
+	const lapses = [
+		...(tally.reminded > 0 ? [`${tally.reminded} reminded to report`] : []),
+		...(tally.stopped > 0 ? [`${tally.stopped} stopped without reporting`] : []),
+		...(tally.sentBack > 0 ? [`${tally.sentBack} sent back`] : []),
+	];
+	return `${tally.roles.length > 0 ? tally.roles.join(" + ") : "no roles"} on ${tally.model}: ${tally.sessions} session${tally.sessions === 1 ? "" : "s"}${lapses.length > 0 ? `, ${lapses.join(", ")}` : ""}`;
+}
+
 export interface UiState {
 	owner: string;
 	/** Whether the person chose that name. Until they do it is their OS user name, and they are asked before joining a server. */
@@ -218,6 +249,8 @@ export interface UiApi {
 	/** The team's server: `join <address> [name]`, `leave`, `status`. Returns text to show. */
 	server: { params: { action: string; args: string[] }; result: { text: string } };
 	shutdown: { params: Record<string, never>; result: Record<string, never> };
+	/** How this person's child sessions here have done, by the roles they had and the model they ran on. */
+	tallies: { params: Record<string, never>; result: { tallies: RoleTally[] } };
 	rename: { params: { nodeId: string; name: string }; result: { node: NodeMeta } };
 	/** Hide a session and everything under it from the tree, or bring them back. Nothing is deleted. */
 	archive: { params: { nodeId: string; archived: boolean }; result: { count: number } };

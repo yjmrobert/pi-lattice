@@ -2,7 +2,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Envelope, InboundState, NodeMeta } from "@pi-lattice/protocol";
+import type { Envelope, InboundState, Lapse, NodeMeta } from "@pi-lattice/protocol";
 
 export interface JournalRecord {
 	envelope: Envelope;
@@ -32,6 +32,10 @@ export interface Store {
 	setMailState(envelopeId: string, recipient: string, state: InboundState): void;
 	/** Journal records, newest first. */
 	traffic(options?: { limit?: number; mailState?: InboundState; node?: string }): JournalRecord[];
+	/** Write down that a node's agent did something its roles say not to. */
+	addLapse(id: string, kind: Lapse): void;
+	/** Every lapse written down, oldest first. */
+	lapses(): Array<{ nodeId: string; kind: Lapse }>;
 	close(): void;
 }
 
@@ -76,6 +80,7 @@ const MIGRATIONS: string[] = [
 	"ALTER TABLE nodes ADD COLUMN waits_on TEXT;",
 	"ALTER TABLE nodes ADD COLUMN planned INTEGER NOT NULL DEFAULT 0;",
 	"ALTER TABLE nodes ADD COLUMN issue INTEGER;",
+	"CREATE TABLE lapses (node_id TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL);",
 ];
 
 type Row = Record<string, string | number | null>;
@@ -227,6 +232,14 @@ export class SqliteStore implements Store {
 			acked: row.acked === 1,
 			mailState: row.mail_state as InboundState | null,
 		}));
+	}
+
+	addLapse(id: string, kind: Lapse): void {
+		this.db.prepare("INSERT INTO lapses (node_id, kind, at) VALUES (?, ?, ?)").run(id, kind, new Date().toISOString());
+	}
+
+	lapses(): Array<{ nodeId: string; kind: Lapse }> {
+		return (this.db.prepare("SELECT node_id, kind FROM lapses ORDER BY rowid").all() as Row[]).map((row) => ({ nodeId: row.node_id as string, kind: row.kind as Lapse }));
 	}
 
 	close(): void {

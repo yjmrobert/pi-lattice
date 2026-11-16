@@ -333,6 +333,8 @@ describe("sessions that know how to talk to each other", () => {
 		// It is told once, not at every turn the child ends after that.
 		await settled(h, quiet.id);
 		expect(h.traffic({ node: root.id }).filter((record) => record.envelope.intent === "stopped")).toHaveLength(1);
+		// Both are counted against the roles the child had, so a fragment that is not followed shows.
+		expect(h.roleTallies()).toEqual([{ roles: ["protocol", "reporting", "worker"], model: "default", sessions: 1, reminded: 1, stopped: 1, sentBack: 0 }]);
 	});
 
 	it("leaves a child alone that has reported, and marks it done until it is given more", async () => {
@@ -345,6 +347,7 @@ describe("sessions that know how to talk to each other", () => {
 		await eventually(async () => (await assistantTexts(h, root.id)).includes("all done"), "the result to arrive");
 		expect(await userMessages(h, kid.id)).not.toContain("You ended your turn without reporting");
 		expect(h.traffic({ node: root.id }).some((record) => record.envelope.intent === "stopped")).toBe(false);
+		expect(h.roleTallies()).toEqual([{ roles: ["protocol", "reporting", "worker"], model: "default", sessions: 1, reminded: 0, stopped: 0, sentBack: 0 }]);
 
 		// More work from its parent: it is not done any more, until it sends another result.
 		await h.prompt(root.id, sendTool(kid.id, "!reply noted"));
