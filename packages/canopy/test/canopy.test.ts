@@ -160,6 +160,12 @@ describe("the layout", () => {
 		expect(text).toContain("⠋ checkout-v2 6/15 ●3 y");
 		expect(text).toContain("⠋ pricing-migration 3/10 ●1 s");
 		expect(text).toContain("⠋ sso-rollout 2/6 m");
+		// A session that sits on a folded item and is not working keeps its ring: "nobody" would be wrong.
+		const idle = paint(w, layout(w, { folded: new Set(["tables"]) })).plain().join("\n");
+		expect(idle).toContain("⠋ tables 1/3 s");
+		const quiet = buildWorld([world([["shop", "epic", "coordinator idle", [["a", "feature", "plan", [["b", "story", "plan", [["c", "task", "plan"]]]]]]]])], LEVELS);
+		expect(paint(quiet, layout(quiet, { folded: new Set(["shop"]) })).plain().join("\n")).toContain("◉ shop 0/1");
+		expect(paint(quiet, layout(quiet, { folded: new Set(["a"]) })).plain().join("\n")).toContain("○ a 0/1");
 		// A helper that asks is counted as well: a review is under the item it helps.
 		expect(rollup(w.items.get("invoices") as Item).people).toEqual(["sam"]);
 	});

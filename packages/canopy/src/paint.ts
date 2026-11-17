@@ -220,7 +220,9 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 			// Folded: one line that says what is under it. Its name is written as an item's is, since it is one; what is finished is quiet.
 			const said = rollup(item);
 			const working = alive(item);
-			grid.text(col, row, item.failed ? "✗" : landed ? "✓" : working ? spin(frame) : "○", item.failed ? { fg: COLOR.failed } : { fg: working || landed ? color : grey(item, COLOR.dim), level: strength(item, 1) });
+			// Its mark says the most that is so of it: something in it is being worked on, or a session sits on it and waits, or nobody is anywhere in it.
+			const sat = item.agent !== undefined;
+			grid.text(col, row, item.failed ? "✗" : landed ? "✓" : working ? spin(frame) : sat ? "◉" : "○", item.failed ? { fg: COLOR.failed } : { fg: working || landed || sat ? color : grey(item, COLOR.dim), level: strength(item, 1) });
 			grid.text(col + 2, row, name, { fg: grey(item, landed ? COLOR.dim : COLOR.bright), bold: !landed, ...(selected ? (options.away ? { bg: COLOR.selectAway } : { bg: COLOR.select, fg: COLOR.bright, bold: true }) : {}) });
 			let at = col + 3 + cells(name);
 			grid.text(at, row, said.progress, { fg: grey(item, COLOR.dim) });
