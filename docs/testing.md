@@ -202,6 +202,39 @@ This is the part no automated test covers: whether a real model does what a line
 
 - [ ] The session that tends the item is told to put it back, does, and says so.
 
+## 3c. In another terminal, and with someone else
+
+The automated tests hold the canopy to being read ([ADR 0042](decisions/0042-the-canopy-is-held-to-being-read.md)): colours against dark and light backgrounds, widths, what fits, the arrows, the keys. This is what they cannot see: another person's machine.
+
+1. In a terminal with a **light** background, start `pi` in a project with sessions.
+
+- [ ] Names are dark and read easily. What is selected has `▸` before its name and a tint behind it. Nothing is near-white.
+- [ ] `/lattice config canopy.palette dark` makes it unreadable again, on purpose; `auto` puts it back.
+
+2. Shrink the terminal to 80 by 24 with a small tree (a dozen items).
+
+- [ ] The whole tree is on the screen, its levels closer together. The foot ends with `?  keys`.
+- [ ] `?` lists every key in place of the tree; `↓` reads on; `?` closes it.
+
+3. Move with the arrows across the tree and back.
+
+- [ ] An arrow and then its opposite is where you started. Left and right stay on a level. `/` and a few letters of a name goes there.
+
+4. Give a session a name in Chinese or with an emoji in it (`r` in the pane).
+
+- [ ] Pi keeps running, the name is drawn whole or cut with `…`, and the panel's edge stays straight.
+
+5. Start `pi` in a second repository with nothing in it, then in a directory that is not a repository.
+
+- [ ] Both show the first repository's work. The second repository is one item, selected, with `nothing here yet`; `enter` is the chat.
+- [ ] Ten minutes after the first repository goes quiet (or after `/lattice stop` there), it is one item marked `asleep`; `enter` wakes it.
+
+6. With a teammate, on their machine: a fresh clone, `pi`, and the address from `/lattice server share` typed where the cursor is.
+
+- [ ] The chat opens with `Joined …`, and behind it the team's issues are already drawn. `alt+l` is the tree.
+- [ ] Unstarted work hangs on unbroken lines, and every name reads. If anything looks broken, a screenshot and the terminal's name are what is needed: fonts are the one thing no test here sees.
+- [ ] `o` on one of your sessions offers it; `t` on one of theirs asks for it.
+
 ## 4. Messages to approve
 
 Messages between your own sessions skip approval by default. Turn approval on for this repository:

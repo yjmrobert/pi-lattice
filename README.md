@@ -12,10 +12,12 @@ pi install npm:pi-lattice
 
 From a checkout of this repository, `pi install /path/to/pi-lattice` does the same from source.
 
-Then open `pi` in a project as you always do. Where the project has sessions, Pi opens on the canopy: all the work as a tree, with the session you open in a box over it.
+Then open `pi` as you always do, in any directory. Where you have sessions, in this repository or any other, Pi opens on the canopy: all the work as a tree, the same one wherever you opened it, with the session you open in a box over it.
 
 - `enter` on a session opens its chat over the tree, with all of Pi. The top of the box says whose session it is and what it is doing. `alt+l` closes it back into the tree. The session carries on either way.
-- `f` folds what is under an item into it, and the tree draws in; `f` again unfolds it.
+- The arrows move over the tree: along a level, up into what is under an item, down to what it belongs to. `/` goes to an item by part of its name. What is selected has `▸` before its name.
+- `f` folds what is under an item into it, and the tree draws in; `f` again unfolds it. A tree that does not fit the terminal draws in by itself before anything has to be scrolled to.
+- `?` lists every key, and the foot of the screen always ends with it.
 - Colour says whose a piece is, a ring that an agent is on it, amber that it needs someone. `tab` goes to the next thing that does, and what it asks is drawn under the tree with the keys that answer it (`y`/`n`, `a`/`x`). `o` is always among them: type something else instead, and the session reads that rather than an answer.
 - `p` lists the sessions in a pane instead, where they are made, stopped, archived and answered:
 
@@ -29,7 +31,7 @@ Then open `pi` in a project as you always do. Where the project has sessions, Pi
 ```
 
 - To open on the chat with that pane always on its left, as before, set `pane.home` to `chat` (`,` in the pane, or `/lattice config`). Then `alt+l` gives the pane the keyboard and `c` opens the canopy.
-- In a git repository there is nothing to set up: Pi opens on an empty canopy that says your first message starts the tree, and you type or paste it there. Each new session joins with its first message. Elsewhere, run `/lattice` once.
+- In a git repository there is nothing to set up: Pi opens on an empty canopy that says your first message starts the tree, and you type or paste it there. With work in another repository already, that work is drawn and this repository is one item on it, selected: `enter` is the chat, and your first message there starts its tree. Each new session joins with its first message. Elsewhere, run `/lattice` once.
 - What needs you is listed above the tree: questions a background session is stuck on, messages to approve. `alt+l` gives the pane the keyboard, and you answer them where they are (`y`/`n`, `a`/`x`, or `o` to say something else instead).
 - With the keyboard, the chat steps aside to show the selected session in full. `enter` opens it in this terminal, with all of Pi. You can switch at any time, even mid-turn: the work you leave carries on in the background.
 - `n` creates a child session from one form. Agents can also delegate on their own. Children run in the background, each on the model you choose. A child can be told to wait on others: it shows in the tree at once and starts by itself when they have finished.
@@ -42,8 +44,8 @@ Then open `pi` in a project as you always do. Where the project has sessions, Pi
 - `r` renames a session, `d` archives it, `s` stops what it is doing. `?` lists every key, and `/lattice help` every command.
 - `,` in the pane, or `/lattice config`, opens the settings: models, roles, limits and the pane itself, for this repository or for all of yours. `/lattice doctor` checks the setup.
 - Sessions are told how to talk to each other, and you can read and change all of it: `/lattice prompt` shows what a session has been told and the file each part comes from.
-- Work in several repositories shows in one pane. Opening a session from another repository moves this terminal there; `-` goes back.
-- Once you and a teammate are on the same server, their sessions show in your pane with nothing more to set up, in every repository you share, and the pane's first line says who is around. What teammates are running in repositories you do not have is listed too; a session under the cursor is kept up to date as it goes. `o` offers one of yours to a teammate and `t` asks for one of theirs, cloning the repository first if you do not have it. The offer and the request go through the server; the session itself goes straight from one machine to the other, so both of you must be online and your machines must be able to reach each other. The server never sees a conversation.
+- Work in several repositories shows on one canopy and in one pane, whichever of them the terminal is in. A repository whose host has gone to sleep is one item; `enter` wakes it. Opening a session from another repository moves this terminal there; `-` goes back.
+- Once you and a teammate are on the same server, their sessions show in your pane with nothing more to set up, in every repository you share, and the pane's first line says who is around. What teammates are running in repositories you do not have is listed too; a session under the cursor is kept up to date as it goes. `o` offers one of yours to a teammate and `t` asks for one of theirs, on the tree or in the pane, cloning the repository first if you do not have it. The offer and the request go through the server; the session itself goes straight from one machine to the other, so both of you must be online and your machines must be able to reach each other. The server never sees a conversation.
 
 See the [pane readme](packages/pane/README.md) for keys, and [a feature through the full lifecycle](examples/feature-lifecycle/README.md) for a walkthrough.
 
@@ -86,7 +88,7 @@ npm run build          # build the package that is published into dist/pi-lattic
 npm run spike:phase0   # re-run the Phase 0 verification against real Pi processes
 ```
 
-Requires Node 22.19 or newer and git. Tests and spikes run real Pi processes against a scripted model: no network, no tokens, and they do not read your Pi configuration. The tests of the pane in Pi's terminal interface need `script` (util-linux) for a pseudo-terminal and are skipped where it is missing.
+Requires Node 22.19 or newer and git. Tests and spikes run real Pi processes against a scripted model: no network, no tokens, and they do not read your Pi configuration. The canopy is also held to being read: its colours to a contrast on dark and light backgrounds, every line to the width of the terminal, a small project to fitting it, and every key to being listed ([ADR 0042](docs/decisions/0042-the-canopy-is-held-to-being-read.md)). The tests of the pane in Pi's terminal interface need `script` (util-linux) for a pseudo-terminal and are skipped where it is missing.
 
 ### Releasing
 

@@ -2,7 +2,7 @@
 
 All the work of a team as a tree that grows upward: the team at the root, then epics, features and stories, with tasks at the tips. It answers what the pane's list cannot: who owns each piece, which agent is on it, and how far along each branch is.
 
-Press `c` in the pane, or run `/lattice canopy`. It takes the whole screen; `esc` gives it back.
+It is what Pi opens on wherever you have work, in any directory: every repository's sessions on one tree ([ADR 0041](../../docs/decisions/0041-the-canopy-is-the-same-in-every-directory.md)). A repository whose host is asleep is one item, and `enter` wakes it; the repository you are in, where nothing is started yet, is one item too, and `enter` there is the chat your first message goes in. Where Pi opens on the chat instead (`pane.home`), press `c` in the pane, or run `/lattice canopy`: it takes the whole screen, and `esc` gives it back.
 
 When you have joined your team's server (`/lattice server <address>`), the tree is the team's issues, on the levels of the team's own scheme. An item's colour is whoever it is assigned to, and the ring round it is the colour of whoever's session is on it. Sessions on no issue are drawn at the foot. Without a server, the tree is the sessions themselves and the items planned among them.
 
@@ -29,8 +29,11 @@ Agents keep the issues; you steer. `space` on an item opens a line at the foot o
 - **A hue is a person.** Their branches, their agents, their name. Where an item belongs to someone other than the owner of what it is under, the name is written beside it. `i` writes a letter beside everything, for reading without colour.
 - **A ring is an agent.** `◉` with a ring round it means a session sits on the item; under the name is what it is there to do. The ring turns while it works. `○` means nobody is on it.
 - **Amber needs someone.** A question, an approval. It is the only thing that blinks, and no person is given it. An arrow at the edge of the screen counts what needs someone out of view; `tab` goes to the next.
-- **A bright branch has landed.** Dim while it grows, dotted while it is only planned.
-- **Left to right is first to last.** What must come first is on the left, at every level, and at the bottom of a story's tasks, nearest the stem. An item that waits on another comes after it, and so does everything it is under. Where nothing says, what is finished comes first, then what has started, then what has not, then what is held. `o` puts everything back as it was filed.
+- **What is selected has `▸` before its name**, and a tint behind it. Nothing is said by colour alone.
+- **A bright branch has landed.** Dim while it grows, and a quieter line while it is only planned.
+- **It is drawn for the terminal it is in.** Colours for a dark background or a light one, as Pi's theme is (`canopy.palette` says otherwise); the nearest of 256 colours where the terminal has no more; and names in any script, each character as wide as the terminal draws it.
+- **It fits where it can.** The tree is the size it likes while the terminal has room; then its levels come closer together, then its columns, and names are shortened only where that makes it fit. What is still too large is scrolled.
+- **Left to right is first to last.** What must come first is on the left, at every level, and at the bottom of a story's tasks, nearest the stem. An item that waits on another comes after it, and so does everything it is under. Where nothing says, what is finished comes first, then what has started, then what has not, then what is held. `O` puts everything back as it was filed.
 - **`›` between two items** means the second waits on the first; it dims once the first is finished. A wait that reaches into another branch is a dashed arc.
 - **Dim with `⧗` is held.** Something it waits on is unfinished, or what it is under is held. `⧗2` after a name counts what waits on that item. What nobody is on and nothing holds is there to be taken: `.` goes to the next, and the top of the screen counts both.
 - **A thin dotted line ties an agent to what it is working on**, when that is not the item it sits on.
@@ -43,14 +46,17 @@ Agents keep the issues; you steer. `space` on an item opens a line at the foot o
 
 | Key | Does |
 |---|---|
-| `←` `→` | across, to what is beside |
-| `↑` `↓` | up into what is under an item, down to what it belongs to |
+| `←` `→` | along a level: to the nearest item of the same level, or for a task, a task on the next stem |
+| `↑` `↓` | up into what is under an item, down to what it belongs to; down reads through an item's helpers first. The opposite arrow goes back where the last one came from |
+| `/` | go to an item by part of its name, or an issue by its number; `tab` goes on to the next, `enter` stays, `esc` goes back |
 | `tab` | the next thing that needs someone |
 | `.` | the next thing that is there to be taken: nobody on it, nothing holding it |
-| `o` | first to last, or as filed |
+| `O` | first to last, or as filed |
+| `o` | offer the session on the item to a teammate |
+| `t` | ask a teammate for the session on the item |
 | `space` | say what you want about the item, to whatever tends it |
 | `u` | the next thing an agent changed since you looked; `x` there puts it back |
-| `enter` | open the session on the item in this terminal; unfold a folded item |
+| `enter` | open the session on the item in this terminal; unfold a folded item; wake a sleeping repository; on the repository you are in with nothing started, the chat |
 | `s` | put a session on a planned item, or the session open here on an issue |
 | `f` | fold an item to one node, or unfold it |
 | `1`–`9`, `0` | keep one person's colour and grey the rest; clear |
@@ -59,6 +65,7 @@ Agents keep the issues; you steer. `space` on an item opens a line at the foot o
 | `r` | grown, or ruled with every level on one row |
 | `shift` + arrows | pan. The view also follows what is selected |
 | `home` | the whole tree |
+| `?` | every key, in place of the tree; the foot always ends with it |
 | `esc` | back |
 
 ## What is in it
@@ -67,7 +74,7 @@ Agents keep the issues; you steer. `space` on an item opens a line at the foot o
 |---|---|
 | `model.ts` | The work, from the state a host gives: items on levels, owners, the agent on each, progress. |
 | `order.ts` | What comes first: the order under each item, what waits on what, what is held. |
-| `layout.ts` | Where everything goes, at whatever size the labels need. |
+| `layout.ts` | Where everything goes: at the size the labels need, drawn in to fit the window where it can. |
 | `grid.ts` | Cells with braille dots under them. |
 | `paint.ts` | A layout drawn into a grid. |
 | `animate.ts` | What happened between two looks, and the path each animation takes. |

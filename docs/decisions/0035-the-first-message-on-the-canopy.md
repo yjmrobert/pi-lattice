@@ -14,7 +14,7 @@ Pi opened on the canopy only where there was a tree. In a git repository with no
 
 **Not done**
 
-- Trees of other repositories that are running are not drawn on this screen; `alt+l` then `/lattice` reaches them. This repository has nothing yet, and the screen is about that.
+- ~~Trees of other repositories that are running are not drawn on this screen.~~ With work in any other repository, that work is drawn and this repository is one item on it: [0041](0041-the-canopy-is-the-same-in-every-directory.md). This screen is for when there is nothing anywhere.
 - The box is not an editor: there is no cursor to move and no history. A long message written by hand is better written in the chat (`alt+l`).
 
 **Evidence**
