@@ -32,7 +32,9 @@ Agents keep the issues; you steer. `space` on an item opens a line at the foot o
 - **What is selected has `▸` before its name**, and a tint behind it. Nothing is said by colour alone.
 - **A bright branch has landed.** Dim while it grows, and a quieter line while it is only planned.
 - **It is drawn for the terminal it is in.** Colours for a dark background or a light one, as Pi's theme is (`canopy.palette` says otherwise); the nearest of 256 colours where the terminal has no more; and names in any script, each character as wide as the terminal draws it.
-- **It fits where it can.** The tree is the size it likes while the terminal has room; then its levels come closer together, then its columns, and names are shortened only where that makes it fit. What is still too large is scrolled.
+- **It fits where it can.** The tree is the size it likes while the terminal has room; then its levels come closer together, then its columns, and names are shortened only where that makes it fit.
+- **Too large for that, it folds around your work.** First what is finished is folded; then everything but the way to your sessions and to what asks you; then everything but the session open here. What you fold stays folded, and what you unfold stays open. A project of five hundred items is on one screen this way. What is still too large is scrolled.
+- **A folded item is one line that says what is in it.** `⠋ pricing-migration 24/80 ●1 s +3`: something in it is being worked on, 24 of its 80 tasks have landed, one thing in it needs a person, sam's agents are in it, and agents changed three things since you looked. `enter` unfolds it one level. The lines are read up the branch to what is open, or stand in a column beside it.
 - **Left to right is first to last.** What must come first is on the left, at every level, and at the bottom of a story's tasks, nearest the stem. An item that waits on another comes after it, and so does everything it is under. Where nothing says, what is finished comes first, then what has started, then what has not, then what is held. `O` puts everything back as it was filed.
 - **`›` between two items** means the second waits on the first; it dims once the first is finished. A wait that reaches into another branch is a dashed arc.
 - **Dim with `⧗` is held.** Something it waits on is unfinished, or what it is under is held. `⧗2` after a name counts what waits on that item. What nobody is on and nothing holds is there to be taken: `.` goes to the next, and the top of the screen counts both.
@@ -48,18 +50,18 @@ Agents keep the issues; you steer. `space` on an item opens a line at the foot o
 |---|---|
 | `←` `→` | along a level: to the nearest item of the same level, or for a task, a task on the next stem |
 | `↑` `↓` | up into what is under an item, down to what it belongs to; down reads through an item's helpers first. The opposite arrow goes back where the last one came from |
-| `/` | go to an item by part of its name, or an issue by its number; `tab` goes on to the next, `enter` stays, `esc` goes back |
-| `tab` | the next thing that needs someone |
+| `/` | go to an item by part of its name, or an issue by its number; `tab` goes on to the next, `enter` stays, `esc` goes back. It finds what is folded away too: the line it is in is selected, and `enter` unfolds the way to it |
+| `tab` | the next thing that needs someone: yours first, then anyone's. A folded line stands for what in it does |
 | `.` | the next thing that is there to be taken: nobody on it, nothing holding it |
 | `O` | first to last, or as filed |
 | `o` | offer the session on the item to a teammate |
 | `t` | ask a teammate for the session on the item |
 | `space` | say what you want about the item, to whatever tends it |
 | `u` | the next thing an agent changed since you looked; `x` there puts it back |
-| `enter` | open the session on the item in this terminal; unfold a folded item; wake a sleeping repository; on the repository you are in with nothing started, the chat |
+| `enter` | open the session on the item in this terminal; unfold a folded item, one level; wake a sleeping repository; on the repository you are in with nothing started, the chat |
 | `s` | put a session on a planned item, or the session open here on an issue |
-| `f` | fold an item to one node, or unfold it |
-| `1`–`9`, `0` | keep one person's colour and grey the rest; clear |
+| `f` | fold an item to one line, or unfold it. Either stays as you left it when the tree is folded to fit |
+| `1`–`9`, `0` | look at one person: their colour is kept and the rest greyed, and a folded tree opens around their work; clear |
 | `a` | the panel: the selected item, every agent by owner, or nothing |
 | `i` | owners' letters |
 | `r` | grown, or ruled with every level on one row |
@@ -74,7 +76,7 @@ Agents keep the issues; you steer. `space` on an item opens a line at the foot o
 |---|---|
 | `model.ts` | The work, from the state a host gives: items on levels, owners, the agent on each, progress. |
 | `order.ts` | What comes first: the order under each item, what waits on what, what is held. |
-| `layout.ts` | Where everything goes: at the size the labels need, drawn in to fit the window where it can. |
+| `layout.ts` | Where everything goes: at the size the labels need, drawn in to fit the window where it can, and folded around this person's work where it cannot. |
 | `grid.ts` | Cells with braille dots under them. |
 | `paint.ts` | A layout drawn into a grid. |
 | `animate.ts` | What happened between two looks, and the path each animation takes. |
@@ -83,4 +85,4 @@ Agents keep the issues; you steer. `space` on an item opens a line at the foot o
 
 Everything but `extension.ts` is a function of its input and is tested as text. The package depends on `protocol` alone; it asks the pane what there is to draw over the event bus (`lattice:trees:query`) and hands anything that changes a session to `/lattice`.
 
-Levels are the setting `canopy.levels`; the order the canopy opens in is `canopy.order`. See [the plan](../../docs/design/canopy-plan.md) for what is not built yet, and [0022](../../docs/decisions/0022-canopy-in-pi.md), [0023](../../docs/decisions/0023-planned-work.md), [0024](../../docs/decisions/0024-the-canopy.md) and [0030](../../docs/decisions/0030-the-canopy-in-order.md) for why it is the way it is.
+Levels are the setting `canopy.levels`; the order the canopy opens in is `canopy.order`. See [the plan](../../docs/design/canopy-plan.md) for what is not built yet, and [0022](../../docs/decisions/0022-canopy-in-pi.md), [0023](../../docs/decisions/0023-planned-work.md), [0024](../../docs/decisions/0024-the-canopy.md), [0030](../../docs/decisions/0030-the-canopy-in-order.md) and [0043](../../docs/decisions/0043-a-large-tree-folds-around-your-work.md) for why it is the way it is.

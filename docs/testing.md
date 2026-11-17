@@ -147,8 +147,11 @@ With `pane.home` at its default, in a terminal at least 120 columns wide, in a p
 
 4. Move to an item with something under it and press `f`, then `f` again.
 
-- [ ] What is under it folds into it and the rest of the tree draws in; the item says how much it holds (`+3`). The second `f` grows it back.
+- [ ] What is under it folds into it and the rest of the tree draws in; the item becomes one line on the frond of what it is under, and says what is in it (`⠋ payments 2/9 ●2 y`). The second `f` grows it back.
 - [ ] The branches move smoothly, without a jump at the start or the end.
+- [ ] With more work than the screen is wide (a second or third repository's, or a narrower terminal), the tree folds by itself: the way to your sessions is open and the rest is a line each. Nothing that needs someone is missing from the lines' `●` counts.
+- [ ] `enter` on a teammate's line unfolds it one level, and it stays open when you move away. Their number in the bar at the top opens the tree around their work; `0` is back to yours.
+- [ ] `/` and part of a name that is folded away selects the line it is in; `enter` unfolds the way to it.
 
 5. Narrow the terminal below 120 columns and press `alt+l` a few times.
 

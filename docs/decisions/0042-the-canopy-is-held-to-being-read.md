@@ -19,7 +19,7 @@ Each of these is now something a test holds the canopy to, so the next one is fo
 
 - A font that draws braille badly is not something a test here can see. Ghostty, kitty and WezTerm draw it themselves.
 - The mouse does nothing.
-- A tree wider than the window is still scrolled, by selecting or with `shift` and the arrows; nothing is folded for the person.
+- A tree wider than the window was still scrolled when this was written, with nothing folded for the person. It folds around their work since [0043](0043-a-large-tree-folds-around-your-work.md).
 
 **Evidence**
 

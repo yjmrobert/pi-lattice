@@ -153,7 +153,7 @@ This table is the plan as it was written. What is built is in [the canopy's read
 - **The camera follows the selection.** Moving to an item outside the view glides the view to it (one step in `calm`). It moves only as far as needed to bring the item and its parent in, so small moves do not swing the whole screen. `F` follows an agent instead, including when its focus moves.
 - **Where you are.** A one-line trail at the top names the path from the root to the selection. `m` shows the map. Branches that leave the view end in a mark at the edge saying what is beyond and how much.
 - **Opening** shows the whole tree when it fits. When it does not, it opens on the node open in your terminal with its epic in view.
-- **Folding is a choice, not a rescue.** `f` folds an item to one node with counts. Nothing folds by itself.
+- **Folding is a choice, and a rescue.** `f` folds an item to one line that says what is in it. A tree too wide for its window folds around this person's work by itself ([0043](../decisions/0043-a-large-tree-folds-around-your-work.md)); when this plan was written nothing did.
 - **Many tasks under one story** (more than fit a fan): counts by state (`✓12 ⠹2 ○5`); selecting the story lists them.
 - **The floor is 60 columns by 20 rows**, below which a label and its branch cannot both be read. There the canopy says so and the pane stays.
 - **Names** longer than 24 characters are cut with `…`; the inspector has the full name.
