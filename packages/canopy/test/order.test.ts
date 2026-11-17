@@ -101,15 +101,15 @@ describe("the screen, in order", () => {
 	it("says how the tree is ordered and how much of it can go ahead", () => {
 		const w = shop();
 		expect(renderPlain(w, initial(w, "pay"), W, H)[1]).toMatch(/first to last · 1 can start · ⧗4 held$/);
-		expect(renderPlain(w, press(w, initial(w, "pay"), "o"), W, H)[1]).toMatch(/as filed · 1 can start · ⧗4 held$/);
+		expect(renderPlain(w, press(w, initial(w, "pay"), "O"), W, H)[1]).toMatch(/as filed · 1 can start · ⧗4 held$/);
 	});
 
-	it("switches between the two orders with o", () => {
+	it("switches between the two orders with O", () => {
 		const w = shop();
-		const filed = press(w, initial(w, "pay"), "o");
+		const filed = press(w, initial(w, "pay"), "O");
 		expect(filed.order).toBe("filed");
 		expect(planOf(w, filed).places.get("pack")?.col).toBeLessThan(planOf(w, filed).places.get("pay")?.col as number);
-		expect(press(w, filed, "o").order).toBe("dependency");
+		expect(press(w, filed, "O").order).toBe("dependency");
 	});
 
 	it("jumps to the next thing that is there to be taken", () => {

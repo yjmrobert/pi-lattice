@@ -252,7 +252,7 @@ export default function (pi: ExtensionAPI) {
 				// What is on the screen now is where a fold starts from.
 				state = placed(world, state, width, place.height());
 				const was = state;
-				const next = interpret(world, state, key, width, place.height(), asking);
+				const next = interpret(world, state, key, width, place.height(), asking, place.keys?.().map((entry) => [entry.key, entry.does] as const));
 				state = next.state;
 				if (motion !== "off" && state.folded !== was.folded) morph = { from: planOf(world, was, width, place.height()), camera: was.camera, start: Date.now() };
 				if (place.memory) place.memory.state = state;
@@ -271,6 +271,12 @@ export default function (pi: ExtensionAPI) {
 						const request: LatticeEvents["lattice:steer"] = { text: action.text, ...(action.number !== undefined ? { number: action.number } : {}), ...(action.nodeId !== undefined ? { nodeId: action.nodeId } : {}) };
 						emitEvent(pi.events, "lattice:steer", request);
 						if (!request.done) said = { text: "That could not be said from here: the pane is not there to carry it.", until: Date.now() + SAY_MS };
+					}
+					// Handing a session over asks who to, or whether to: it is run where that is asked and answered.
+					if (action.do === "hand") {
+						const command = `/lattice ${action.what} ${action.id}`;
+						if (place.command) return place.command(command);
+						run(command);
 					}
 					if (action.do === "seen") emitEvent(pi.events, "lattice:seen", {} satisfies LatticeEvents["lattice:seen"]);
 					if (action.do === "on") {
@@ -322,7 +328,7 @@ export default function (pi: ExtensionAPI) {
 					done(result);
 				};
 				// Opening a session switches this terminal to it: the canopy steps aside first.
-				const view = screen(tui, on, { height: () => tui.terminal.rows, back: () => close(), open: (id) => close(`/lattice open ${id}`) });
+				const view = screen(tui, on, { height: () => tui.terminal.rows, back: () => close(), open: (id) => close(`/lattice open ${id}`), command: (text) => close(text) });
 				closeOpen = () => close();
 				return {
 					render: (width) => view.render(width),

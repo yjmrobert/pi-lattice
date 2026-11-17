@@ -304,4 +304,27 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		expect(said?.fg).toBe(light.text);
 		expect(contrast(said?.fg ?? "#ffffff", "#ffffff")).toBeGreaterThan(7);
 	}, 90_000);
+
+	it("lists every key with ?, and offers the session on the tree with o, where the answer is read", async () => {
+		const pi = await withTree({ cols: 120, rows: 36 });
+		await pi.see(OPEN);
+		pi.press(KEY.altL);
+		const tree = await alone(pi);
+		// The foot always ends with the key that lists the rest.
+		expect(tree.at(-1)).toMatch(/\? {2}keys\s*$/);
+		pi.press("?");
+		const list = await pi.see("WHAT IS SELECTED");
+		expect(list.join("\n")).toContain("offer the session on it to a teammate");
+		expect(list.join("\n")).not.toContain("◉▸work");
+		// The keys that lead out of the tree are the ones this layout has, at the end of the list.
+		pi.press("j", "j", "j", "j");
+		await pi.see("the sessions as a list");
+		pi.press("?");
+		await pi.see("◉▸work");
+
+		// Nobody to offer to yet: the command says how to get on a team, in the chat, which opens for it.
+		pi.press("o");
+		const told = await pi.see(/\/lattice server/, 30_000);
+		expect(told.some((row) => OPEN.test(row))).toBe(true);
+	}, 90_000);
 });

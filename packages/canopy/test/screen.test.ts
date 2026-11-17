@@ -138,7 +138,7 @@ describe("acting", () => {
 	it("takes a typed line for a key that says something else instead, and sends it as the answer", () => {
 		const w = harbor();
 		const asking = { id: "q:copy:1", title: "copy asks", text: "Run it against the live account?", keys: [{ key: "y", does: "yes" }, { key: "n", does: "no" }, { key: "o", does: "other", line: "Instead, tell copy" }], more: 0 };
-		// `o` is the order of the tree anywhere else; here it opens the line.
+		// `o` hands a session over anywhere else; here it opens the line.
 		let step = interpret(w, initial(w, "copy"), "o", W, H, asking);
 		expect(step.actions).toEqual([]);
 		expect(step.state.order).toBe(initial(w, "copy").order);
@@ -152,8 +152,8 @@ describe("acting", () => {
 		expect(lines[at + 1]).not.toMatch(/ y {2}yes/);
 		expect(lines.at(-1)).toMatch(/^ +⏎ +send +esc +cancel$/);
 		// Before it is typed, a key the question took is not listed again at the foot with its other meaning.
-		expect(renderPlain(w, initial(w, "copy"), W, H, 0, { animations: [], now: 0, asking }).at(-1)).not.toMatch(/ o {2}as filed/);
-		expect(renderPlain(w, initial(w, "copy"), W, H).at(-1)).toMatch(/ o {2}as filed/);
+		expect(renderPlain(w, initial(w, "stripe-listen"), W, H, 0, { animations: [], now: 0, asking }).at(-1)).not.toMatch(/ o {2}offer/);
+		expect(renderPlain(w, initial(w, "stripe-listen"), W, H).at(-1)).toMatch(/ o {2}offer/);
 		expect(interpret(w, step.state, "escape", W, H, asking).state.typing).toBeUndefined();
 		step = interpret(w, step.state, "enter", W, H, asking);
 		expect(step.actions).toEqual([{ do: "answer", id: "q:copy:1", key: "o", text: "say no" }]);

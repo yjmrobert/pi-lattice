@@ -37,4 +37,4 @@
                                                                                                               │
                                                                                                               │
                                                                                                               │
-  ←↑↓→  move    space  say what you want    tab  next that needs someone    s  put this session on it    .  next to start    o  as filed
+  ←↑↓→  move    /  go to    space  say what you want    tab  next that needs someone    s  put this session on it    t  take    ?  keys

@@ -114,7 +114,7 @@ describe("the arrows", () => {
 		// A fixed run of keys, different at every step: the same walk every time the test runs.
 		let seed = 42;
 		const random = (): number => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
-		const keys: CanopyKey[] = ["up", "down", "left", "right", "up", "down", "left", "right", "tab", ".", "f", "a", "o", "r"];
+		const keys: CanopyKey[] = ["up", "down", "left", "right", "up", "down", "left", "right", "tab", ".", "f", "a", "O", "r"];
 		let state = interpret(w, initial(w), "right", cols, rows).state;
 		for (let step = 0; step < 1500; step++) {
 			const key = keys[Math.floor(random() * keys.length)] as CanopyKey;

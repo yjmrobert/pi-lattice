@@ -159,7 +159,7 @@ describe("the canopy of a team with a server", () => {
 		// A teammate's session on no issue is theirs.
 		expect(press(w, { ...state, selected: "teo-scratch" }, " ").actions).toEqual([{ do: "say", text: '"teo-scratch" is teo\'s. It is theirs to steer.' }]);
 		// The keys that changed issues by hand are gone.
-		for (const key of ["n", "N", "e", "m", "t"]) expect(press(w, { ...state, selected: "#6" }, key).actions).toEqual([]);
+		for (const key of ["n", "N", "e", "m"]) expect(press(w, { ...state, selected: "#6" }, key).actions).toEqual([]);
 		expect(renderPlain(w, { ...state, selected: "#6" }, 190, 40).at(-1)).toMatch(/space {2}say what you want +tab {2}next that needs someone +s {2}put this session on it/);
 	});
 

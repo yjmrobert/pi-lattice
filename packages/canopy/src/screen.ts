@@ -41,6 +41,8 @@ export interface CanopyState {
 	walked: ReadonlySet<string>;
 	/** The change being looked at: who made it, what, and why are written at the foot. */
 	viewing?: string;
+	/** Every key is listed where the tree was, from this row of the list on. */
+	help?: number;
 }
 
 /** What tells one change from another: when it was made, and to which issue. */
@@ -93,6 +95,8 @@ export type CanopyAction =
 	| { do: "on"; number: number }
 	/** Say something about an item, an issue by its number or a session, to whatever tends it. */
 	| { do: "steer"; number?: number; nodeId?: string; text: string }
+	/** Offer the session on an item to a teammate, or ask a teammate for theirs. */
+	| { do: "hand"; what: "offer" | "take"; id: string }
 	/** The person has been through everything agents changed. */
 	| { do: "seen" }
 	| { do: "say"; text: string };
@@ -174,6 +178,13 @@ export function planOf(world: World, state: CanopyState, width?: number, height?
 	const plan = known.get(key) ?? layout(world, { shape: state.shape, folded: state.folded, order: state.order, ...(room ? { room } : {}) });
 	known.set(key, plan);
 	return plan;
+}
+
+/** The session on an item that can change hands: its id, and whether it is this person's to offer or a teammate's to ask for. */
+function handOf(world: World, item: Item): { id: string; mine: boolean; owner: string } | undefined {
+	if (!item.session || item.outside) return undefined;
+	const owner = item.agent?.owner ?? item.owner;
+	return { id: item.session, mine: owner === world.me, owner };
 }
 
 /** What nobody is on and nothing holds, among the tips, and what is held there. */
@@ -266,7 +277,7 @@ function found(world: World, plan: Layout, text: string): Item[] {
 const ARROWS: Record<string, Arrow> = { up: "up", down: "down", left: "left", right: "right", k: "up", j: "down", h: "left", l: "right" };
 
 /** What a key does. Returns the next state and what the host of the screen must do. */
-export function interpret(world: World, state: CanopyState, key: CanopyKey, width: number, height: number, asking?: Asking): { state: CanopyState; actions: CanopyAction[] } {
+export function interpret(world: World, state: CanopyState, key: CanopyKey, width: number, height: number, asking?: Asking, leave?: ReadonlyArray<readonly [string, string]>): { state: CanopyState; actions: CanopyAction[] } {
 	const plan = planOf(world, state, width, height);
 	const here = placeOf(plan, state.selected);
 	const item = here?.item;
@@ -309,6 +320,16 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 		}
 		return [...key].length === 1 ? keep({ ...state, typing: { ...typing, text: typing.text + key } }) : keep(state);
 	}
+	// The list of keys is read, then closed: nothing else is done from it.
+	if (state.help !== undefined) {
+		const { help, ...rest } = state;
+		if (key === "?" || key === "escape" || key === "q") return keep(rest);
+		// It may be longer than the window: the arrows read on.
+		const most = Math.max(0, helpList(width, leave).height - win.height);
+		const by = key === "down" || key === "j" ? 1 : key === "up" || key === "k" ? -1 : 0;
+		return keep({ ...state, help: Math.max(0, Math.min(most, help + by)) });
+	}
+	if (key === "?") return keep({ ...state, help: 0 });
 	if (key === "escape" || key === "q") return keep(state, [{ do: "close" }]);
 	// While the selected session asks something, the keys that answer it mean that and nothing else.
 	const answers = asking?.keys.find((entry) => entry.key === key);
@@ -373,7 +394,7 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 		const at = free.findIndex((other) => other.id === state.selected);
 		return free.length > 0 ? go(free[(at + 1) % free.length]?.id) : keep(state, [{ do: "say", text: "Nothing is there to be taken: everything is started, finished or held." }]);
 	}
-	if (key === "o") {
+	if (key === "O") {
 		const next: CanopyState = { ...state, order: state.order === "dependency" ? "filed" : "dependency" };
 		return keep(frame(next, planOf(world, next, width, height), width, height));
 	}
@@ -406,6 +427,13 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 			return keep(state, [{ do: "say", text: item.agent ? `That is ${item.agent.owner ?? item.owner}'s session, running on their machine.` : `#${item.issue?.number} is finished, and nobody is on it.` }]);
 		}
 		return keep(state, [{ do: "open", id: item.node?.id ?? item.id, tree: item.tree }]);
+	}
+	// Hand a session over: offer one's own to a teammate, or ask a teammate for theirs. The same keys as in the list of sessions.
+	if (key === "o" || key === "t") {
+		const whose = handOf(world, item);
+		if (!whose) return keep(state, [{ do: "say", text: item.planned ? `Nobody is on "${cut(item.name, 30)}": there is no session to hand over.` : `There is no session on "${cut(item.name, 30)}" to hand over.` }]);
+		if (key === "o") return whose.mine ? keep(state, [{ do: "hand", what: "offer", id: whose.id }]) : keep(state, [{ do: "say", text: `That session is ${whose.owner}'s. Press t to ask them for it.` }]);
+		return whose.mine ? keep(state, [{ do: "say", text: "That session is yours already. Press o to offer it to a teammate." }]) : keep(state, [{ do: "hand", what: "take", id: whose.id }]);
 	}
 	if (key === "s" && item.issue) return keep(state, [{ do: "on", number: item.issue.number }]);
 	if (key === "s") {
@@ -489,47 +517,117 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 
 function footer(world: World, state: CanopyState, width: number, leave?: ReadonlyArray<readonly [string, string]>, away = false, asking?: Asking, banded = false): Grid {
 	const grid = new Grid(width, FOOTER);
-	const item = state.selected ? world.items.get(state.selected) : undefined;
 	if (state.typing && banded) {
 		// The line itself is in the band, under the question: here are only its keys.
 		run(grid, 1, 0, [[" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]]);
 		return grid;
 	}
 	if (state.typing) {
-		const room = Math.max(8, width - [...state.typing.label].length - 30);
+		const room = Math.max(8, width - [...state.typing.label].length - (state.typing.what === "find" ? 50 : 30));
 		const shown = [...state.typing.text].slice(-room).join("");
 		const keys: Array<[string, Style]> = state.typing.what === "find" ? [[" ⏎ ", KEYCAP], [" stay here   ", DIM], [" tab ", KEYCAP], [" next   ", DIM], [" esc ", KEYCAP], [" back", DIM]] : [[" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]];
 		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], ...keys]);
 		return grid;
 	}
-	const named = (leave ?? []).map(([key, does]): [string, string] => [key, does]);
-	const keys: Array<[string, string]> = [];
-	if (away) {
-		// The keys are not the canopy's while the keyboard is elsewhere: only what leads here is said.
-		keys.push(...named);
-	} else {
-		// In a layout, the keys that lead to the chat are said first: they are what a person arriving
-		// needs, and the canopy may be narrow there. As an overlay, escape goes back and is said last.
-		keys.push(...named, ["←↑↓→", "move"], ["space", "say what you want"]);
-		if (world.changes.length > 0) keys.push(["u", `${world.changes.length} changed by agents`]);
-		keys.push(["tab", "next that needs someone"]);
-		if (item?.issue) {
-			if (item.node) keys.push(["⏎", "open"]);
-			keys.push(["s", "put this session on it"]);
-		} else if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
-		else if (item && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
-		if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
-		keys.push([".", "next to start"], ["o", state.order === "dependency" ? "as filed" : "first to last"], ["1-9", "one person"], ["a", "panel"], ["shift+←→", "pan"]);
-		if (!leave) keys.push(["esc", "back"]);
-	}
+	const keys = footerKeys(world, state, leave, away);
 	// A key that answers what is asked means only that while it is asked: it is not listed twice.
 	const taken = new Set(away ? [] : (asking?.keys ?? []).map((entry) => keyName(entry.key)));
+	// The key that lists every key is always there, at the end: the rest are the ones that fit before it.
+	const last = away || state.help !== undefined ? undefined : (["?", "keys"] as const);
+	const room = width - (last ? last[0].length + last[1].length + 5 : 0);
 	let at = 1;
 	for (const [key, does] of keys) {
 		if (taken.has(key)) continue;
-		if (at + key.length + does.length + 4 > width) break;
+		if (at + [...key].length + does.length + 4 > room) break;
 		at = run(grid, at, 0, [[` ${key} `, KEYCAP], [` ${does}   `, DIM]]);
 	}
+	if (last) run(grid, at, 0, [[` ${last[0]} `, KEYCAP], [` ${last[1]}`, DIM]]);
+	return grid;
+}
+
+/**
+ * The keys said at the foot, most useful first: what leads out, how to move, and what can be done
+ * to what is selected. Each is one the canopy acts on here and now. `?` lists the rest.
+ */
+export function footerKeys(world: World, state: CanopyState, leave?: ReadonlyArray<readonly [string, string]>, away = false): Array<[key: string, does: string]> {
+	const item = state.selected ? world.items.get(state.selected) : undefined;
+	const named = (leave ?? []).map(([key, does]): [string, string] => [key, does]);
+	// The keys are not the canopy's while the keyboard is elsewhere: only what leads here is said.
+	if (away) return named;
+	if (state.help !== undefined) return [["↑↓", "read on"], ["?", "back to the tree"]];
+	// In a layout, the keys that lead to the chat are said first: they are what a person arriving
+	// needs, and the canopy may be narrow there. As an overlay, escape goes back and is said last.
+	const keys: Array<[string, string]> = [...named, ["←↑↓→", "move"], ["/", "go to"], ["space", "say what you want"]];
+	if (world.changes.length > 0) keys.push(["u", `${world.changes.length} changed by agents`]);
+	keys.push(["tab", "next that needs someone"]);
+	if (item?.issue) {
+		if (item.node) keys.push(["⏎", "open"]);
+		keys.push(["s", "put this session on it"]);
+	} else if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
+	else if (item && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
+	const hand = item ? handOf(world, item) : undefined;
+	// Offering needs someone to offer to; asking needs a session that is someone else's.
+	if (hand && (hand.mine ? world.people.length > 1 : true)) keys.push(hand.mine ? ["o", "offer"] : ["t", "take"]);
+	if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
+	keys.push([".", "next to start"]);
+	if (!leave) keys.push(["esc", "back"]);
+	return keys;
+}
+
+/** Every key the canopy takes, for the list `?` shows: the name of the key as it is said, and what it does. */
+export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyArray<readonly [key: string, does: string]>]> = [
+	["Moving", [
+		["← ↑ ↓ →  h j k l", "along a level, up into what is under an item, down to what it belongs to"],
+		["/", "go to an item by part of its name, or an issue by its number; tab goes on to the next"],
+		["tab", "the next thing that needs someone"],
+		[".", "the next thing nobody is on and nothing holds"],
+		["shift+← ↑ ↓ →", "move the window over a tree larger than it"],
+		["home", "the middle of the whole tree"],
+	]],
+	["What is selected", [
+		["space", "say what you want about it to whatever tends it: it changes the work and answers at the foot"],
+		["⏎", "open the session on it; unfold it when it is folded"],
+		["s", "put the session open here on an issue; start a planned item of your own"],
+		["o", "offer the session on it to a teammate"],
+		["t", "ask a teammate for the session on it"],
+		["f", "fold what is under it into it, or unfold it"],
+	]],
+	["What agents changed", [
+		["u", "go to the next thing an agent changed since you looked, with who and why"],
+		["x", "there: have it put back"],
+	]],
+	["The view", [
+		["a", "the panel beside the tree: what is selected, then everyone's agents, then none"],
+		["O", "what must come first on the left, or everything as it was filed"],
+		["1-9  0", "keep one person's colour and grey the rest; 0 brings everyone back"],
+		["i", "a letter beside each item for whose it is, to read without colour"],
+		["r", "every level on one row, or grown like a tree"],
+		["?", "show or hide this list"],
+	]],
+];
+
+/** What a key that leads out of the canopy does, said in full: the foot has room for a word. */
+const LEAVES: Record<string, string> = {
+	chat: "the chat of the session open here, over the tree; from there, back to the tree",
+	tree: "back to the tree",
+	sessions: "the sessions as a list: where one is made, renamed, stopped or archived",
+};
+
+/** Every key and what it does, as tall as it needs to be: the window on the tree shows it in place of the tree. */
+function helpList(width: number, leave?: ReadonlyArray<readonly [string, string]>): Grid {
+	// What leads out of the canopy depends on where it is shown: those keys come from there, and are said last.
+	const out: ReadonlyArray<readonly [string, string]> = leave ? leave.map(([key, does]) => [key, LEAVES[does] ?? does] as const) : [["esc  q", "back to where the canopy was opened from"]];
+	const all = [...ALL_KEYS, ...(out.length > 0 ? [["Leaving", out] as const] : [])];
+	const keyWidth = Math.max(...all.flatMap(([, keys]) => keys.map(([key]) => [...key].length)));
+	const room = Math.max(16, width - keyWidth - 8);
+	const rows: Array<Array<[number, string, Style]>> = [];
+	for (const [section, keys] of all) {
+		rows.push([[2, section.toUpperCase(), DIM]]);
+		for (const [key, does] of keys) wrap(does, room).forEach((line, index) => rows.push([...(index === 0 ? ([[3, key, { fg: COLOR.bright, bold: true }]] as Array<[number, string, Style]>) : []), [5 + keyWidth, line, { fg: COLOR.text }]]));
+		rows.push([]);
+	}
+	const grid = new Grid(width, rows.length);
+	rows.forEach((parts, row) => parts.forEach(([col, text, style]) => grid.text(col, row, text, style)));
 	return grid;
 }
 
@@ -818,8 +916,10 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const left = win.height - band.length;
 	const selected = placeOf(plan, view.selected);
 	const hidden = selected !== undefined && selected.row - view.camera.row + 2 >= left;
-	const canvas = [...lines(tree, camera.col, camera.row + (hidden ? band.length : 0), win.width, left), ...band];
-	const panel = side > 0 ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick)) : [];
+	// The list of keys has the whole width, the panel's too: it is read, and then the tree is back.
+	const list = view.help !== undefined ? helpList(width, moving?.leave) : undefined;
+	const canvas = list ? lines(list, 0, Math.min(view.help ?? 0, Math.max(0, list.height - win.height)), width, win.height) : [...lines(tree, camera.col, camera.row + (hidden ? band.length : 0), win.width, left), ...band];
+	const panel = side > 0 && !list ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick)) : [];
 	return [...lines(header(world, view, width, tick)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away, moving?.asking, band.length > 0))];
 }
 

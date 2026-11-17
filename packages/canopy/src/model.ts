@@ -60,6 +60,8 @@ export interface Item {
 	/** Ids of what it waits on before it starts. */
 	waitsOn: string[];
 	node: NodeMeta | undefined;
+	/** The id of the session sitting on it, this person's or a teammate's: what is offered, or asked for. */
+	session?: string;
 	/** The issue it is, when the canopy is drawn from a team's server. */
 	issue?: Issue;
 	/** Why the issue does not fit the team's scheme as it is now. */
@@ -158,7 +160,7 @@ export function buildWorld(sources: readonly TreeSource[], levels: readonly stri
 			const item: Item = {
 				id: node.id, name: node.name, kind: node.kind, level: parent === root ? Math.max(at, 0) : bud ? parent.level : at, owner: node.owner, away: away(node.owner), repo: node.repo ?? source.repo, tree: source.key,
 				parent, children: [], buds: [], agent: agentOf(node, source.state, mine), planned: isPlanned(node), done: node.done === true, failed: node.status === "failed",
-				leaves: 0, landed: 0, asks: (attention?.dialogs ?? 0) + (attention?.pending ?? 0), waitsOn: node.waitsOn ?? [], node,
+				leaves: 0, landed: 0, asks: (attention?.dialogs ?? 0) + (attention?.pending ?? 0), waitsOn: node.waitsOn ?? [], node, ...(isPlanned(node) ? {} : { session: node.id }),
 			};
 			items.set(item.id, item);
 			(bud ? parent.buds : parent.children).push(item);
@@ -288,7 +290,7 @@ function buildFromWork(sources: readonly TreeSource[], work: WorkState, rootName
 	const sessionItem = (sitter: Sitter, parent: Item, level: number): Item => ({
 		id: sitter.id, name: sitter.name, kind: sitter.agent.role, level, owner: sitter.owner, away: false, repo: sitter.repo, tree: sitter.tree,
 		parent, children: [], buds: [], agent: sitter.agent, planned: false, done: sitter.node?.done === true, failed: sitter.agent.state === "failed",
-		leaves: 0, landed: 0, asks: sitter.asks, waitsOn: [], node: sitter.node,
+		leaves: 0, landed: 0, asks: sitter.asks, waitsOn: [], node: sitter.node, session: sitter.id,
 	});
 	const place = (issue: Issue, parent: Item, helping: boolean): void => {
 		const at = levelOf(issue.type);
@@ -305,7 +307,7 @@ function buildFromWork(sources: readonly TreeSource[], work: WorkState, rootName
 		const item: Item = {
 			id: `#${issue.number}`, name: issue.title, kind: issue.type, level: parent === root ? Math.max(at, 0) : bud ? parent.level : at, owner: issue.assignee ?? lead?.owner ?? "", away: false,
 			repo: lead?.repo ?? "", tree: lead?.tree ?? "", parent, children: [], buds: [], agent: lead?.agent, planned: !lead && kind !== "done", done: kind === "done", failed: lead?.agent.state === "failed",
-			leaves: 0, landed: 0, asks: on.reduce((sum, sitter) => sum + sitter.asks, 0), waitsOn: waitingOn(scheme, issue, byNumber).map((number) => `#${number}`), node: lead?.node, issue, ...(why ? { misfit: why } : {}), ...(outside ? { outside: true } : {}),
+			leaves: 0, landed: 0, asks: on.reduce((sum, sitter) => sum + sitter.asks, 0), waitsOn: waitingOn(scheme, issue, byNumber).map((number) => `#${number}`), node: lead?.node, ...(on[0] ? { session: on[0].id } : {}), issue, ...(why ? { misfit: why } : {}), ...(outside ? { outside: true } : {}),
 		};
 		const directions = directionsFor(issue, byNumber).map((direction) => ({ id: direction.id, who: direction.who, text: direction.text, at: direction.at, on: `#${direction.on}` }));
 		if (directions.length > 0) item.directions = directions;
