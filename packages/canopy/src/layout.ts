@@ -5,6 +5,7 @@
  * last level is drawn as a frond: its items listed one above the other on a stem.
  * Positions are in cells, branch paths in braille dots. No Pi, no terminal.
  */
+import { cells, fit } from "./grid.ts";
 import type { Item, World } from "./model.ts";
 import { inOrder, type Order } from "./order.ts";
 
@@ -90,7 +91,8 @@ const WIDTHS: ReadonlyArray<Columns> = [
 const ARRIVE = 9;
 export const NAME_MAX: number = (WIDTHS[0] as Columns).nameMax;
 
-export const cut = (name: string, max = NAME_MAX): string => ([...name].length > max ? `${[...name].slice(0, max - 1).join("")}…` : name);
+/** A name no wider than `max` cells: one that is, loses its end to an ellipsis. */
+export const cut = (name: string, max = NAME_MAX): string => (cells(name) > max ? `${fit(name, max - 1)}…` : name);
 
 /** The second line under an item: who sits on it, how far along it is, and whose it is where that changes. */
 export function chipOf(item: Item): { agent: string; progress: string; owner: string } {
@@ -103,15 +105,15 @@ export function chipOf(item: Item): { agent: string; progress: string; owner: st
 
 const chipWidth = (item: Item): number => {
 	const chip = chipOf(item);
-	return [chip.agent ? chip.agent.length + 2 : 0, chip.progress.length, chip.owner.length].filter((n) => n > 0).reduce((sum, n) => sum + n + 3, -3);
+	return [chip.agent ? cells(chip.agent) + 2 : 0, chip.progress.length, cells(chip.owner)].filter((n) => n > 0).reduce((sum, n) => sum + n + 3, -3);
 };
 /** The marks after a name: what needs someone, how many wait on it, how many it holds when folded. */
 const marksWidth = (item: Item, behind: number, folded = false): number =>
 	(item.asks > 0 ? 2 + String(item.asks).length : 0) + (behind > 0 ? 2 + String(behind).length : 0) + (folded ? 2 + String(under(item)).length : 0) + ((item.issue?.directions ?? []).length > 0 ? 2 : 0) + (item.fresh ? 2 : 0);
 /** How many items are under one: what a folded item says it holds. */
 export const under = (item: Item): number => item.children.reduce((sum, child) => sum + 1 + under(child), item.buds.length);
-const labelWidth = (item: Item, behind: number, folded: boolean, nameMax: number): number => 2 + Math.max([...cut(item.name, nameMax)].length + marksWidth(item, behind, folded), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + [...cut(bud.name, 16)].length));
-const leafWidth = (item: Item, behind: number, nameMax: number): number => 2 + [...cut(item.name, nameMax)].length + marksWidth(item, behind) + (item.parent && item.parent.owner !== item.owner ? item.owner.length + 2 : 0);
+const labelWidth = (item: Item, behind: number, folded: boolean, nameMax: number): number => 2 + Math.max(cells(cut(item.name, nameMax)) + marksWidth(item, behind, folded), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + cells(cut(bud.name, 16))));
+const leafWidth = (item: Item, behind: number, nameMax: number): number => 2 + cells(cut(item.name, nameMax)) + marksWidth(item, behind) + (item.parent && item.parent.owner !== item.owner ? cells(item.owner) + 2 : 0);
 
 /** A small stable number from an id, so the same tree always grows the same way. */
 function hash(text: string): number {
@@ -181,7 +183,7 @@ function arrange(world: World, options: LayoutOptions, density: Density): Layout
 	const widthOf = (item: Item): number => {
 		const limbs = limbsOf(item);
 		const frond = frondWidth(item);
-		const own = item.level < 0 ? [...item.name].length + 12 : labelWidth(item, behind(item), folded.has(item.id), nameMax);
+		const own = item.level < 0 ? cells(item.name) + 12 : labelWidth(item, behind(item), folded.has(item.id), nameMax);
 		const below = limbs.length === 0 ? frond : limbs.reduce((sum, limb) => sum + widthOf(limb) + GAP, frond > 0 ? frond : -GAP);
 		const width = Math.max(own, below);
 		widths.set(item.id, width);

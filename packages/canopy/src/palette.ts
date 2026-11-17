@@ -61,6 +61,16 @@ export function usePalette(next: Appearance): void {
 	PEOPLE.splice(0, PEOPLE.length, ...PALETTES[next].people);
 }
 
+export type ColorDepth = "truecolor" | "256";
+let depth: ColorDepth = "truecolor";
+
+/** Write colours as the terminal can take them: exactly, or as the nearest of the 256 an older one has. */
+export function useColorDepth(next: ColorDepth): void {
+	depth = next;
+}
+
+export const colorDepth = (): ColorDepth => depth;
+
 /** Which palette is in use. */
 export const paletteInUse = (): Appearance => appearance;
 

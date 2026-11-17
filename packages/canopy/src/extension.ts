@@ -5,15 +5,15 @@
  * changes a session back to `/lattice`. It imports no other lattice extension.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Component, matchesKey, type TUI } from "@earendil-works/pi-tui";
+import { type Component, matchesKey, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { emitEvent, type LatticeEvents, onEvent, SETTINGS } from "@pi-lattice/protocol";
 import { type Animation, advance, happenings, type Motion } from "./animate.ts";
-import { styled } from "./grid.ts";
+import { cells, fit, styled } from "./grid.ts";
 import type { Shape } from "./layout.ts";
 import { buildWorld, type World } from "./model.ts";
 import { type FirstKey, firstKey, renderFirst } from "./first.ts";
 import { BEAT } from "./paint.ts";
-import { type Appearance, COLOR, usePalette } from "./palette.ts";
+import { type Appearance, COLOR, useColorDepth, usePalette } from "./palette.ts";
 import type { Layout } from "./layout.ts";
 import { reordered } from "./order.ts";
 import { anchorOf, type Asking, type CanopyKey, type CanopyState, initial, interpret, placed, planOf, render, sessionFrame } from "./screen.ts";
@@ -48,6 +48,21 @@ function firstKeyOf(data: string): FirstKey | undefined {
 	return { text };
 }
 
+/** What the canopy says at its foot, in place of the keys, exactly as wide as the screen. */
+function saying(text: string, width: number): string {
+	const shown = fit(text, Math.max(0, width - 2));
+	return ` ${styled(shown, { fg: COLOR.bright })}${" ".repeat(Math.max(0, width - 1 - cells(shown)))}`;
+}
+
+/**
+ * Lines no wider than the screen, as Pi measures them. Pi stops with an error on a line that is
+ * wider, and its measure of an unusual character may not be the canopy's: such a line is cut.
+ */
+function within(lines: string[], width: number): string[] {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: telling plain text from text that needs measuring
+	return lines.map((line) => (/^[\x1b\x20-\x7e\u2800-\u28ff]*$/.test(line) || visibleWidth(line) <= width ? line : truncateToWidth(line, width, "")));
+}
+
 function keyOf(data: string): CanopyKey | undefined {
 	const named = NAMED.find((key) => matchesKey(data, key));
 	if (named) return named;
@@ -79,6 +94,8 @@ export default function (pi: ExtensionAPI) {
 			const chosen = settings()["canopy.palette"];
 			const appearance: Appearance = chosen === "light" || chosen === "dark" ? chosen : (context.ui.theme as { appearance?: string } | undefined)?.appearance === "light" ? "light" : "dark";
 			usePalette(appearance);
+			// A terminal without 24-bit colour gets the nearest of the 256 it has, as the rest of Pi does.
+			useColorDepth((context.ui.theme as { getColorMode?: () => string }).getColorMode?.() === "256color" ? "256" : "truecolor");
 		} catch {
 			// The session ended between the check and the asking.
 		}
@@ -183,12 +200,9 @@ export default function (pi: ExtensionAPI) {
 				const first = firstNow();
 				if (first) {
 					const lines = renderFirst({ repo: first.repo, draft, ...(sent ? { sent: sent.text } : first.starting ? { sent: "" } : {}), leave: place.keys?.().filter((entry) => !entry.run).map((entry) => [entry.key, entry.does] as const) ?? [], ...(place.away?.() ? { away: true } : {}), dim: Math.max(0, Math.min(1, place.dim?.() ?? 1)) }, width, place.height(), motion === "off" ? 0 : beat());
-					if (said && lines.length > 0) {
-						const text = said.text.slice(0, Math.max(0, width - 2));
-						lines[lines.length - 1] = ` ${styled(text, { fg: COLOR.bright })}${" ".repeat(Math.max(0, width - 1 - text.length))}`;
-					}
-					drawn = lines;
-					return lines;
+					if (said && lines.length > 0) lines[lines.length - 1] = saying(said.text, width);
+					drawn = within(lines, width);
+					return drawn;
 				}
 				const before = world;
 				({ world, current } = look());
@@ -214,12 +228,9 @@ export default function (pi: ExtensionAPI) {
 				const leave = place.keys?.().map((entry) => [entry.key, entry.does] as const);
 				const dim = Math.max(0, Math.min(1, place.dim?.() ?? 1));
 				const lines = render(world, state, width, place.height(), motion === "off" ? 0 : beat(), { animations: moving, now, ...(leave ? { leave } : {}), ...(place.away?.() ? { away: true } : {}), ...(asking ? { asking } : {}), ...(dim < 1 ? { dim } : {}), ...(morph ? { morph: { from: morph.from, camera: morph.camera, t: (now - morph.start) / MORPH_MS } } : {}) });
-				if (said && lines.length > 0) {
-					const text = said.text.slice(0, Math.max(0, width - 2));
-					lines[lines.length - 1] = ` ${styled(text, { fg: COLOR.bright })}${" ".repeat(Math.max(0, width - 1 - text.length))}`;
-				}
-				drawn = lines;
-				return lines;
+				if (said && lines.length > 0) lines[lines.length - 1] = saying(said.text, width);
+				drawn = within(lines, width);
+				return drawn;
 			},
 			key(data) {
 				// Before there is a tree, every key is for the first message: there is nothing else to move to.

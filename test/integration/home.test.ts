@@ -292,7 +292,7 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 	it("is drawn for a light terminal where Pi's theme is light, and points at what is selected", async () => {
 		// Pi's theme follows the terminal's background; here it is chosen, since the test's terminal reports none.
 		writeFileSync(join(sandbox.agentDir, "settings.json"), JSON.stringify({ theme: "light" }));
-		const pi = await withTree({ cols: 160, rows: 40 });
+		const pi = await withTree({ cols: 160, rows: 40, env: { COLORTERM: "truecolor" } });
 		await pi.see(OPEN);
 		pi.press(KEY.altL);
 		const tree = await alone(pi);
@@ -312,6 +312,8 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		const tree = await alone(pi);
 		// The foot always ends with the key that lists the rest.
 		expect(tree.at(-1)).toMatch(/\? {2}keys\s*$/);
+		// This terminal does not say it has 24-bit colour: it is sent none, only the 256 it has.
+		expect(await pi.colors("▸work")).toEqual({});
 		pi.press("?");
 		const list = await pi.see("WHAT IS SELECTED");
 		expect(list.join("\n")).toContain("offer the session on it to a teammate");
@@ -327,4 +329,28 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		const told = await pi.see(/\/lattice server/, 30_000);
 		expect(told.some((row) => OPEN.test(row))).toBe(true);
 	}, 90_000);
+
+	it("draws a session named in characters two cells wide, and Pi keeps running", async () => {
+		// Pi stops with an error on a line wider than the terminal: a name in Chinese, with an emoji, once made the canopy write one.
+		const shop = join(sandbox.root, "shop");
+		mkdirSync(shop);
+		execFileSync("git", ["init", "-q"], { cwd: shop });
+		stateDir = join(realpathSync(shop), ".lattice");
+		const env = { LATTICE_PI_COMMAND: JSON.stringify([process.execPath, piCli]), LATTICE_PI_ARGS: JSON.stringify(fauxArgs), LATTICE_EXTENSION_PATHS: JSON.stringify([extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]) };
+		tui = PiTui.start(sandbox, { cols: 100, rows: 30, cwd: shop, extensions: [extensionPaths.launcher, extensionPaths.pane, extensionPaths.canopy, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph], env });
+		const pi = tui;
+		await pi.see("Your first message starts the tree.");
+		pi.press("\x1b[200~结账流程重构 🚀 を始める\x1b[201~");
+		await pi.see("结账流程重构");
+		pi.press(KEY.enter);
+		const tree = await pi.see(/p\s+sessions/, 30_000);
+		expect(tree.join("\n")).toContain("结账流程重构");
+		expect(tree.join("\n")).not.toContain("exceeds terminal width");
+		// Still there and still taking keys: the list of keys opens, and the chat behind the tree has the message.
+		pi.press("?");
+		await pi.see("WHAT IS SELECTED");
+		pi.press("?");
+		pi.press(KEY.altL);
+		await pi.see(/echo\[user\].*结账流程重构/, 30_000);
+	}, 120_000);
 });

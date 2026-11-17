@@ -5,7 +5,7 @@
  */
 import type { IssueEvent, Steer } from "@pi-lattice/protocol";
 import type { Animation } from "./animate.ts";
-import { Grid, type Style } from "./grid.ts";
+import { cells, Grid, pad, type Style, tail } from "./grid.ts";
 import { cut, type Layout, layout, type Place, type Shape } from "./layout.ts";
 import { type Item, pathTo, ROOT_ID, walk, type World } from "./model.ts";
 import { blend, ease } from "./morph.ts";
@@ -153,7 +153,7 @@ export function frame(state: CanopyState, plan: Layout, width: number, height: n
 		return Math.max(0, Math.min(total - size, next));
 	};
 	if (place) {
-		const reach = [...cut(place.item.name, place.helper ? 16 : plan.nameMax)].length + 6;
+		const reach = cells(cut(place.item.name, place.helper ? 16 : plan.nameMax)) + 6;
 		col = axis(col, win.width, place.col - 2, place.col + reach, plan.width, 4);
 		row = axis(row, win.height, place.row - 1, place.row + 2, plan.height, 2);
 	} else {
@@ -451,7 +451,7 @@ function wrap(text: string, width: number): string[] {
 	const out: string[] = [];
 	let line = "";
 	for (const word of text.split(/\s+/)) {
-		if (line && line.length + 1 + word.length > width) {
+		if (line && cells(line) + 1 + cells(word) > width) {
 			out.push(line);
 			line = word;
 		} else line = line ? `${line} ${word}` : word;
@@ -470,7 +470,7 @@ function run(grid: Grid, col: number, row: number, parts: Array<[text: string, s
 	let at = col;
 	for (const [text, style] of parts) {
 		grid.text(at, row, text, style ?? { fg: COLOR.text });
-		at += [...text].length;
+		at += cells(text);
 	}
 	return at;
 }
@@ -510,7 +510,7 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 	const tips = tipsOf(world);
 	const flow: Array<[string, Style]> = [...(world.changes.length > 0 ? ([[`+${world.changes.length}`, { fg: COLOR.bright, bold: true }], [" changed by agents", DIM], [" · ", DIM]] as Array<[string, Style]>) : []), [state.order === "dependency" ? "first to last" : "as filed", { fg: COLOR.text }], [" · ", DIM], [`${tips.free.length}`, { fg: COLOR.bright }], [" can start", DIM]];
 	if (tips.held.length > 0) flow.push([" · ", DIM], [`⧗${tips.held.length}`, { fg: COLOR.wait }], [" held", DIM]);
-	const long = flow.reduce((sum, [text]) => sum + [...text].length, 0);
+	const long = flow.reduce((sum, [text]) => sum + cells(text), 0);
 	if (at + 3 + long <= width - 1) run(grid, width - 1 - long, 1, flow);
 	return grid;
 }
@@ -523,8 +523,8 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 		return grid;
 	}
 	if (state.typing) {
-		const room = Math.max(8, width - [...state.typing.label].length - (state.typing.what === "find" ? 50 : 30));
-		const shown = [...state.typing.text].slice(-room).join("");
+		const room = Math.max(8, width - cells(state.typing.label) - (state.typing.what === "find" ? 50 : 30));
+		const shown = tail(state.typing.text, room);
 		const keys: Array<[string, Style]> = state.typing.what === "find" ? [[" ⏎ ", KEYCAP], [" stay here   ", DIM], [" tab ", KEYCAP], [" next   ", DIM], [" esc ", KEYCAP], [" back", DIM]] : [[" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]];
 		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], ...keys]);
 		return grid;
@@ -538,7 +538,7 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 	let at = 1;
 	for (const [key, does] of keys) {
 		if (taken.has(key)) continue;
-		if (at + [...key].length + does.length + 4 > room) break;
+		if (at + cells(key) + does.length + 4 > room) break;
 		at = run(grid, at, 0, [[` ${key} `, KEYCAP], [` ${does}   `, DIM]]);
 	}
 	if (last) run(grid, at, 0, [[` ${last[0]} `, KEYCAP], [` ${last[1]}`, DIM]]);
@@ -618,7 +618,7 @@ function helpList(width: number, leave?: ReadonlyArray<readonly [string, string]
 	// What leads out of the canopy depends on where it is shown: those keys come from there, and are said last.
 	const out: ReadonlyArray<readonly [string, string]> = leave ? leave.map(([key, does]) => [key, LEAVES[does] ?? does] as const) : [["esc  q", "back to where the canopy was opened from"]];
 	const all = [...ALL_KEYS, ...(out.length > 0 ? [["Leaving", out] as const] : [])];
-	const keyWidth = Math.max(...all.flatMap(([, keys]) => keys.map(([key]) => [...key].length)));
+	const keyWidth = Math.max(...all.flatMap(([, keys]) => keys.map(([key]) => cells(key))));
 	const room = Math.max(16, width - keyWidth - 8);
 	const rows: Array<Array<[number, string, Style]>> = [];
 	for (const [section, keys] of all) {
@@ -650,8 +650,8 @@ function askingBand(asking: Asking, width: number, away: boolean, typing?: { lab
 	const foot = 2 + text.length;
 	// The line typed instead of an answer is written where the answers were: under what it answers.
 	if (typing) {
-		const room = Math.max(8, width - [...typing.label].length - 8);
-		run(grid, 3, foot, [[`${typing.label} `, amber], ["› ", { fg: COLOR.attention, level: 0.6 }], [`${[...typing.text].slice(-room).join("")}▏`, { fg: COLOR.bright }]]);
+		const room = Math.max(8, width - cells(typing.label) - 8);
+		run(grid, 3, foot, [[`${typing.label} `, amber], ["› ", { fg: COLOR.attention, level: 0.6 }], [`${tail(typing.text, room)}▏`, { fg: COLOR.bright }]]);
 		return grid;
 	}
 	// The keys are not the canopy's while the keyboard is elsewhere: then the band only says what is asked.
@@ -690,7 +690,7 @@ function speakingBand(world: World, state: CanopyState, width: number, now: numb
 	let edge = mine;
 	if (state.typing?.what === "say") {
 		rows.push([[state.typing.label, { fg: mine, bold: true }]]);
-		rows.push([["› ", { fg: mine, level: 0.6 }], [`${[...state.typing.text].slice(-(room - 3)).join("")}▏`, { fg: COLOR.bright }]]);
+		rows.push([["› ", { fg: mine, level: 0.6 }], [`${tail(state.typing.text, room - 3)}▏`, { fg: COLOR.bright }]]);
 		rows.push([["It changes the work to match, and says here what it did.", DIM]]);
 	} else if (state.viewing) {
 		const event = world.changes.find((entry) => changeKey(entry) === state.viewing);
@@ -707,7 +707,7 @@ function speakingBand(world: World, state: CanopyState, width: number, now: numb
 		rows.push([["you  ", { fg: mine, bold: true }], [cut(steer.text, Math.max(8, room - 40)), { fg: COLOR.text }], [`   about ${cut(steer.about, 30)}`, DIM]]);
 		const who = `${steer.to.role}${steer.to.name && steer.to.name !== steer.to.role ? ` on ${cut(steer.to.name, 20)}` : ""}`;
 		if (steer.answer === undefined) rows.push([[`${spin(tick)} `, { fg: mine }], [`${who} is reading it…`, DIM]]);
-		else wrap(steer.answer, Math.max(10, room - who.length - 2)).slice(0, 3).forEach((part, index) => rows.push([[index === 0 ? `${who}  ` : " ".repeat(who.length + 2), DIM], [part, { fg: COLOR.bright }]]));
+		else wrap(steer.answer, Math.max(10, room - cells(who) - 2)).slice(0, 3).forEach((part, index) => rows.push([[index === 0 ? `${who}  ` : " ".repeat(cells(who) + 2), DIM], [part, { fg: COLOR.bright }]]));
 	}
 	const grid = new Grid(width, rows.length + 1);
 	grid.text(0, 0, "─".repeat(width), { fg: edge, level: 0.45 });
@@ -731,8 +731,8 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 		row++;
 	};
 	const kind = kindOf(world, item);
-	line([[cut(item.name, inner - kind.length - 1), { fg: COLOR.bright, bold: true }]]);
-	grid.text(width - 1 - kind.length, 0, kind, DIM);
+	line([[cut(item.name, inner - cells(kind) - 1), { fg: COLOR.bright, bold: true }]]);
+	grid.text(width - 1 - cells(kind), 0, kind, DIM);
 	if (item.issue) {
 		const issue = item.issue;
 		line([[`#${issue.number}`, { fg: COLOR.text }], [`  ${issue.state}  `, DIM], issue.assignee ? [`@${issue.assignee}`, { fg: color }] : ["unassigned", DIM]]);
@@ -800,7 +800,7 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 		for (const other of behind) {
 			const name = cut(other.name, 16);
 			const where = other.parent === item.parent ? "beside it" : other.parent && other.parent.level >= 0 ? `in ${other.parent.name}` : "";
-			line([["  ⧗ ", { fg: COLOR.wait }], [name.padEnd(17)], [cut(where, Math.max(1, inner - 21)), DIM]]);
+			line([["  ⧗ ", { fg: COLOR.wait }], [pad(name, 17)], [cut(where, Math.max(1, inner - 21)), DIM]]);
 		}
 	}
 	const under = [...inOrder(world.flow, item, state.order), ...item.buds];
@@ -813,13 +813,13 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 			const name = cut(child.name, 15);
 			if (child.children.length > 0) {
 				const [full, rest] = bar(child.landed, child.leaves, 8);
-				line([[`${branch} `, { fg: COLOR.faint }], [`${glyphOf(child, tick)} `, glyphStyle(world, child)], [name.padEnd(16)], [full, { fg: colorOf(world, child.owner) }], [rest, { fg: COLOR.faint }], [` ${child.landed}/${child.leaves}`, DIM]]);
+				line([[`${branch} `, { fg: COLOR.faint }], [`${glyphOf(child, tick)} `, glyphStyle(world, child)], [pad(name, 16)], [full, { fg: colorOf(world, child.owner) }], [rest, { fg: COLOR.faint }], [` ${child.landed}/${child.leaves}`, DIM]]);
 			} else {
 				// Held with nobody on it: what it comes after is what there is to say about it.
 				const held = world.flow.held.has(child.id) && !child.agent;
 				const holder = (world.flow.before.get(child.id) ?? []).find((other) => !other.done);
 				const what = child.failed ? "failed" : child.done ? "landed" : child.agent ? `${child.agent.role}, ${stateWord[child.agent.state]}` : held ? (holder ? `after ${holder.name}` : "held") : "can start";
-				line([[`${branch} `, { fg: COLOR.faint }], held ? ["⧗ ", { fg: COLOR.wait }] : [`${glyphOf(child, tick)} `, glyphStyle(world, child)], [name.padEnd(16), child.done || held ? DIM : undefined], [cut(what, inner - 21), DIM]]);
+				line([[`${branch} `, { fg: COLOR.faint }], held ? ["⧗ ", { fg: COLOR.wait }] : [`${glyphOf(child, tick)} `, glyphStyle(world, child)], [pad(name, 16), child.done || held ? DIM : undefined], [cut(what, inner - 21), DIM]]);
 			}
 		});
 	}
@@ -850,7 +850,7 @@ function roster(world: World, state: CanopyState, width: number, height: number,
 			const selected = item.id === state.selected;
 			const where = item.agent?.focus ? world.items.get(item.agent.focus) : undefined;
 			const on = where ? `${cut(item.name, 10)} → ${cut(where.name, 10)}` : cut(item.name, 22);
-			run(grid, 3, row++, [[`${glyphOf(item, tick)} `, glyphStyle(world, item)], [cut(item.agent?.role ?? "", 12).padEnd(13), { fg: color }], [cut(on, width - 19), selected ? { fg: COLOR.bright, bg: COLOR.select } : { fg: COLOR.text }]]);
+			run(grid, 3, row++, [[`${glyphOf(item, tick)} `, glyphStyle(world, item)], [pad(cut(item.agent?.role ?? "", 12), 13), { fg: color }], [cut(on, width - 19), selected ? { fg: COLOR.bright, bg: COLOR.select } : { fg: COLOR.text }]]);
 		}
 		row++;
 	}
@@ -962,7 +962,7 @@ export function sessionFrame(world: World, id: string | undefined, width: number
 		const at = run(grid, 2, 0, [[" "], [glyphOf(item, tick), glyphStyle(world, item)], [" "], [cut(item.name, Math.max(6, room - 30)), { fg: COLOR.bright, bold: true }], [" "]]);
 		// Whose it is comes before what it is doing: with several people in a tree that is the first thing to know.
 		const rest: Array<[string, Style | undefined]> = [[" ", DIM], [`@${item.owner}`, { fg: colorOf(world, item.owner), bold: true }], [mine ? " (you)" : "", DIM], [" · ", DIM], [state, asking ? { fg: COLOR.attention, bold: true } : item.failed ? { fg: COLOR.failed } : DIM], [" ", DIM]];
-		if (at + rest.reduce((sum, [text]) => sum + [...text].length, 0) < width - hint - 4) run(grid, at, 0, rest);
+		if (at + rest.reduce((sum, [text]) => sum + cells(text), 0) < width - hint - 4) run(grid, at, 0, rest);
 	}
 	if (width > hint + 8) run(grid, width - 2 - hint, 0, [[" "], [` ${leave[0]} `, KEYCAP], [` ${leave[1]} `, DIM]]);
 	return grid.lines();

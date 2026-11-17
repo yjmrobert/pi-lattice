@@ -3,7 +3,7 @@
  * says so and takes that message itself, typed or pasted, instead of Pi opening on the chat.
  * Everything here is a function of what is typed and the size: no Pi.
  */
-import { Grid, type Style } from "./grid.ts";
+import { cells, Grid, type Style } from "./grid.ts";
 import { spin } from "./paint.ts";
 import { COLOR } from "./palette.ts";
 
@@ -48,7 +48,7 @@ function run(grid: Grid, col: number, row: number, parts: Array<[text: string, s
 	let at = col;
 	for (const [text, style] of parts) {
 		grid.text(at, row, text, style ?? { fg: COLOR.text });
-		at += [...text].length;
+		at += cells(text);
 	}
 	return at;
 }
@@ -74,7 +74,7 @@ export function wrapMessage(text: string, width: number): string[] {
 }
 
 const centre = (grid: Grid, row: number, parts: Array<[text: string, style?: Style]>): void => {
-	const long = parts.reduce((sum, [text]) => sum + [...text].length, 0);
+	const long = parts.reduce((sum, [text]) => sum + cells(text), 0);
 	run(grid, Math.max(1, Math.floor((grid.width - long) / 2)), row, parts);
 };
 
@@ -106,7 +106,7 @@ export function renderFirst(screen: FirstScreen, width: number, height: number, 
 
 	const edge: Style = starting || screen.away ? { fg: COLOR.faint } : { fg: COLOR.root, level: 0.7 };
 	const title = ` to a new session in ${screen.repo} `;
-	const across = Math.max(0, boxWidth - 3 - [...title].length);
+	const across = Math.max(0, boxWidth - 3 - cells(title));
 	run(grid, left, top, [["╭─", edge], [title, starting ? DIM : { fg: COLOR.text }], [`${"─".repeat(across)}╮`, edge]]);
 	for (let index = 0; index < tall; index++) {
 		const row = top + 1 + index;
@@ -119,7 +119,7 @@ export function renderFirst(screen: FirstScreen, width: number, height: number, 
 	}
 	if (rows.length === 0 && !starting && !screen.away) run(grid, left + 2, top + 1, [["▏", { fg: COLOR.root }], ["type or paste it here", { fg: COLOR.faint }]]);
 	const count = rows.length > 1 ? ` ${rows.length} lines${rows.length > shown.length ? `, the last ${shown.length} shown` : ""} ` : "";
-	const under = Math.max(0, boxWidth - 3 - [...count].length);
+	const under = Math.max(0, boxWidth - 3 - cells(count));
 	run(grid, left, top + tall + 1, [[`╰${"─".repeat(under)}`, edge], [count, DIM], ["─╯", edge]]);
 
 	const keys: Array<[string, string]> = [];

@@ -4,7 +4,7 @@
  * and amber blinks. No Pi, no terminal.
  */
 import { type Animation, centre, progress, trail } from "./animate.ts";
-import { Grid, type Style } from "./grid.ts";
+import { cells, Grid, type Style } from "./grid.ts";
 import { chipOf, cut, type Layout, type Place, under } from "./layout.ts";
 import type { Agent, Item, World } from "./model.ts";
 import { COLOR, colorOf, letterOf } from "./palette.ts";
@@ -168,8 +168,8 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 	const rootPlace = plan.places.get(world.root.id) as Place;
 	const people = world.people.length;
 	const rootLabel = `${world.root.name}${people > 1 ? ` · ${people} people` : ""}`;
-	grid.text(rootPlace.col - Math.floor(rootLabel.length / 2), rootPlace.row + 2, world.root.name, { fg: COLOR.root, bold: true });
-	grid.text(rootPlace.col - Math.floor(rootLabel.length / 2) + world.root.name.length, rootPlace.row + 2, rootLabel.slice(world.root.name.length), { fg: COLOR.dim });
+	grid.text(rootPlace.col - Math.floor(cells(rootLabel) / 2), rootPlace.row + 2, world.root.name, { fg: COLOR.root, bold: true });
+	grid.text(rootPlace.col - Math.floor(cells(rootLabel) / 2) + cells(world.root.name), rootPlace.row + 2, rootLabel.slice(world.root.name.length), { fg: COLOR.dim });
 
 	// Between two side by side, the second of which waits on the first. It dims once the first is finished.
 	for (const [id, on] of plan.follows) {
@@ -222,7 +222,7 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 			const glyph = item.failed ? "✗" : item.done ? "✓" : item.agent ? agentGlyph(item.agent, frame) : held ? "⧗" : "○";
 			grid.text(col, row, glyph, item.failed ? { fg: COLOR.failed } : asking ? amber : held ? { fg: grey(item, COLOR.wait) } : { fg: item.planned ? grey(item, COLOR.dim) : color, level: strength(item, 1) });
 			grid.text(col + 2, row, name, nameStyle);
-			const at = marks(col + 3 + [...name].length);
+			const at = marks(col + 3 + cells(name));
 			if (item.owner !== "" && item.parent && item.parent.owner !== item.owner) grid.text(at, row, `@${item.owner}`, { fg: color, level: strength(item, 1) });
 			else if (options.letters) grid.text(at, row, letterOf(world, item.owner), { fg: color });
 			continue;
@@ -241,7 +241,7 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		}
 		grid.text(col, row, item.failed ? "✗" : landed ? "✓" : item.agent ? "◉" : "○", { fg: item.failed ? COLOR.failed : item.agent || landed ? color : grey(item, COLOR.dim), level: strength(item, 1) });
 		grid.text(col + 2, row, name, nameStyle);
-		let at = marks(col + 3 + [...name].length);
+		let at = marks(col + 3 + cells(name));
 		if (options.folded?.has(item.id)) grid.text(at, row, `+${under(item)}`, { fg: grey(item, COLOR.dim) });
 
 		// Under the name: who sits here, how far along it is, and whose it is.
@@ -257,10 +257,10 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 			grid.text(at, row + 1, agentGlyph(item.agent, frame), item.agent.state === "asking" ? amber : { fg: item.agent.state === "failed" ? COLOR.failed : color, level: strength(item, 1) });
 			// The agent's name is in the colour of whoever runs it, which on an issue need not be who the issue is for.
 			grid.text(at + 2, row + 1, chip.agent, { fg: item.agent.owner && lit(item) ? colorOf(world, item.agent.owner) : color, level: strength(item, 1) });
-			at += 2 + chip.agent.length;
+			at += 2 + cells(chip.agent);
 		} else if (chip.agent) {
 			grid.text(at, row + 1, chip.agent, { fg: grey(item, COLOR.dim) });
-			at += chip.agent.length;
+			at += cells(chip.agent);
 		}
 		if (chip.progress) {
 			sep();
@@ -271,7 +271,7 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		if (chip.owner) {
 			sep();
 			grid.text(at, row + 1, chip.owner, { fg: color, level: strength(item, 1) });
-			at += chip.owner.length;
+			at += cells(chip.owner);
 		} else if (options.letters) {
 			sep();
 			grid.text(at, row + 1, letterOf(world, item.owner), { fg: color });
