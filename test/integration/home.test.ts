@@ -343,8 +343,7 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		pi.press("\x1b[200~结账流程重构 🚀 を始める\x1b[201~");
 		await pi.see("结账流程重构");
 		pi.press(KEY.enter);
-		const tree = await pi.see(/p\s+sessions/, 30_000);
-		expect(tree.join("\n")).toContain("结账流程重构");
+		const tree = await pi.waitFor((screen) => /p\s+sessions/.test(screen) && screen.includes("结账流程重构"), "the tree, with the session named as it was written", 30_000);
 		expect(tree.join("\n")).not.toContain("exceeds terminal width");
 		// Still there and still taking keys: the list of keys opens, and the chat behind the tree has the message.
 		pi.press("?");

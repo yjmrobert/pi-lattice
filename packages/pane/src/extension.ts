@@ -315,10 +315,11 @@ function startsHere(): { repo: string; starting: boolean } | undefined {
 		const ctx = shared.ctx;
 		if (!ctx?.hasUI || shared.current) return undefined;
 		const link = homeLink();
+		const repo = basename(projectRoot(ctx.cwd));
+		// Until the session that started it is in the tree, the tree is starting: its host may answer before it has anything to draw.
+		if (shared.starting) return { repo, starting: true };
 		// A tree that is here, or not yet read: what it has is drawn, not a first message.
 		if (link && (!link.state || link.state.nodes.some((node) => !node.archived))) return undefined;
-		const repo = basename(projectRoot(ctx.cwd));
-		if (shared.starting) return { repo, starting: true };
 		if (link) return toggleSetting(settings().settings, "pane.autoJoin") ? { repo, starting: false } : undefined;
 		// The same conditions as the first message itself: see before_agent_start.
 		return autoStarts() && !process.env.LATTICE_STATE_DIR ? { repo, starting: false } : undefined;

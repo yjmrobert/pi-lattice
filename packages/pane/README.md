@@ -20,6 +20,7 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 - **A project with sessions**: they are listed straight away, with nothing typed. A session you just opened joins the list with your first message, named after what you asked.
 - **A git repository with none**: Pi opens on an empty canopy that says so, and the first message, typed or pasted there, starts a tree with that session as its root. Nothing else to type.
 - **Any other directory**: the pane says so. Run `/lattice` once to start a tree from the session you are in.
+- **With work in another repository**: Pi opens on the canopy with that work on it, whichever of these the directory is. This repository is one item there until something is started in it.
 
 | Key or command | Does |
 |---|---|
@@ -43,7 +44,7 @@ Open `pi` in a project as usual. The pane is on the left as soon as it opens:
 | `/lattice scheme [edit]` | How the team structures its work: types, states, fields, and which results get a reviewer |
 | `/lattice on <issue \| none>` | Say which issue the session open here is on |
 | `/lattice team` | The people on your server: who is here, what is being handed over, a teammate's changed key, and looking for teammates again, which says which addresses were tried and why they did not answer |
-| `o` / `/lattice offer <name> [person]` | Offer one of your sessions to a teammate. It is theirs as soon as they accept. With no server joined, `o` says how to join one |
+| `o` / `/lattice offer <name> [person]` | Offer one of your sessions to a teammate. It is theirs as soon as they accept. With no server joined, `o` says how to join one. `o` on the canopy does the same for the session on the selected item |
 | `t` / `/lattice take <name>` | Ask a teammate for one of their sessions. It is yours as soon as they approve. `t` again takes the request back. For a session in a repository that is not on this machine, the repository is cloned first, after showing you where from and where to |
 | `enter` on a teammate's session | Read its conversation. While it is under the cursor, what it last did is shown beside the pane and kept up to date |
 | `/lattice approve <name> [person]` | Hand a session to the teammate who asked for it |
