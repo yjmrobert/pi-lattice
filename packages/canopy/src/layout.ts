@@ -1,6 +1,7 @@
 /**
- * Where everything goes. The canopy is laid out at whatever size its labels need; the screen is
- * a window on it. Height is the level of the work: an item is always above its parent. The
+ * Where everything goes. The canopy is laid out at the size its labels need, and the screen is
+ * a window on it; told how much room the window has, it draws in to fit before anything has to
+ * be scrolled to. Height is the level of the work: an item is always above its parent. The
  * last level is drawn as a frond: its items listed one above the other on a stem.
  * Positions are in cells, branch paths in braille dots. No Pi, no terminal.
  */
@@ -35,6 +36,10 @@ export interface Layout {
 	order: Order;
 	/** Items that wait on the one placed just before them, by id: order says it, and a mark between the two. */
 	follows: Map<string, Item>;
+	/** The most characters of a name that are written: fewer where the tree was drawn in to fit. */
+	nameMax: number;
+	/** Rows between one level and the next: fewer where the tree was drawn in to fit. */
+	band: number;
 }
 
 export interface LayoutOptions {
@@ -43,17 +48,47 @@ export interface LayoutOptions {
 	folded?: ReadonlySet<string>;
 	/** What must come first is on the left, and at the bottom of a frond; or everything as it was filed. */
 	order?: Order;
+	/** The cells there are to draw in. The tree keeps its full size while it fits, and draws in when it does not. */
+	room?: { width: number; height: number };
 }
 
-/** Rows between one level and the next. */
-const BAND = 9;
-const GAP = 3;
-const MARGIN = 2;
-/** Room above the highest item, for the arcs between things that wait on each other. */
-const HEADROOM = 5;
+/** How close together the tree is drawn. */
+interface Density {
+	/** Rows between one level and the next. */
+	band: number;
+	/** Rows from the root to the first level. */
+	base: number;
+	/** How far an item may sit above or below its level when the tree is grown, in rows. */
+	sway: number;
+	/** Room above the highest item, for the arcs between things that wait on each other. */
+	headroom: number;
+	nameMax: number;
+	/** Cells between two things side by side, and at the edges of the tree. */
+	gap: number;
+	margin: number;
+}
+
+type Rows = Pick<Density, "band" | "base" | "sway" | "headroom">;
+type Columns = Pick<Density, "nameMax" | "gap" | "margin">;
+
+/** With all the room it wants, and then drawn in step by step. The last still leaves a row of branch between an item and what is under it. */
+const DENSITIES: ReadonlyArray<Rows> = [
+	{ band: 9, base: 8, sway: 2, headroom: 5 },
+	{ band: 7, base: 7, sway: 1, headroom: 3 },
+	{ band: 6, base: 6, sway: 1, headroom: 3 },
+	{ band: 5, base: 5, sway: 0, headroom: 2 },
+	{ band: 4, base: 5, sway: 0, headroom: 2 },
+];
+/** Across: the longest a name is written and the room between things, then closer together, then with shorter names. */
+const WIDTHS: ReadonlyArray<Columns> = [
+	{ nameMax: 24, gap: 3, margin: 2 },
+	{ nameMax: 24, gap: 2, margin: 1 },
+	{ nameMax: 18, gap: 2, margin: 1 },
+	{ nameMax: 14, gap: 2, margin: 1 },
+];
 /** Dots a branch climbs upright before it reaches an item. */
 const ARRIVE = 9;
-export const NAME_MAX = 24;
+export const NAME_MAX: number = (WIDTHS[0] as Columns).nameMax;
 
 export const cut = (name: string, max = NAME_MAX): string => ([...name].length > max ? `${[...name].slice(0, max - 1).join("")}…` : name);
 
@@ -75,8 +110,8 @@ const marksWidth = (item: Item, behind: number, folded = false): number =>
 	(item.asks > 0 ? 2 + String(item.asks).length : 0) + (behind > 0 ? 2 + String(behind).length : 0) + (folded ? 2 + String(under(item)).length : 0) + ((item.issue?.directions ?? []).length > 0 ? 2 : 0) + (item.fresh ? 2 : 0);
 /** How many items are under one: what a folded item says it holds. */
 export const under = (item: Item): number => item.children.reduce((sum, child) => sum + 1 + under(child), item.buds.length);
-const labelWidth = (item: Item, behind: number, folded = false): number => 2 + Math.max([...cut(item.name)].length + marksWidth(item, behind, folded), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + [...cut(bud.name, 16)].length));
-const leafWidth = (item: Item, behind: number): number => 2 + [...cut(item.name)].length + marksWidth(item, behind) + (item.parent && item.parent.owner !== item.owner ? item.owner.length + 2 : 0);
+const labelWidth = (item: Item, behind: number, folded: boolean, nameMax: number): number => 2 + Math.max([...cut(item.name, nameMax)].length + marksWidth(item, behind, folded), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + [...cut(bud.name, 16)].length));
+const leafWidth = (item: Item, behind: number, nameMax: number): number => 2 + [...cut(item.name, nameMax)].length + marksWidth(item, behind) + (item.parent && item.parent.owner !== item.owner ? item.owner.length + 2 : 0);
 
 /** A small stable number from an id, so the same tree always grows the same way. */
 function hash(text: string): number {
@@ -101,7 +136,37 @@ function bend(ax: number, ay: number, bx: number, top: number): Array<[number, n
 	return out;
 }
 
+/**
+ * Lay the tree out. With room given, the first of these that fits is drawn: the tree as it likes
+ * to be, then with its levels closer together, then with its names shorter. What fits no way is
+ * drawn as close as it goes in the direction that is short, and scrolled.
+ */
 export function layout(world: World, options: LayoutOptions = {}): Layout {
+	const room = options.room;
+	const roomy = WIDTHS[0] as Columns;
+	if (!room) return arrange(world, options, { ...(DENSITIES[0] as Rows), ...roomy });
+	// Helpers are written under an item, a row each: levels may not come closer than leaves them room.
+	let helpers = 0;
+	for (const item of world.items.values()) if (!options.folded?.has(item.id)) helpers = Math.max(helpers, Math.min(2, item.buds.length));
+	const densities = DENSITIES.filter((density, index) => index === 0 || density.band >= 4 + helpers);
+	let rows = densities[0] as Rows;
+	let plan = arrange(world, options, { ...rows, ...roomy });
+	for (const density of densities.slice(1)) {
+		if (plan.height <= room.height) break;
+		rows = density;
+		plan = arrange(world, options, { ...rows, ...roomy });
+	}
+	if (plan.width <= room.width) return plan;
+	for (const columns of WIDTHS.slice(1)) {
+		const narrower = arrange(world, options, { ...rows, ...columns });
+		if (narrower.width <= room.width) return narrower;
+	}
+	// Too wide whatever is done: the names are kept whole, since it is scrolled either way.
+	return plan;
+}
+
+function arrange(world: World, options: LayoutOptions, density: Density): Layout {
+	const { band, base, sway, headroom, nameMax, gap: GAP, margin: MARGIN } = density;
 	const shape = options.shape ?? "grown";
 	const folded = options.folded ?? new Set<string>();
 	const last = world.levels.length - 1;
@@ -110,13 +175,13 @@ export function layout(world: World, options: LayoutOptions = {}): Layout {
 	const open = (item: Item): Item[] => (folded.has(item.id) ? [] : inOrder(world.flow, item, order));
 	const leavesOf = (item: Item): Item[] => open(item).filter((child) => child.level >= last && child.children.length === 0);
 	const limbsOf = (item: Item): Item[] => open(item).filter((child) => !(child.level >= last && child.children.length === 0));
-	const frondWidth = (item: Item): number => Math.max(0, ...leavesOf(item).map((leaf) => leafWidth(leaf, behind(leaf))));
+	const frondWidth = (item: Item): number => Math.max(0, ...leavesOf(item).map((leaf) => leafWidth(leaf, behind(leaf), nameMax)));
 
 	const widths = new Map<string, number>();
 	const widthOf = (item: Item): number => {
 		const limbs = limbsOf(item);
 		const frond = frondWidth(item);
-		const own = item.level < 0 ? [...item.name].length + 12 : labelWidth(item, behind(item), folded.has(item.id));
+		const own = item.level < 0 ? [...item.name].length + 12 : labelWidth(item, behind(item), folded.has(item.id), nameMax);
 		const below = limbs.length === 0 ? frond : limbs.reduce((sum, limb) => sum + widthOf(limb) + GAP, frond > 0 ? frond : -GAP);
 		const width = Math.max(own, below);
 		widths.set(item.id, width);
@@ -129,8 +194,8 @@ export function layout(world: World, options: LayoutOptions = {}): Layout {
 	const follows = new Map<string, Item>();
 	// Rows are counted upward from the root at 0, and turned the right way up at the end.
 	const rowOf = (item: Item): number => {
-		const lift = shape === "grown" ? (hash(item.id) % 5) - 2 : 0;
-		return -(8 + item.level * BAND) + lift;
+		const lift = shape === "grown" && sway > 0 ? (hash(item.id) % (sway * 2 + 1)) - sway : 0;
+		return -(base + item.level * band) + lift;
 	};
 	let top = 0;
 
@@ -183,7 +248,7 @@ export function layout(world: World, options: LayoutOptions = {}): Layout {
 			at += (widths.get(limb.id) ?? 0) + GAP;
 		}
 		const centre = Math.round(((cols[0] as number) + (cols.at(-1) as number)) / 2);
-		const own = item.level < 0 ? 0 : labelWidth(item, behind(item), folded.has(item.id));
+		const own = item.level < 0 ? 0 : labelWidth(item, behind(item), folded.has(item.id), nameMax);
 		const col = Math.max(x0, Math.min(centre, x0 + width - own));
 		places.set(item.id, { item, col, row, leaf: false });
 		const fromY = item.level < 0 ? row * 4 - 5 : row * 4 - 1;
@@ -203,9 +268,9 @@ export function layout(world: World, options: LayoutOptions = {}): Layout {
 	put(world.root, MARGIN);
 
 	// Turn it the right way up: headroom above the highest thing, the root near the bottom.
-	const shift = HEADROOM - top;
+	const shift = headroom - top;
 	for (const place of places.values()) place.row += shift;
 	for (const branch of branches) for (const point of branch.points) point[1] += shift * 4;
 	const rootPlace = places.get(world.root.id) as Place;
-	return { width: total + MARGIN * 2, height: rootPlace.row + 3, places, branches, root: [rootPlace.col * 2 + 1, rootPlace.row * 4 + 1], order, follows };
+	return { width: total + MARGIN * 2, height: rootPlace.row + 3, places, branches, root: [rootPlace.col * 2 + 1, rootPlace.row * 4 + 1], order, follows, nameMax, band };
 }

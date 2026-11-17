@@ -186,7 +186,7 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		const landed = item.leaves > 0 && item.landed === item.leaves;
 		const asking = item.asks > 0 || item.agent?.state === "asking";
 		const amber: Style = { fg: grey(item, COLOR.attention), level: blink || frame === 0 ? 1 : 0.45, bold: true };
-		const name = cut(item.name);
+		const name = cut(item.name, plan.nameMax);
 		// Held with nobody on it: it is dim until what holds it is finished. What nobody is on and nothing holds reads like work.
 		const held = world.flow.held.has(item.id) && !item.agent && !landed;
 		const behind = world.flow.behind.get(item.id)?.length ?? 0;

@@ -140,7 +140,7 @@ export function frame(state: CanopyState, plan: Layout, width: number, height: n
 		return Math.max(0, Math.min(total - size, next));
 	};
 	if (place) {
-		const reach = [...cut(place.item.name)].length + 6;
+		const reach = [...cut(place.item.name, plan.nameMax)].length + 6;
 		col = axis(col, win.width, place.col - 2, place.col + reach, plan.width, 4);
 		row = axis(row, win.height, place.row - 1, place.row + 2, plan.height, 2);
 	} else {
@@ -150,7 +150,22 @@ export function frame(state: CanopyState, plan: Layout, width: number, height: n
 	return { ...state, camera: { col, row }, framed: true };
 }
 
-export const planOf = (world: World, state: CanopyState): Layout => layout(world, { shape: state.shape, folded: state.folded, order: state.order });
+/** One world is laid out many times while a frame is drawn and a key is read: each way it is asked for is worked out once. */
+const plans = new WeakMap<World, Map<string, Layout>>();
+
+/**
+ * The tree as it is drawn for a state. Given the size of the screen, it is drawn in to fit the
+ * window on it where it can; without, it is the size it likes to be.
+ */
+export function planOf(world: World, state: CanopyState, width?: number, height?: number): Layout {
+	const room = width !== undefined && height !== undefined && width >= FLOOR.cols && height >= FLOOR.rows ? windowOf(state, width, height) : undefined;
+	const key = `${state.shape}|${state.order}|${[...state.folded].sort().join(",")}|${room ? `${room.width}x${room.height}` : ""}`;
+	const known = plans.get(world) ?? new Map<string, Layout>();
+	plans.set(world, known);
+	const plan = known.get(key) ?? layout(world, { shape: state.shape, folded: state.folded, order: state.order, ...(room ? { room } : {}) });
+	known.set(key, plan);
+	return plan;
+}
 
 /** What nobody is on and nothing holds, among the tips, and what is held there. */
 const tipsOf = (world: World): { free: Item[]; held: Item[] } => {
@@ -185,7 +200,7 @@ const ARROWS: Record<string, "up" | "down" | "left" | "right"> = { up: "up", dow
 
 /** What a key does. Returns the next state and what the host of the screen must do. */
 export function interpret(world: World, state: CanopyState, key: CanopyKey, width: number, height: number, asking?: Asking): { state: CanopyState; actions: CanopyAction[] } {
-	const plan = planOf(world, state);
+	const plan = planOf(world, state, width, height);
 	const here = state.selected ? plan.places.get(state.selected) : undefined;
 	const item = here?.item;
 	const go = (id: string | undefined): { state: CanopyState; actions: CanopyAction[] } => ({ state: id ? frame({ ...state, selected: id }, plan, width, height) : state, actions: [] });
@@ -264,11 +279,15 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 	}
 	if (key === "o") {
 		const next: CanopyState = { ...state, order: state.order === "dependency" ? "filed" : "dependency" };
-		return keep(frame(next, planOf(world, next), width, height));
+		return keep(frame(next, planOf(world, next, width, height), width, height));
 	}
-	if (key === "a") return keep(frame({ ...state, side: state.side === "inspector" ? "roster" : state.side === "roster" ? "none" : "inspector" }, plan, width, height));
+	if (key === "a") {
+		// The panel takes room from the tree, or gives it back: the tree is drawn for the room there is now.
+		const next: CanopyState = { ...state, side: state.side === "inspector" ? "roster" : state.side === "roster" ? "none" : "inspector" };
+		return keep(frame(next, planOf(world, next, width, height), width, height));
+	}
 	if (key === "i") return keep({ ...state, letters: !state.letters });
-	if (key === "r") return keep(frame({ ...state, shape: state.shape === "grown" ? "ruled" : "grown" }, planOf(world, { ...state, shape: state.shape === "grown" ? "ruled" : "grown" }), width, height, true));
+	if (key === "r") return keep(frame({ ...state, shape: state.shape === "grown" ? "ruled" : "grown" }, planOf(world, { ...state, shape: state.shape === "grown" ? "ruled" : "grown" }, width, height), width, height, true));
 	if (key === "0") return keep({ ...state, spotlight: undefined });
 	if (/^[1-9]$/.test(key)) {
 		const person = world.people[Number(key) - 1];
@@ -280,7 +299,7 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 		const folded = new Set(state.folded);
 		if (!folded.delete(item.id)) folded.add(item.id);
 		const next = { ...state, folded };
-		return keep(frame(next, planOf(world, next), width, height));
+		return keep(frame(next, planOf(world, next, width, height), width, height));
 	}
 	if (key === "enter") {
 		if (state.folded.has(item.id)) return interpret(world, state, "f", width, height);
@@ -675,7 +694,7 @@ export interface Moving {
 }
 
 /** The state with its window placed on the tree, as it is drawn. */
-export const placed = (world: World, state: CanopyState, width: number, height: number): CanopyState => (state.framed || width < FLOOR.cols || height < FLOOR.rows ? state : frame(state, planOf(world, state), width, height, true));
+export const placed = (world: World, state: CanopyState, width: number, height: number): CanopyState => (state.framed || width < FLOOR.cols || height < FLOOR.rows ? state : frame(state, planOf(world, state, width, height), width, height, true));
 
 function compose(world: World, state: CanopyState, width: number, height: number, tick: number, moving: Moving | undefined, lines: (grid: Grid, col?: number, row?: number, width?: number, height?: number) => string[]): string[] {
 	if (width < FLOOR.cols || height < FLOOR.rows) {
@@ -684,7 +703,7 @@ function compose(world: World, state: CanopyState, width: number, height: number
 		run(grid, 1, 2, [[`This terminal is ${width} by ${height}. esc goes back.`, DIM]]);
 		return lines(grid);
 	}
-	const plan = planOf(world, state);
+	const plan = planOf(world, state, width, height);
 	const view = state.framed ? state : frame(state, plan, width, height, true);
 	const win = windowOf(view, width, height);
 	const side = sideWidth(view, width);
@@ -714,7 +733,7 @@ export const render = (world: World, state: CanopyState, width: number, height: 
 /** Where what is selected is drawn on the screen, in cells: where something opened from it starts. */
 export function anchorOf(world: World, state: CanopyState, width: number, height: number): { col: number; row: number } | undefined {
 	if (width < FLOOR.cols || height < FLOOR.rows) return undefined;
-	const plan = planOf(world, state);
+	const plan = planOf(world, state, width, height);
 	const view = state.framed ? state : frame(state, plan, width, height, true);
 	const place = view.selected ? plan.places.get(view.selected) : undefined;
 	if (!place) return undefined;

@@ -12,29 +12,29 @@
                          ⡇◉ Enter a card ●1                                                                   │ UNDER IT
                          ⠈⢺⠊● implementation · 1/3                                                            │ └ · sam-review      review, idle
                           ⢸                                                                                   │
-                          ⢸                                                                                   │
-                         ⢀⠏                                                                                   │
-                       ⣀⠴⠋                                                                                    │
-  ⢠⠤⠋ Total is wrong⡤@yan                                                                                     │
-  ⢸             ⣠⠔⠋⠁                                                                                          │
-  ⢸            ⡜⠁                                                                                             │
-  ⠸⠤⠤⠤⠤⠤⢤⣀⣀⣀⣀⣀⣸⠁                                                                                              │
-              ○ Pay by card                          ○ Refunds                                                │
-              ⢸ doing · 1/4 · @sam                   ⢸ todo · @teo                                            │
-              ⢸                                      ⢸                                                        │
-              ⠸⣄⣀                                   ⣀⡼                                                        │
-                ⠈⠉⠙⠒⠒⠒⠢⠤⠤⠤⠤⣀⣀⣀⣀       ⢀⣀⣀⣀⡤⠤⠤⠤⠖⠒⠒⠚⠉⠉                                                          │
-                              ⠈⠉⠙⠒⢦⠖⠊⠉⠉                                                                       │
-                                  ○ Checkout                                           ⢀⠤⢄                    │
-                                  ⢸⡇doing · 1/5 · @yan                 ⢠⠤○ Loose end   ⡇◉ scratch           ⢀⠤│
-                                  ⢸⡇                                   ⢸               ⠈⢺⡏· scratch · @yan  ⡇◉│
-                                  ⢸⣇                                   ○ Search         ⢸⡇                  ⠈⢺│
-                                   ⠉⠓⠦⣤⣀⡀                              ⢸⡇todo · 0/1     ⣸⡇                   ⢸│
-                                        ⠉⠉⠛⠒⠒⠦⠤⠤⣤⣀⣀⣀⡀                  ⢸⡇            ⣀⣠⠾⠋                   ⣀⣼│
-                                                   ⠈⠉⠉⠉⠙⠓⠒⠒⠶⠤⠤⢤⣀⣀⣀     ⢸⡇    ⢀⣀⣀⡤⠴⠒⠚⠋⠉        ⣀⣀⣀⣀⣀⣠⠤⠤⠤⠴⠒⠒⠛⠉⠉ │
-                                                                 ⠉⠉⠙⠒⠶⢤⣘⣷⣀⣤⠖⣛⣉⣁⡤⠤⠤⠤⠖⠒⠒⠒⠒⠚⠉⠉⠉⠉⠉⠁               │
-                                                                      ⢀⢌⢿⣿⢟⠉⠉                                 │
+                          ⣸                                                                                   │
+  ⢠⠤⠋ Total is wrong @yan⠴⠃                                                                                   │
+  ⢸               ⢀⣀⠤⠔⠚⠉                                                                                      │
+  ⢸            ⣠⠴⠊⠉                                                                                           │
+  ⠸⠤⠤⠤⠤⠤⢤⣀⣀⣀⣀⣀⣰⠃                                                                                              │
+              ○ Pay by card                                                                                   │
+              ⢸ doing · 1/4 · @sam                   ○ Refunds                                                │
+              ⢸                                      ⢸ todo · @teo                                            │
+              ⠸⣀                                     ⢸                                                        │
+               ⠈⠑⠒⠤⠤⣄⣀⣀⡀                            ⣀⡼                 ⢠⠤○ Loose end                          │
+                       ⠉⠉⠉⠓⠒⠒⠦⠤⢄⣀     ⢀⣀⣀⣀⡤⠤⠤⠤⠖⠒⠒⠚⠉⠉                   ⢸                                    ⢀⠤│
+                                 ⠙⢢⠖⠊⠉⠉                                ○ Search                             ⡇◉│
+                                  ○ Checkout                           ⢸⡇todo · 0/1    ⢀⠤⢄                  ⠈⢺│
+                                  ⢸⡇doing · 1/5 · @yan                 ⢸⡇              ⡇◉ scratch            ⢸│
+                                  ⢸⡇                                   ⢸⡇              ⠈⢺⡏· scratch · @yan  ⣀⣼│
+                                  ⠸⢧⣄⣀⣀                                ⠸⣧               ⢸⡇    ⣀⣀⣀⣀⣀⣠⠤⠤⠤⠴⠒⠒⠛⠉⠉ │
+                                      ⠉⠉⠉⠉⠙⠒⠒⠒⠒⠒⠒⠲⠦⠤⠤⠤⠤⠤⠤⢤⣄⣀⣀⣀⣀⣀⣀⡀      ⢿⡄  ⣀⣀⣀⡤⠤⠤⠤⢖⣒⣒⣒⣶⠾⠏⠉⠉⠉⠉⠁               │
+                                                                 ⠉⠉⠉⠉⠛⢒⢶⢾⣷⢿⠛⠛⠒⠋⠉⠉⠉⠉⠉                          │
                                                                      ⢔⢵⣷⣿⣷⣷⢕⠄                                 │
                                                                      ⢕⢿⣿⣿⣿⣿⢗⠅                                 │
                                                                      ⠑⢝⢟⢿⢟⢟⠕⠁                                 │
+                                                         lattice.example.com · 3 people                       │
+                                                                                                              │
+                                                                                                              │
+                                                                                                              │
   ←↑↓→  move    space  say what you want    tab  next that needs someone    s  put this session on it    .  next to start    o  as filed

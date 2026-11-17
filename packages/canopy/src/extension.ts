@@ -195,7 +195,7 @@ export default function (pi: ExtensionAPI) {
 				const now = Date.now();
 				moving = advance(moving, motion === "full" ? happenings(before, world) : [], world, now);
 				// Something changed place among its siblings: the tree moves there, as it does when an item is folded.
-				if (motion !== "off" && !morph && reordered(before, world, state.order)) morph = { from: planOf(before, state), camera: state.camera, start: now };
+				if (motion !== "off" && !morph && reordered(before, world, state.order)) morph = { from: planOf(before, state, width, place.height()), camera: state.camera, start: now };
 				// What was selected may be gone: archived, or handed to someone whose tree is not shown.
 				// Nothing may be selected yet either: the canopy was put in the layout before there was a tree.
 				if (!state.selected || !world.items.has(state.selected)) {
@@ -254,7 +254,7 @@ export default function (pi: ExtensionAPI) {
 				const was = state;
 				const next = interpret(world, state, key, width, place.height(), asking);
 				state = next.state;
-				if (motion !== "off" && state.folded !== was.folded) morph = { from: planOf(world, was), camera: was.camera, start: Date.now() };
+				if (motion !== "off" && state.folded !== was.folded) morph = { from: planOf(world, was, width, place.height()), camera: was.camera, start: Date.now() };
 				if (place.memory) place.memory.state = state;
 				for (const action of next.actions) {
 					if (action.do === "close") return place.back();
