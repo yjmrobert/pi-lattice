@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildWorld, Grid, type Item, layout, paint, pathTo, ROOT_ID, roleOf, walk } from "../src/index.ts";
+import { buildWorld, Grid, type Item, layout, paint, pathTo, ROOT_ID, roleOf, rollup, walk } from "../src/index.ts";
 import { colorOf, letterOf, PEOPLE } from "../src/palette.ts";
 import { HARBOR, LEVELS, world } from "./fixture.ts";
 
@@ -132,12 +132,36 @@ describe("the layout", () => {
 		expect(paint(harbor(), layout(harbor())).plain()).toEqual(once);
 	});
 
-	it("folds an item to one node", () => {
+	it("folds an item to one line on the frond of what it is under", () => {
 		const w = harbor();
 		const plan = layout(w, { folded: new Set(["checkout-v2"]) });
 		expect(plan.places.has("payments")).toBe(false);
-		expect(plan.places.has("checkout-v2")).toBe(true);
+		expect(plan.places.get("checkout-v2")?.leaf).toBe(true);
 		expect(plan.width).toBeLessThan(layout(w).width);
+		// Folded items that are beside each other are one above the other: it is the width they give back.
+		const all = layout(w, { folded: new Set(w.root.children.map((epic) => epic.id)) });
+		const places = w.root.children.map((epic) => all.places.get(epic.id));
+		expect(new Set(places.map((place) => place?.col)).size).toBe(1);
+		expect(new Set(places.map((place) => place?.row)).size).toBe(3);
+		expect(all.width).toBeLessThan(60);
+		// Under one that is open, a folded item is on a frond beside the limbs.
+		const one = layout(w, { folded: new Set(["cart"]) });
+		expect(one.places.get("cart")?.leaf).toBe(true);
+		expect(one.places.get("payments")?.leaf).toBe(false);
+		expect(one.places.get("cart")?.row).toBeLessThan(one.places.get("checkout-v2")?.row ?? 0);
+	});
+
+	it("says on a folded item's line everything under it that a person would open it for", () => {
+		const w = harbor();
+		// Two tasks ask, and the reviewer on the story above one of them: none of it is out of sight for being folded.
+		expect(rollup(w.items.get("checkout-v2") as Item)).toEqual({ progress: "6/15", asks: 3, people: ["yan"], fresh: 0 });
+		expect(rollup(w.items.get("pricing-migration") as Item)).toMatchObject({ progress: "3/10", asks: 1, people: ["sam"] });
+		const text = paint(w, layout(w, { folded: new Set(["checkout-v2", "pricing-migration", "sso-rollout"]) })).plain().join("\n");
+		expect(text).toContain("⠋ checkout-v2 6/15 ●3 y");
+		expect(text).toContain("⠋ pricing-migration 3/10 ●1 s");
+		expect(text).toContain("⠋ sso-rollout 2/6 m");
+		// A helper that asks is counted as well: a review is under the item it helps.
+		expect(rollup(w.items.get("invoices") as Item).people).toEqual(["sam"]);
 	});
 
 	it("cuts a long name and keeps the rest of the label", () => {

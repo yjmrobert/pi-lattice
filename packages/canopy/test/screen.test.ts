@@ -172,12 +172,13 @@ describe("acting", () => {
 		expect(interpret(w, initial(w), "escape", W, H).actions).toEqual([{ do: "close" }]);
 	});
 
-	it("folds an item to one node and unfolds it", () => {
+	it("folds an item to one line and unfolds it", () => {
 		const w = harbor();
 		const folded = press(w, initial(w, "checkout-v2"), "f");
 		expect(planOf(w, folded).places.has("payments")).toBe(false);
-		// It says how many items it holds, and the inspector still lists what is under it.
-		expect(screen(w, folded)).toContain("◉▸checkout-v2 +22");
+		// Its line says what is under it: how far along, how many things need someone, whose agents are in it.
+		// The inspector still lists what is under it.
+		expect(screen(w, folded)).toContain("⠋▸checkout-v2 6/15 ●3 y");
 		expect(screen(w, folded)).toContain("UNDER IT (folded)");
 		expect(planOf(w, press(w, folded, "enter")).places.has("payments")).toBe(true);
 	});

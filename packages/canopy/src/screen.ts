@@ -937,7 +937,7 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const morph = moving?.morph;
 	const drawn = morph ? blend(morph.from, plan, morph.t) : plan;
 	const camera = morph ? { col: Math.round(morph.camera.col + (view.camera.col - morph.camera.col) * ease(morph.t)), row: Math.round(morph.camera.row + (view.camera.row - morph.camera.row) * ease(morph.t)) } : view.camera;
-	const tree = paint(world, drawn, { frame: tick, letters: view.letters, folded: view.folded, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(moving?.away ? { away: true } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
+	const tree = paint(world, drawn, { frame: tick, letters: view.letters, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(moving?.away ? { away: true } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
 	const blink = tick === 0 || tick % BEAT < BEAT / 2;
 	for (const edge of morph ? [] : edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
 	// What is asked takes the foot of the tree's window. The rows it takes are the ones the selection is not in.

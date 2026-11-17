@@ -2,7 +2,8 @@
  * Where everything goes. The canopy is laid out at the size its labels need, and the screen is
  * a window on it; told how much room the window has, it draws in to fit before anything has to
  * be scrolled to. Height is the level of the work: an item is always above its parent. The
- * last level is drawn as a frond: its items listed one above the other on a stem.
+ * last level is drawn as a frond: its items listed one above the other on a stem. An item that
+ * is folded is on that frond too: one line, which says what is under it.
  * Positions are in cells, branch paths in braille dots. No Pi, no terminal.
  */
 import { cells, fit } from "./grid.ts";
@@ -41,11 +42,13 @@ export interface Layout {
 	nameMax: number;
 	/** Rows between one level and the next: fewer where the tree was drawn in to fit. */
 	band: number;
+	/** The items drawn as one line, with what is under them said on it and not shown. */
+	folded: ReadonlySet<string>;
 }
 
 export interface LayoutOptions {
 	shape?: Shape;
-	/** Items drawn as one node, with what is under them counted and not shown. */
+	/** Items drawn as one line, with what is under them said on it and not shown. */
 	folded?: ReadonlySet<string>;
 	/** What must come first is on the left, and at the bottom of a frond; or everything as it was filed. */
 	order?: Order;
@@ -110,13 +113,51 @@ const chipWidth = (item: Item): number => {
 	const chip = chipOf(item);
 	return [chip.agent ? cells(chip.agent) + 2 : 0, chip.progress.length, cells(chip.owner)].filter((n) => n > 0).reduce((sum, n) => sum + n + 3, -3);
 };
-/** The marks after a name: what needs someone, how many wait on it, how many it holds when folded. */
-const marksWidth = (item: Item, behind: number, folded = false): number =>
-	(item.asks > 0 ? 2 + String(item.asks).length : 0) + (behind > 0 ? 2 + String(behind).length : 0) + (folded ? 2 + String(under(item)).length : 0) + ((item.issue?.directions ?? []).length > 0 ? 2 : 0) + (item.fresh ? 2 : 0);
-/** How many items are under one: what a folded item says it holds. */
-export const under = (item: Item): number => item.children.reduce((sum, child) => sum + 1 + under(child), item.buds.length);
-const labelWidth = (item: Item, behind: number, folded: boolean, nameMax: number): number => 2 + Math.max(cells(cut(item.name, nameMax)) + marksWidth(item, behind, folded), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + cells(cut(bud.name, 16))));
+/** The marks after a name: what needs someone, how many wait on it, what was said that stands on it, whether an agent changed it. */
+const marksWidth = (item: Item, behind: number): number =>
+	(item.asks > 0 ? 2 + String(item.asks).length : 0) + (behind > 0 ? 2 + String(behind).length : 0) + ((item.issue?.directions ?? []).length > 0 ? 2 : 0) + (item.fresh ? 2 : 0);
+const labelWidth = (item: Item, behind: number, nameMax: number): number => 2 + Math.max(cells(cut(item.name, nameMax)) + marksWidth(item, behind), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + cells(cut(bud.name, 16))));
 const leafWidth = (item: Item, behind: number, nameMax: number): number => 2 + cells(cut(item.name, nameMax)) + marksWidth(item, behind) + (item.parent && item.parent.owner !== item.owner ? cells(item.owner) + 2 : 0);
+
+/**
+ * What the one line of a folded item says of everything under it: how far along it is, how many
+ * things in it need a person, whose agents are working in it, and how many things agents changed
+ * since this person looked. Nothing that needs someone is out of sight for being folded away.
+ */
+export interface Rollup {
+	progress: string;
+	asks: number;
+	/** The people with an agent working somewhere in it, in the order they are met. */
+	people: string[];
+	fresh: number;
+}
+
+const rollups = new WeakMap<Item, Rollup>();
+
+export function rollup(item: Item): Rollup {
+	const known = rollups.get(item);
+	if (known) return known;
+	const out: Rollup = { progress: `${item.landed}/${item.leaves}`, asks: 0, people: [], fresh: 0 };
+	const read = (at: Item): void => {
+		out.asks += at.asks > 0 ? at.asks : at.agent?.state === "asking" ? 1 : 0;
+		if (at.fresh) out.fresh++;
+		if (at.agent?.state === "working") {
+			const who = at.agent.owner ?? at.owner;
+			if (who !== "" && !out.people.includes(who)) out.people.push(who);
+		}
+		for (const child of at.children) read(child);
+		for (const bud of at.buds) read(bud);
+	};
+	read(item);
+	rollups.set(item, out);
+	return out;
+}
+
+/** The cells a folded item's line takes: its name, and what is said after it. */
+const foldWidth = (item: Item, behind: number, nameMax: number): number => {
+	const said = rollup(item);
+	return 2 + cells(cut(item.name, nameMax)) + 1 + said.progress.length + (said.asks > 0 ? 2 + String(said.asks).length : 0) + (behind > 0 ? 2 + String(behind).length : 0) + said.people.length * 2 + (said.fresh > 0 ? 2 + String(said.fresh).length : 0);
+};
 
 /** A small stable number from an id, so the same tree always grows the same way. */
 function hash(text: string): number {
@@ -178,16 +219,19 @@ function arrange(world: World, options: LayoutOptions, density: Density): Layout
 	const order = options.order ?? "dependency";
 	const behind = (item: Item): number => world.flow.behind.get(item.id)?.length ?? 0;
 	const open = (item: Item): Item[] => (folded.has(item.id) ? [] : inOrder(world.flow, item, order));
-	const leavesOf = (item: Item): Item[] => open(item).filter((child) => child.level >= last && child.children.length === 0);
-	const limbsOf = (item: Item): Item[] => open(item).filter((child) => !(child.level >= last && child.children.length === 0));
-	const frondWidth = (item: Item): number => Math.max(0, ...leavesOf(item).map((leaf) => leafWidth(leaf, behind(leaf), nameMax)));
+	// A line on a frond: an item of the last level with nothing under it, or one that is folded.
+	const line = (child: Item): boolean => (child.level >= last && child.children.length === 0) || folded.has(child.id);
+	const leavesOf = (item: Item): Item[] => open(item).filter(line);
+	const limbsOf = (item: Item): Item[] => open(item).filter((child) => !line(child));
+	const frondWidth = (item: Item): number => Math.max(0, ...leavesOf(item).map((leaf) => (folded.has(leaf.id) ? foldWidth(leaf, behind(leaf), nameMax) : leafWidth(leaf, behind(leaf), nameMax))));
 
 	const widths = new Map<string, number>();
 	const widthOf = (item: Item): number => {
 		const limbs = limbsOf(item);
 		const frond = frondWidth(item);
-		const own = item.level < 0 ? cells(item.name) + 12 : labelWidth(item, behind(item), folded.has(item.id), nameMax);
-		const below = limbs.length === 0 ? frond : limbs.reduce((sum, limb) => sum + widthOf(limb) + GAP, frond > 0 ? frond : -GAP);
+		const own = item.level < 0 ? cells(item.name) + 12 : labelWidth(item, behind(item), nameMax);
+		// With nothing but a frond over the root, the frond starts at the root's middle: the root's own name needs the half to the left of it.
+		const below = limbs.length === 0 ? (item.level < 0 && frond > 0 ? Math.floor(own / 2) + frond : frond) : limbs.reduce((sum, limb) => sum + widthOf(limb) + GAP, frond > 0 ? frond : -GAP);
 		const width = Math.max(own, below);
 		widths.set(item.id, width);
 		return width;
@@ -229,11 +273,12 @@ function arrange(world: World, options: LayoutOptions, density: Density): Layout
 		const row = item.level < 0 ? 0 : rowOf(item);
 		top = Math.min(top, row);
 		if (limbs.length === 0) {
-			// Nothing but a frond above it: the frond grows straight out of the node.
-			const col = item.level < 0 ? x0 + Math.floor(width / 2) : x0;
+			// Nothing but a frond above it: the frond grows straight out of the node. The root is wider than a node, and the frond clears it.
+			const col = item.level < 0 ? x0 + Math.floor((frondWidth(item) > 0 ? cells(item.name) + 12 : width) / 2) : x0;
 			places.set(item.id, { item, col, row, leaf: false });
-			stem(item, col, row * 4 - 1, row - 2);
-			frond(item, col, row - 2);
+			const bottom = item.level < 0 ? row - 4 : row - 2;
+			stem(item, col, item.level < 0 ? row * 4 - 5 : row * 4 - 1, bottom);
+			frond(item, col, bottom);
 			return;
 		}
 		let at = x0;
@@ -253,7 +298,7 @@ function arrange(world: World, options: LayoutOptions, density: Density): Layout
 			at += (widths.get(limb.id) ?? 0) + GAP;
 		}
 		const centre = Math.round(((cols[0] as number) + (cols.at(-1) as number)) / 2);
-		const own = item.level < 0 ? 0 : labelWidth(item, behind(item), folded.has(item.id), nameMax);
+		const own = item.level < 0 ? 0 : labelWidth(item, behind(item), nameMax);
 		const col = Math.max(x0, Math.min(centre, x0 + width - own));
 		places.set(item.id, { item, col, row, leaf: false });
 		const fromY = item.level < 0 ? row * 4 - 5 : row * 4 - 1;
@@ -277,5 +322,5 @@ function arrange(world: World, options: LayoutOptions, density: Density): Layout
 	for (const place of places.values()) place.row += shift;
 	for (const branch of branches) for (const point of branch.points) point[1] += shift * 4;
 	const rootPlace = places.get(world.root.id) as Place;
-	return { width: total + MARGIN * 2, height: rootPlace.row + 3, places, branches, root: [rootPlace.col * 2 + 1, rootPlace.row * 4 + 1], order, follows, nameMax, band };
+	return { width: total + MARGIN * 2, height: rootPlace.row + 3, places, branches, root: [rootPlace.col * 2 + 1, rootPlace.row * 4 + 1], order, follows, nameMax, band, folded };
 }

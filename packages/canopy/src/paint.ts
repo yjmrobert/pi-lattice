@@ -5,7 +5,7 @@
  */
 import { type Animation, centre, progress, trail } from "./animate.ts";
 import { cells, Grid, type Style } from "./grid.ts";
-import { chipOf, cut, type Layout, type Place, under } from "./layout.ts";
+import { chipOf, cut, type Layout, type Place, rollup } from "./layout.ts";
 import type { Agent, Item, World } from "./model.ts";
 import { COLOR, colorOf, letterOf } from "./palette.ts";
 
@@ -30,8 +30,6 @@ export interface PaintOptions {
 	frame?: number;
 	/** Only this person's work keeps its colour. */
 	spotlight?: string;
-	/** Items drawn as one node: each says how many it holds. */
-	folded?: ReadonlySet<string>;
 	/** What is moving because something just happened, and the time it is drawn at. */
 	animations?: readonly Animation[];
 	now?: number;
@@ -218,6 +216,31 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 			return at;
 		};
 
+		if (place.leaf && plan.folded.has(item.id)) {
+			// Folded: one line that says what is under it. Its name is written as an item's is, since it is one; what is finished is quiet.
+			const said = rollup(item);
+			const working = alive(item);
+			grid.text(col, row, item.failed ? "✗" : landed ? "✓" : working ? spin(frame) : "○", item.failed ? { fg: COLOR.failed } : { fg: working || landed ? color : grey(item, COLOR.dim), level: strength(item, 1) });
+			grid.text(col + 2, row, name, { fg: grey(item, landed ? COLOR.dim : COLOR.bright), bold: !landed, ...(selected ? (options.away ? { bg: COLOR.selectAway } : { bg: COLOR.select, fg: COLOR.bright, bold: true }) : {}) });
+			let at = col + 3 + cells(name);
+			grid.text(at, row, said.progress, { fg: grey(item, COLOR.dim) });
+			at += said.progress.length + 1;
+			if (said.asks > 0) {
+				grid.text(at, row, `●${said.asks}`, amber);
+				at += 2 + String(said.asks).length;
+			}
+			if (behind > 0) {
+				grid.text(at, row, `⧗${behind}`, { fg: grey(item, COLOR.wait) });
+				at += 2 + String(behind).length;
+			}
+			// Whose agents are in it: a letter each, in their colour. It says where a teammate is without opening anything.
+			for (const who of said.people) {
+				grid.text(at, row, letterOf(world, who), { fg: !options.spotlight || who === options.spotlight ? colorOf(world, who) : COLOR.faint, bold: true });
+				at += 2;
+			}
+			if (said.fresh > 0) grid.text(at, row, `+${said.fresh}`, { fg: grey(item, COLOR.bright), bold: true });
+			continue;
+		}
 		if (place.leaf) {
 			const glyph = item.failed ? "✗" : item.done ? "✓" : item.agent ? agentGlyph(item.agent, frame) : held ? "⧗" : "○";
 			grid.text(col, row, glyph, item.failed ? { fg: COLOR.failed } : asking ? amber : held ? { fg: grey(item, COLOR.wait) } : { fg: item.planned ? grey(item, COLOR.dim) : color, level: strength(item, 1) });
@@ -242,7 +265,6 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		grid.text(col, row, item.failed ? "✗" : landed ? "✓" : item.agent ? "◉" : "○", { fg: item.failed ? COLOR.failed : item.agent || landed ? color : grey(item, COLOR.dim), level: strength(item, 1) });
 		grid.text(col + 2, row, name, nameStyle);
 		let at = marks(col + 3 + cells(name));
-		if (options.folded?.has(item.id)) grid.text(at, row, `+${under(item)}`, { fg: grey(item, COLOR.dim) });
 
 		// Under the name: who sits here, how far along it is, and whose it is.
 		const chip = chipOf(item);
