@@ -213,6 +213,12 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 				grid.text(at, row, "+", { fg: grey(item, COLOR.bright), bold: true });
 				at += 2;
 			}
+			// Finished things under it are left out: how many, so that what is drawn is not taken for all there is.
+			const left = plan.hidden.size > 0 && !place.leaf ? item.children.filter((child) => plan.hidden.has(child.id)).length : 0;
+			if (left > 0) {
+				grid.text(at, row, `✓${left}`, { fg: grey(item, COLOR.dim) });
+				at += 2 + String(left).length;
+			}
 			return at;
 		};
 

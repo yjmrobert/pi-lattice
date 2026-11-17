@@ -3,7 +3,8 @@
  * a window on it; told how much room the window has, it draws in to fit before anything has to
  * be scrolled to. Height is the level of the work: an item is always above its parent. The
  * last level is drawn as a frond: its items listed one above the other on a stem. An item that
- * is folded is on that frond too: one line, which says what is under it.
+ * is folded is on that frond too: one line, which says what is under it. What is finished can be
+ * left out of what is open, so that what remains is what is read.
  * Positions are in cells, branch paths in braille dots. No Pi, no terminal.
  */
 import { cells, fit } from "./grid.ts";
@@ -48,7 +49,12 @@ export interface Layout {
 	fold: Fold;
 	/** The items whose frond is on the branch to the one thing open over them: it is read on the way up to that. */
 	trunks: ReadonlySet<string>;
+	/** The finished items left out of what is open. Each is counted after the name of what it is under. */
+	hidden: ReadonlySet<string>;
 }
+
+/** What is finished is drawn under what is open, or left out of it so that what remains is what is read. */
+export type Finished = "shown" | "hidden";
 
 /**
  * How much of a tree is folded so that it fits the window on it. Nothing but what the person
@@ -67,6 +73,8 @@ export interface LayoutOptions {
 	around?: string;
 	/** What must come first is on the left, and at the bottom of a frond; or everything as it was filed. */
 	order?: Order;
+	/** Whether what is finished is drawn under what is open. Left out, the tree is as much narrower and is folded less to fit. */
+	finished?: Finished;
 	/** The cells there are to draw in. The tree keeps its full size while it fits, and draws in when it does not. */
 	room?: { width: number; height: number };
 }
@@ -128,10 +136,10 @@ const chipWidth = (item: Item): number => {
 	const chip = chipOf(item);
 	return [chip.agent ? cells(chip.agent) + 2 : 0, chip.progress.length, cells(chip.owner)].filter((n) => n > 0).reduce((sum, n) => sum + n + 3, -3);
 };
-/** The marks after a name: what needs someone, how many wait on it, what was said that stands on it, whether an agent changed it. */
-const marksWidth = (item: Item, behind: number): number =>
-	(item.asks > 0 ? 2 + String(item.asks).length : 0) + (behind > 0 ? 2 + String(behind).length : 0) + ((item.issue?.directions ?? []).length > 0 ? 2 : 0) + (item.fresh ? 2 : 0);
-const labelWidth = (item: Item, behind: number, nameMax: number): number => 2 + Math.max(cells(cut(item.name, nameMax)) + marksWidth(item, behind), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + cells(cut(bud.name, 16))));
+/** The marks after a name: what needs someone, how many wait on it, what was said that stands on it, whether an agent changed it, how many finished things under it are left out. */
+const marksWidth = (item: Item, behind: number, left = 0): number =>
+	(item.asks > 0 ? 2 + String(item.asks).length : 0) + (behind > 0 ? 2 + String(behind).length : 0) + ((item.issue?.directions ?? []).length > 0 ? 2 : 0) + (item.fresh ? 2 : 0) + (left > 0 ? 2 + String(left).length : 0);
+const labelWidth = (item: Item, behind: number, nameMax: number, left = 0): number => 2 + Math.max(cells(cut(item.name, nameMax)) + marksWidth(item, behind, left), chipWidth(item), ...item.buds.slice(0, 2).map((bud) => 4 + cells(cut(bud.name, 16))));
 const leafWidth = (item: Item, behind: number, nameMax: number): number => 2 + cells(cut(item.name, nameMax)) + marksWidth(item, behind) + (item.parent && item.parent.owner !== item.owner ? cells(item.owner) + 2 : 0);
 
 /**
@@ -200,12 +208,37 @@ function bend(ax: number, ay: number, bx: number, top: number): Array<[number, n
 
 const NONE: ReadonlySet<string> = new Set();
 
-/** Whether two layouts draw the same items folded: where they do not, the tree moves from one to the other. */
+/** Whether two layouts draw the same items folded, and leave the same finished ones out: where they do not, the tree moves from one to the other. */
 export function sameFolds(a: Layout, b: Layout): boolean {
 	if (a === b) return true;
 	const drawn = (plan: Layout): string[] => [...plan.folded].filter((id) => plan.places.has(id));
 	const [one, other] = [drawn(a), new Set(drawn(b))];
-	return one.length === other.size && one.every((id) => other.has(id));
+	return one.length === other.size && one.every((id) => other.has(id)) && a.hidden.size === b.hidden.size && [...a.hidden].every((id) => b.hidden.has(id));
+}
+
+const finishedOf = new WeakMap<World, ReadonlySet<string>>();
+
+/**
+ * What is finished with nothing left in it for anyone: done, or with everything under it landed,
+ * and its helpers done too. Not what something in still asks a person, an agent still works in,
+ * or the session open here is in: none of that goes out of sight for being finished.
+ */
+export function finishedIn(world: World): ReadonlySet<string> {
+	const known = finishedOf.get(world);
+	if (known) return known;
+	const kept = new Set<string>();
+	for (const item of world.items.values()) {
+		if (!(item.asks > 0 || item.agent?.state === "asking" || item.agent?.state === "working" || item.agent?.open)) continue;
+		// Once one of these is kept, so is everything above it.
+		for (let at: Item | undefined = item; at && !kept.has(at.id); at = at.parent) kept.add(at.id);
+	}
+	const out = new Set<string>();
+	for (const item of world.items.values()) {
+		if (item.level < 0 || kept.has(item.id) || !item.buds.every((bud) => bud.done)) continue;
+		if (item.children.length > 0 ? item.leaves > 0 && item.landed === item.leaves : item.done) out.add(item.id);
+	}
+	finishedOf.set(world, out);
+	return out;
 }
 
 /**
@@ -252,36 +285,38 @@ function foldsOf(world: World, options: LayoutOptions): Array<{ fold: Fold; fold
  */
 export function layout(world: World, options: LayoutOptions = {}): Layout {
 	const room = options.room;
-	if (!room) return arrange(world, options, { ...(DENSITIES[0] as Rows), ...(WIDTHS[0] as Columns) }, options.folded ?? NONE, "whole");
+	// What is left out is this person's choice, as what they fold is: it is left out whatever the room.
+	const away = options.finished === "hidden" ? finishedIn(world) : NONE;
+	if (!room) return arrange(world, options, { ...(DENSITIES[0] as Rows), ...(WIDTHS[0] as Columns) }, options.folded ?? NONE, "whole", away);
 	const narrowest = WIDTHS.at(-1) as Columns;
 	const steps = foldsOf(world, options);
 	let plan: Layout | undefined;
 	for (const [index, step] of steps.entries()) {
 		// What is too wide with its names at their shortest is not laid out to find that out: on a large tree that is most of the work.
-		if (index < steps.length - 1 && (measure(world, step.folded, narrowest, options.order ?? "dependency").get(world.root.id)?.width ?? 0) + narrowest.margin * 2 > room.width) continue;
-		plan = fitted(world, options, step.folded, step.fold, room);
+		if (index < steps.length - 1 && (measure(world, step.folded, narrowest, options.order ?? "dependency", away).get(world.root.id)?.width ?? 0) + narrowest.margin * 2 > room.width) continue;
+		plan = fitted(world, options, step.folded, step.fold, room, away);
 		if (plan.width <= room.width) return plan;
 	}
 	return plan as Layout;
 }
 
 /** The tree with these items folded, drawn in to fit the room where it can be: its levels closer together, then its names shorter. */
-function fitted(world: World, options: LayoutOptions, folded: ReadonlySet<string>, fold: Fold, room: { width: number; height: number }): Layout {
+function fitted(world: World, options: LayoutOptions, folded: ReadonlySet<string>, fold: Fold, room: { width: number; height: number }, away: ReadonlySet<string>): Layout {
 	const roomy = WIDTHS[0] as Columns;
 	// Helpers are written under an item, a row each: levels may not come closer than leaves them room.
 	let helpers = 0;
 	for (const item of world.items.values()) if (!folded.has(item.id)) helpers = Math.max(helpers, Math.min(2, item.buds.length));
 	const densities = DENSITIES.filter((density, index) => index === 0 || density.band >= 4 + helpers);
 	let rows = densities[0] as Rows;
-	let plan = arrange(world, options, { ...rows, ...roomy }, folded, fold);
+	let plan = arrange(world, options, { ...rows, ...roomy }, folded, fold, away);
 	for (const density of densities.slice(1)) {
 		if (plan.height <= room.height) break;
 		rows = density;
-		plan = arrange(world, options, { ...rows, ...roomy }, folded, fold);
+		plan = arrange(world, options, { ...rows, ...roomy }, folded, fold, away);
 	}
 	if (plan.width <= room.width) return plan;
 	for (const columns of WIDTHS.slice(1)) {
-		const narrower = arrange(world, options, { ...rows, ...columns }, folded, fold);
+		const narrower = arrange(world, options, { ...rows, ...columns }, folded, fold, away);
 		if (narrower.width <= room.width) return narrower;
 	}
 	// Too wide whatever is done: the names are kept whole, since it is scrolled either way.
@@ -313,7 +348,7 @@ const rowAt = (item: Item, { band, base, sway }: Pick<Density, "band" | "base" |
  * and costs no width: the limb is raised by the rows the frond needs beyond those there are. It
  * is what keeps a tree folded around one person's work as narrow as the work itself.
  */
-function measure(world: World, folded: ReadonlySet<string>, density: Pick<Density, "nameMax" | "gap">, order: Order): Map<string, Span> {
+function measure(world: World, folded: ReadonlySet<string>, density: Pick<Density, "nameMax" | "gap">, order: Order, away: ReadonlySet<string>): Map<string, Span> {
 	const { nameMax, gap } = density;
 	const last = world.levels.length - 1;
 	const behind = (item: Item): number => world.flow.behind.get(item.id)?.length ?? 0;
@@ -321,9 +356,15 @@ function measure(world: World, folded: ReadonlySet<string>, density: Pick<Densit
 	const spanOf = (item: Item): Span => {
 		let frond = 0;
 		let lines = 0;
+		/** The finished things under it that are left out: it says how many after its name. */
+		let left = 0;
 		const limbs: Item[] = [];
 		// In the order they are put side by side: where an item stands depends on which of its limbs is first and which last.
 		for (const child of folded.has(item.id) ? [] : inOrder(world.flow, item, order)) {
+			if (away.has(child.id)) {
+				left++;
+				continue;
+			}
 			if (folded.has(child.id)) frond = Math.max(frond, foldWidth(child, behind(child), nameMax));
 			else if (child.level >= last && child.children.length === 0) frond = Math.max(frond, leafWidth(child, behind(child), nameMax));
 			else {
@@ -333,7 +374,7 @@ function measure(world: World, folded: ReadonlySet<string>, density: Pick<Densit
 			lines++;
 		}
 		const root = item.level < 0;
-		const own = root ? cells(item.name) + 12 : labelWidth(item, behind(item), nameMax);
+		const own = root ? cells(item.name) + 12 : labelWidth(item, behind(item), nameMax, left);
 		const over = limbs.map(spanOf);
 		const only = limbs.length === 1 ? (limbs[0] as Item) : undefined;
 		let span: Span;
@@ -367,20 +408,21 @@ function measure(world: World, folded: ReadonlySet<string>, density: Pick<Densit
 	return spans;
 }
 
-function arrange(world: World, options: LayoutOptions, density: Density, folded: ReadonlySet<string>, fold: Fold): Layout {
+function arrange(world: World, options: LayoutOptions, density: Density, folded: ReadonlySet<string>, fold: Fold, away: ReadonlySet<string>): Layout {
 	const { band, base, sway, headroom, nameMax, gap: GAP, margin: MARGIN } = density;
 	const shape = options.shape ?? "grown";
 	const last = world.levels.length - 1;
 	const order = options.order ?? "dependency";
 	const behind = (item: Item): number => world.flow.behind.get(item.id)?.length ?? 0;
-	const open = (item: Item): Item[] => (folded.has(item.id) ? [] : inOrder(world.flow, item, order));
+	const shown = (under: Item[]): Item[] => (away.size > 0 ? under.filter((child) => !away.has(child.id)) : under);
+	const open = (item: Item): Item[] => (folded.has(item.id) ? [] : shown(inOrder(world.flow, item, order)));
 	// A line on a frond: an item of the last level with nothing under it, or one that is folded.
 	const line = (child: Item): boolean => (child.level >= last && child.children.length === 0) || folded.has(child.id);
 	const leavesOf = (item: Item): Item[] => open(item).filter(line);
 	const limbsOf = (item: Item): Item[] => open(item).filter((child) => !line(child));
 	const frondWidth = (item: Item): number => Math.max(0, ...leavesOf(item).map((leaf) => (folded.has(leaf.id) ? foldWidth(leaf, behind(leaf), nameMax) : leafWidth(leaf, behind(leaf), nameMax))));
 
-	const spans = measure(world, folded, density, order);
+	const spans = measure(world, folded, density, order, away);
 	const spanOf = (item: Item): Span => spans.get(item.id) as Span;
 	const total = spanOf(world.root).width;
 
@@ -473,5 +515,8 @@ function arrange(world: World, options: LayoutOptions, density: Density, folded:
 	for (const place of places.values()) place.row += shift;
 	for (const branch of branches) for (const point of branch.points) point[1] += shift * 4;
 	const rootPlace = places.get(world.root.id) as Place;
-	return { width: total + MARGIN * 2, height: rootPlace.row + 3, places, branches, root: [rootPlace.col * 2 + 1, rootPlace.row * 4 + 1], order, follows, nameMax, band, folded, fold, trunks };
+	// Left out is what would have been drawn: under something open. What is under a folded line is in the line.
+	const hidden = new Set<string>();
+	if (away.size > 0) for (const place of places.values()) if (!place.leaf) for (const child of place.item.children) if (away.has(child.id)) hidden.add(child.id);
+	return { width: total + MARGIN * 2, height: rootPlace.row + 3, places, branches, root: [rootPlace.col * 2 + 1, rootPlace.row * 4 + 1], order, follows, nameMax, band, folded, fold, trunks, hidden };
 }

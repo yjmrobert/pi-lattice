@@ -6,7 +6,7 @@
 import type { IssueEvent, Steer } from "@pi-lattice/protocol";
 import type { Animation } from "./animate.ts";
 import { cells, Grid, pad, type Style, tail } from "./grid.ts";
-import { cut, type Layout, layout, type Place, rollup, type Shape } from "./layout.ts";
+import { cut, type Finished, finishedIn, type Layout, layout, type Place, rollup, type Shape } from "./layout.ts";
 import { type Item, pathTo, ROOT_ID, walk, type World } from "./model.ts";
 import { blend, ease } from "./morph.ts";
 import { canStart, inOrder, type Order } from "./order.ts";
@@ -31,6 +31,8 @@ export interface CanopyState {
 	shape: Shape;
 	/** What must come first on the left, or everything as it was filed. */
 	order: Order;
+	/** Whether what is finished is drawn under what is open, or left out so that what remains is what is read. */
+	finished: Finished;
 	/**
 	 * A line being typed at the foot: what to say about the selected item to whatever tends it, what to say
 	 * instead of answering, or part of a name to go to, with where the selection was before it was typed
@@ -118,7 +120,7 @@ const SIDE_WIDTH = 40;
 const HEADER = 2;
 const FOOTER = 1;
 
-export const initial = (world: World, current?: string, shape: Shape = "grown", order: Order = "dependency"): CanopyState => ({
+export const initial = (world: World, current?: string, shape: Shape = "grown", order: Order = "dependency", finished: Finished = "shown"): CanopyState => ({
 	selected: current && world.items.has(current) ? current : world.root.children[0]?.id,
 	camera: { col: 0, row: 0 },
 	framed: false,
@@ -130,6 +132,7 @@ export const initial = (world: World, current?: string, shape: Shape = "grown", 
 	letters: false,
 	shape,
 	order,
+	finished,
 	walked: new Set(),
 });
 
@@ -193,10 +196,10 @@ const plans = new WeakMap<World, Map<string, Layout>>();
  */
 export function planOf(world: World, state: CanopyState, width?: number, height?: number): Layout {
 	const room = width !== undefined && height !== undefined && width >= FLOOR.cols && height >= FLOOR.rows ? windowOf(state, width, height) : undefined;
-	const key = `${state.shape}|${state.order}|${[...state.folded].sort().join(",")}|${[...state.opened].sort().join(",")}|${state.spotlight ?? ""}|${room ? `${room.width}x${room.height}` : ""}`;
+	const key = `${state.shape}|${state.order}|${state.finished}|${[...state.folded].sort().join(",")}|${[...state.opened].sort().join(",")}|${state.spotlight ?? ""}|${room ? `${room.width}x${room.height}` : ""}`;
 	const known = plans.get(world) ?? new Map<string, Layout>();
 	plans.set(world, known);
-	const plan = known.get(key) ?? layout(world, { shape: state.shape, folded: state.folded, opened: state.opened, order: state.order, ...(state.spotlight ? { around: state.spotlight } : {}), ...(room ? { room } : {}) });
+	const plan = known.get(key) ?? layout(world, { shape: state.shape, folded: state.folded, opened: state.opened, order: state.order, finished: state.finished, ...(state.spotlight ? { around: state.spotlight } : {}), ...(room ? { room } : {}) });
 	known.set(key, plan);
 	return plan;
 }
@@ -364,8 +367,13 @@ function act(world: World, given: CanopyState, key: CanopyKey, width: number, he
 				// What was found may be folded away: the way to it is opened, and it is where one arrives.
 				const target = typing.to !== undefined ? world.items.get(typing.to) : undefined;
 				if (!target || placeOf(plan, target.id)) return keep(rest);
-				const opened = reveal(world, rest, target);
-				const next = planOf(world, opened, width, height);
+				let opened = reveal(world, rest, target);
+				let next = planOf(world, opened, width, height);
+				// It may be finished and left out, or under something that is: then what is finished is drawn again, to arrive at it.
+				if (!placeOf(next, target.id) && opened.finished === "hidden") {
+					opened = { ...opened, finished: "shown" };
+					next = planOf(world, opened, width, height);
+				}
 				return keep(frame({ ...opened, selected: shownAs(next, target) ?? rest.selected }, next, width, height));
 			}
 			const { to: _to, ...line } = typing;
@@ -477,6 +485,11 @@ function act(world: World, given: CanopyState, key: CanopyKey, width: number, he
 		const next: CanopyState = { ...state, side: state.side === "inspector" ? "roster" : state.side === "roster" ? "none" : "inspector" };
 		return keep(frame(next, planOf(world, next, width, height), width, height));
 	}
+	if (key === "d") {
+		// What is finished is left out of what is open, or drawn again. What was selected may go with it: then what it is under is.
+		const next: CanopyState = { ...state, finished: state.finished === "hidden" ? "shown" : "hidden" };
+		return keep(frame(next, planOf(world, next, width, height), width, height));
+	}
 	if (key === "i") return keep({ ...state, letters: !state.letters });
 	if (key === "r") return keep(frame({ ...state, shape: state.shape === "grown" ? "ruled" : "grown" }, planOf(world, { ...state, shape: state.shape === "grown" ? "ruled" : "grown" }, width, height), width, height, true));
 	// Looking at one person: their work keeps its colour, and a tree folded to fit is open around it and not around one's own.
@@ -577,7 +590,7 @@ const bar = (done: number, of: number, width: number): [string, string] => {
 	return ["█".repeat(filled), "░".repeat(width - filled)];
 };
 
-function header(world: World, state: CanopyState, width: number, tick: number): Grid {
+function header(world: World, state: CanopyState, width: number, tick: number, hidden = 0): Grid {
 	const grid = new Grid(width, HEADER);
 	let at = run(grid, 1, 0, [["◆ ", { fg: COLOR.root }], [world.root.name, { fg: COLOR.root, bold: true }], ["  "]]);
 	world.people.forEach((person, index) => {
@@ -600,9 +613,9 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 		at = run(grid, at, 1, [[cut(step.name), final ? { fg: COLOR.bright, bold: true } : DIM], [final ? "" : " ▸ ", DIM]]);
 	});
 	if (item && item.level >= 0) at = run(grid, at, 1, [[`  ${kindOf(world, item)}${item.issue ? ` #${item.issue.number}` : ""}`, DIM]]);
-	// At the right: how the tree is ordered, and how much of it can go ahead.
+	// At the right: what is left out of the tree, how it is ordered, and how much of it can go ahead.
 	const tips = tipsOf(world);
-	const flow: Array<[string, Style]> = [...(world.changes.length > 0 ? ([[`+${world.changes.length}`, { fg: COLOR.bright, bold: true }], [" changed by agents", DIM], [" · ", DIM]] as Array<[string, Style]>) : []), [state.order === "dependency" ? "first to last" : "as filed", { fg: COLOR.text }], [" · ", DIM], [`${tips.free.length}`, { fg: COLOR.bright }], [" can start", DIM]];
+	const flow: Array<[string, Style]> = [...(world.changes.length > 0 ? ([[`+${world.changes.length}`, { fg: COLOR.bright, bold: true }], [" changed by agents", DIM], [" · ", DIM]] as Array<[string, Style]>) : []), ...(state.finished === "hidden" ? ([[`✓${hidden}`, { fg: COLOR.text }], [" finished, hidden", DIM], [" · ", DIM]] as Array<[string, Style]>) : []), [state.order === "dependency" ? "first to last" : "as filed", { fg: COLOR.text }], [" · ", DIM], [`${tips.free.length}`, { fg: COLOR.bright }], [" can start", DIM]];
 	if (tips.held.length > 0) flow.push([" · ", DIM], [`⧗${tips.held.length}`, { fg: COLOR.wait }], [" held", DIM]);
 	const long = flow.reduce((sum, [text]) => sum + cells(text), 0);
 	if (at + 3 + long <= width - 1) run(grid, width - 1 - long, 1, flow);
@@ -621,7 +634,9 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 		const shown = tail(state.typing.text, room);
 		// What was found may be inside the folded line that is selected: enter opens the way to it.
 		const hidden = state.typing.what === "find" && state.typing.to !== undefined && state.typing.to !== state.selected ? world.items.get(state.typing.to) : undefined;
-		const keys: Array<[string, Style]> = state.typing.what === "find" ? [[" ⏎ ", KEYCAP], [hidden ? ` unfold to ${cut(hidden.name, 20)}   ` : " stay here   ", DIM], [" tab ", KEYCAP], [" next   ", DIM], [" esc ", KEYCAP], [" back", DIM]] : [[" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]];
+		// Or left out for being finished, itself or with what it is under: enter draws what is finished again.
+		const finished = hidden !== undefined && state.finished === "hidden" && pathTo(hidden).some((at) => finishedIn(world).has(at.id));
+		const keys: Array<[string, Style]> = state.typing.what === "find" ? [[" ⏎ ", KEYCAP], [hidden ? ` ${finished ? "show finished, to" : "unfold to"} ${cut(hidden.name, 20)}   ` : " stay here   ", DIM], [" tab ", KEYCAP], [" next   ", DIM], [" esc ", KEYCAP], [" back", DIM]] : [[" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]];
 		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], ...keys]);
 		return grid;
 	}
@@ -671,9 +686,13 @@ export function footerKeys(world: World, state: CanopyState, leave?: ReadonlyArr
 		if (hand && (hand.mine ? world.people.length > 1 : true)) keys.push(hand.mine ? ["o", "offer"] : ["t", "take"]);
 		if (item && item.children.length > 0 && !folded.has(item.id)) keys.push(["f", "fold"]);
 	}
+	// With finished things left out, the way back to them is said before what goes somewhere else.
+	if (state.finished === "hidden") keys.push(["d", "show finished"]);
 	keys.push(["/", "go to"]);
 	if (world.changes.length > 0) keys.push(["u", `${world.changes.length} changed by agents`]);
 	keys.push(["tab", "next that needs someone"], [".", "next to start"]);
+	// Leaving them out is said where it does something, and there is room: with finished things drawn under what is selected.
+	if (state.finished !== "hidden" && item && !item.place && !folded.has(item.id) && item.children.some((child) => finishedIn(world).has(child.id))) keys.push(["d", "hide finished"]);
 	if (!leave) keys.push(["esc", "back"]);
 	return keys;
 }
@@ -703,6 +722,7 @@ export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyAr
 	["The view", [
 		["a", "the panel beside the tree: what is selected, then everyone's agents, then none"],
 		["O", "what must come first on the left, or everything as it was filed"],
+		["d", "leave what is finished out of what is open, so that what remains is what is read, or draw it again; ✓3 after a name counts what is left out under it"],
 		["1-9  0", "look at one person: their colour is kept and the rest greyed, and a folded tree opens around their work; 0 brings everyone back"],
 		["i", "a letter beside each item for whose it is, to read without colour"],
 		["r", "every level on one row, or grown like a tree"],
@@ -1033,7 +1053,7 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const list = view.help !== undefined ? helpList(width, moving?.leave) : undefined;
 	const canvas = list ? lines(list, 0, Math.min(view.help ?? 0, Math.max(0, list.height - win.height)), width, win.height) : [...lines(tree, camera.col, camera.row + (hidden ? band.length : 0), win.width, left), ...band];
 	const panel = side > 0 && !list ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick, plan.folded)) : [];
-	return [...lines(header(world, view, width, tick)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away, moving?.asking, band.length > 0, plan.folded))];
+	return [...lines(header(world, view, width, tick, plan.hidden.size)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away, moving?.asking, band.length > 0, plan.folded))];
 }
 
 /** The screen as terminal lines, exactly `height` of them and `width` cells wide. */
