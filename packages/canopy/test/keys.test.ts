@@ -41,6 +41,17 @@ const listed = (): Set<string> => {
 	return out;
 };
 
+/** One item of each kind there is to select: what a key does depends on the kind, not on which one it is. */
+const kinds = (w: World): string[] => {
+	const seen = new Map<string, string>();
+	for (const item of w.items.values()) {
+		if (item.level < 0) continue;
+		const kind = [item.issue !== undefined, item.planned, item.done, item.children.length > 0, item.node !== undefined, item.session !== undefined, item.owner === w.me, item.asks > 0, item.agent?.state, item.parent?.buds.includes(item), item.waitsOn.length > 0].join();
+		if (!seen.has(kind)) seen.set(kind, item.id);
+	}
+	return [...seen.values()];
+};
+
 /** Whether a press did anything: something to carry out, or a screen that is not the one before it. */
 const acts = (w: World, state: CanopyState, key: CanopyKey): boolean => {
 	const next = interpret(w, state, key, W, H);
@@ -54,10 +65,7 @@ describe("the keys", () => {
 		for (const leaving of ["escape", "q"]) names.add(leaving);
 		const unlisted = new Set<string>();
 		for (const w of [harbor(), board()]) {
-			for (const item of w.items.values()) {
-				if (item.level < 0) continue;
-				for (const key of EVERY) if (acts(w, initial(w, item.id), key) && !names.has(key)) unlisted.add(key);
-			}
+			for (const id of kinds(w)) for (const key of EVERY) if (acts(w, initial(w, id), key) && !names.has(key)) unlisted.add(key);
 		}
 		expect([...unlisted]).toEqual([]);
 	});
