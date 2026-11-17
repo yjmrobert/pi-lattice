@@ -76,6 +76,35 @@ export interface Item {
 	tender?: { role: string; owner: string; on: string };
 	/** An agent that is not a session of any host holds it, from a shell. */
 	outside?: boolean;
+	/**
+	 * It stands for a repository and not for work: one whose host is asleep, so nothing of it is
+	 * known until it is woken, or the one this terminal is in, where nothing has been started yet.
+	 */
+	place?: "asleep" | "here" | "starting";
+}
+
+/** Repositories that are drawn as one item each, beside the work: there is nothing of theirs to draw yet. */
+export interface Places {
+	asleep?: ReadonlyArray<{ key: string; repo: string }>;
+	here?: { key: string; repo: string; starting: boolean };
+}
+
+/** The id of the item that stands for a repository. */
+export const placeId = (key: string): string => `repo:${key}`;
+
+/** One item for each repository there is nothing to draw of, at the foot of the tree. */
+function addPlaces(root: Item, items: Map<string, Item>, me: string, places: Places | undefined): void {
+	const add = (key: string, repo: string, place: NonNullable<Item["place"]>): void => {
+		if (items.has(placeId(key))) return;
+		const item: Item = {
+			id: placeId(key), name: repo, kind: "repository", level: 0, owner: me, away: false, repo, tree: key, parent: root, children: [], buds: [], agent: undefined,
+			planned: true, done: false, failed: false, leaves: 0, landed: 0, asks: 0, waitsOn: [], node: undefined, place,
+		};
+		items.set(item.id, item);
+		root.children.push(item);
+	};
+	if (places?.here) add(places.here.key, places.here.repo, places.here.starting ? "starting" : "here");
+	for (const repo of places?.asleep ?? []) add(repo.key, repo.repo, "asleep");
 }
 
 export interface Person {
@@ -126,15 +155,15 @@ function agentOf(node: NodeMeta, state: UiState, mine: boolean): Agent | undefin
  * Build the canopy's world from every tree in view. An item's level is where its kind is in
  * `levels`; a child always sits above its parent, and a kind that is not a level makes a bud.
  */
-export function buildWorld(sources: readonly TreeSource[], levels: readonly string[], rootName = ""): World {
+export function buildWorld(sources: readonly TreeSource[], levels: readonly string[], rootName = "", places?: Places): World {
 	// With a server, the work is its issues and the sessions sit on them; without one, the work is the sessions.
 	const work = sources.map((source) => source.state.work).find((state) => state !== undefined);
-	if (work) return buildFromWork(sources, work, rootName);
+	if (work) return buildFromWork(sources, work, rootName, places);
 	const first = sources[0]?.state;
 	const me = first?.owner ?? "";
 	const team = sources.map((source) => source.state.sharing?.team).find((name) => name);
 	const root: Item = {
-		id: ROOT_ID, name: rootName || team || (sources.length === 1 ? (sources[0]?.repo ?? "") : "your work"), kind: "network", level: -1, owner: me, away: false, repo: "", tree: "",
+		id: ROOT_ID, name: rootName || team || (sources.length === 1 && !places?.asleep?.length && !places?.here ? (sources[0]?.repo ?? "") : "your work"), kind: "network", level: -1, owner: me, away: false, repo: "", tree: "",
 		parent: undefined, children: [], buds: [], agent: undefined, planned: false, done: false, failed: false, leaves: 0, landed: 0, asks: 0, waitsOn: [], node: undefined,
 	};
 	const items = new Map<string, Item>([[ROOT_ID, root]]);
@@ -178,6 +207,7 @@ export function buildWorld(sources: readonly TreeSource[], levels: readonly stri
 		}
 	}
 
+	addPlaces(root, items, me, places);
 	const names = new Set<string>([me]);
 	for (const item of items.values()) if (item !== root) names.add(item.owner);
 	for (const name of online.keys()) names.add(name);
@@ -189,7 +219,7 @@ function finish(root: Item, items: Map<string, Item>, names: string[], online: R
 	const count = (item: Item): void => {
 		for (const child of item.children) count(child);
 		if (item.children.length === 0) {
-			item.leaves = item === root ? 0 : 1;
+			item.leaves = item === root || item.place ? 0 : 1;
 			item.landed = item.done ? 1 : 0;
 		} else {
 			item.leaves = item.children.reduce((sum, child) => sum + child.leaves, 0);
@@ -201,6 +231,8 @@ function finish(root: Item, items: Map<string, Item>, names: string[], online: R
 	const byName = new Map(people.map((person) => [person.name, person]));
 	for (const item of items.values()) {
 		if (item === root) continue;
+		// A repository stands for no work of anyone's.
+		if (item.place) continue;
 		const owner = byName.get(item.owner);
 		if (owner) owner.owned++;
 		// What is running is counted for whoever runs it, which on an issue need not be who it is assigned to.
@@ -234,7 +266,7 @@ const URGENCY: Record<AgentState, number> = { asking: 0, failed: 1, working: 2, 
  * team's scheme; whoever it is assigned to owns it; and the sessions on it sit there, the first
  * as its agent and the rest beside it. Sessions on no issue are at the foot, so nothing running is hidden.
  */
-function buildFromWork(sources: readonly TreeSource[], work: WorkState, rootName: string): World {
+function buildFromWork(sources: readonly TreeSource[], work: WorkState, rootName: string, places?: Places): World {
 	const me = work.me;
 	const scheme = work.scheme;
 	const rungs = [...new Set(scheme.types.map((type) => type.level))].sort((a, b) => a - b);
@@ -330,6 +362,8 @@ function buildFromWork(sources: readonly TreeSource[], work: WorkState, rootName
 		items.set(item.id, item);
 		root.children.push(item);
 	}
+
+	addPlaces(root, items, me, places);
 
 	// A coordinator on no issue, at the top of this person's own tree, tends what nothing else does.
 	const loose = sitters.find((sitter) => sitter.owner === me && sitter.issue === undefined && sitter.agent.role === "coordinator" && sitter.node?.parentId === null);

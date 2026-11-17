@@ -41,4 +41,4 @@
                                                                                                     ⠑⢝⢟⢿⢟⢟⠕⠁  │
                                                                                                harbor · 4 peop│
                                                                                                               │
-  ←↑↓→  move    /  go to    space  say what you want    tab  next that needs someone    ⏎  read    t  take    f  fold    .  next to start    ?  keys
+  ←↑↓→  move    ⏎  read    space  say what you want    t  take    f  fold    /  go to    tab  next that needs someone    .  next to start    ?  keys

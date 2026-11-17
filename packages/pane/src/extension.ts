@@ -298,7 +298,8 @@ function homeAble(): boolean {
 	const terminal = shared.tui?.terminal;
 	// The canopy starts after the pane in a session, so it may not have been there to ask the first time.
 	if (shared.canopy?.pi !== shared.pi) mountCanopy();
-	if (!shared.wrapped || !shared.canopy || !terminal || (shared.links.size === 0 && !firstHere()) || shared.at === undefined) return false;
+	// Anything this person has anywhere is something to draw: a tree that is running, one that is asleep, or a first message to take.
+	if (!shared.wrapped || !shared.canopy || !terminal || (shared.links.size === 0 && shared.asleep.length === 0 && !firstHere()) || shared.at === undefined) return false;
 	if (terminal.columns < HOME_FLOOR.cols || terminal.rows < HOME_FLOOR.rows) return false;
 	const now = Date.now();
 	if (!shared.homeChosen || now - shared.homeChosen.at > 1000) shared.homeChosen = { value: settings().settings.values["pane.home"] !== "chat", at: now };
@@ -307,18 +308,15 @@ function homeAble(): boolean {
 
 /**
  * Where there is no tree yet and the first message here would start one or join one: the
- * repository's name, and whether a tree is being started for it now. The canopy then opens
- * empty and takes that message itself (ADR 0035).
+ * repository's name, and whether a tree is being started for it now.
  */
-function firstHere(): { repo: string; starting: boolean } | undefined {
+function startsHere(): { repo: string; starting: boolean } | undefined {
 	try {
 		const ctx = shared.ctx;
 		if (!ctx?.hasUI || shared.current) return undefined;
 		const link = homeLink();
 		// A tree that is here, or not yet read: what it has is drawn, not a first message.
 		if (link && (!link.state || link.state.nodes.some((node) => !node.archived))) return undefined;
-		// A board with work on it is drawn as soon as it is joined: a teammate sees the team's work before starting anything of their own.
-		if ([...shared.links.values()].some((candidate) => (candidate.state?.work?.issues.length ?? 0) > 0)) return undefined;
 		const repo = basename(projectRoot(ctx.cwd));
 		if (shared.starting) return { repo, starting: true };
 		if (link) return toggleSetting(settings().settings, "pane.autoJoin") ? { repo, starting: false } : undefined;
@@ -327,6 +325,26 @@ function firstHere(): { repo: string; starting: boolean } | undefined {
 	} catch {
 		return undefined; // the session that context belonged to has ended
 	}
+}
+
+/** Whether there is anything to draw besides this repository: work in another one, running or asleep, or a board with issues on it. */
+function elsewhere(): boolean {
+	if (shared.asleep.length > 0) return true;
+	for (const link of shared.links.values()) {
+		if ((link.state?.work?.issues.length ?? 0) > 0) return true;
+		if (link.stateDir !== shared.home && link.state?.nodes.some((node) => !node.archived)) return true;
+	}
+	return false;
+}
+
+/**
+ * Where the canopy has nothing at all to draw and a first message would start a tree: it then
+ * opens empty and takes that message itself (ADR 0035). With work anywhere else, that work is
+ * drawn, whichever directory Pi was opened in, and this repository is one item on it (ADR 0041).
+ */
+function firstHere(): { repo: string; starting: boolean } | undefined {
+	const first = startsHere();
+	return first && !elsewhere() ? first : undefined;
 }
 
 /** Whether the canopy is showing: it steps aside while the pane has the keyboard. */
@@ -417,6 +435,19 @@ function toPane(cursor?: string): void {
 	redraw();
 }
 
+/** Start the host of a repository whose tree is asleep: its sessions are drawn once it answers. */
+function wake(tree: KnownTree): void {
+	const bus = shared.pi?.events;
+	if (!bus) return;
+	launchHost(bus, tree.stateDir, tree.root)
+		.then((client) => {
+			if (shared.links.has(tree.stateDir)) client.close();
+			else addLink(client, tree.stateDir);
+		})
+		.catch((error: unknown) => tell(error instanceof Error ? error.message : String(error), "error"))
+		.finally(() => void refresh());
+}
+
 /** Ask for the canopy as a view of this layout, once per session: the one asked for in a session that ended draws nothing new. */
 function mountCanopy(): void {
 	const pi = shared.pi;
@@ -437,6 +468,7 @@ function mountCanopy(): void {
 		dim: () => 1 - 0.62 * shared.grow,
 		first: firstHere,
 		command: dispatch,
+		chat: toChat,
 	};
 	emitEvent(pi.events, "lattice:canopy:mount", request);
 	if (!request.view) return; // the canopy has not started in this session yet, or is not installed
@@ -922,14 +954,7 @@ function perform(action: PaneAction): void {
 		}
 	} else if (action.do === "wake") {
 		const tree = shared.asleep.find((candidate) => candidate.stateDir === action.repo);
-		const bus = shared.pi?.events;
-		if (!tree || !bus) return;
-		settle(
-			launchHost(bus, tree.stateDir, tree.root).then((client) => {
-				if (shared.links.has(tree.stateDir)) client.close();
-				else addLink(client, tree.stateDir);
-			}),
-		);
+		if (tree) wake(tree);
 	} else {
 		const client = shared.links.get(action.repo)?.client;
 		if (!client) return;
@@ -1016,6 +1041,19 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		if (shared.pi !== pi) return;
 		request.trees = [...shared.links.values()].flatMap((link) => (link.state ? [{ key: link.stateDir, repo: repoLabel(link.state, link.stateDir), state: link.state }] : []));
 		if (shared.current) request.current = shared.current;
+		if (shared.home) request.home = shared.home;
+		// Every repository this person has a tree in is on the canopy: the ones whose host is asleep as one item each.
+		request.asleep = shared.asleep.map((tree) => ({ key: tree.stateDir, repo: basename(tree.root) }));
+		const first = startsHere();
+		if (first && shared.home && elsewhere()) request.here = { key: shared.home, ...first };
+	});
+
+	onEvent(pi.events, "lattice:repo:wake", (request) => {
+		if (shared.pi !== pi || request.done) return;
+		const tree = shared.asleep.find((candidate) => candidate.stateDir === request.key);
+		if (!tree) return;
+		request.done = true;
+		wake(tree);
 	});
 
 	// The canopy carries what a person says about an item to the host that has it: it has no connection of its own.
@@ -1093,7 +1131,7 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		// With a tree already here, Pi opens on it; so it does where the first message would start one, and the canopy takes that message (ADR 0035).
 		// Elsewhere it opens on the chat, and the tree joins it when there is one.
 		if (shared.at === undefined) {
-			shared.at = shared.links.size > 0 || firstHere() ? "tree" : "chat";
+			shared.at = shared.links.size > 0 || shared.asleep.length > 0 || firstHere() ? "tree" : "chat";
 		}
 		if (ctx.mode === "tui") {
 			ctx.ui.setWidget("lattice-pane-anchor", (tui, theme) => {

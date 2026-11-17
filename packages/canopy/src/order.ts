@@ -75,7 +75,8 @@ export function flowOf(root: Item, items: ReadonlyMap<string, Item>): Flow {
 
 	// Sessions on no issue stay at the foot of a team's work.
 	const issues = root.children.some((child) => child.issue);
-	const stage = (item: Item): number => (issues && item.parent === root && !item.issue ? 4 : over(item) ? 0 : held.has(item.id) ? 3 : started(item) ? 1 : 2);
+	// Repositories with nothing of theirs to draw come last of all.
+	const stage = (item: Item): number => (item.place ? 5 : issues && item.parent === root && !item.issue ? 4 : over(item) ? 0 : held.has(item.id) ? 3 : started(item) ? 1 : 2);
 	const ordered = new Map<string, Item[]>();
 	for (const item of items.values()) {
 		if (item.children.length === 0) continue;
@@ -101,7 +102,7 @@ export const inOrder = (flow: Flow, item: Item, order: Order): Item[] => (order 
 
 /** Nobody is on it and nothing holds it: it is there to be taken. */
 export const canStart = (flow: Flow, item: Item): boolean =>
-	item.level >= 0 && !item.done && !item.agent && item.children.length === 0 && !flow.held.has(item.id) && item.parent?.children.includes(item) === true;
+	item.level >= 0 && !item.place && !item.done && !item.agent && item.children.length === 0 && !flow.held.has(item.id) && item.parent?.children.includes(item) === true;
 
 /**
  * Whether anything that was drawn before is drawn in another place among its siblings now:

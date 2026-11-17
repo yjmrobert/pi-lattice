@@ -94,12 +94,15 @@ export const NAME_MAX: number = (WIDTHS[0] as Columns).nameMax;
 /** A name no wider than `max` cells: one that is, loses its end to an ellipsis. */
 export const cut = (name: string, max = NAME_MAX): string => (cells(name) > max ? `${fit(name, max - 1)}…` : name);
 
+/** What is said under a repository that is drawn as one item. */
+const PLACE = { asleep: "asleep", here: "nothing here yet", starting: "starting…" } as const;
+
 /** The second line under an item: who sits on it, how far along it is, and whose it is where that changes. */
 export function chipOf(item: Item): { agent: string; progress: string; owner: string } {
 	// With nobody on it, an issue says the state the team gave it; a planned item has no state but that.
-	const agent = item.agent ? item.agent.role : item.issue ? (item.done ? "" : item.issue.state) : item.planned ? "planned" : "";
+	const agent = item.place ? PLACE[item.place] : item.agent ? item.agent.role : item.issue ? (item.done ? "" : item.issue.state) : item.planned ? "planned" : "";
 	const progress = item.children.length > 0 ? `${item.landed}/${item.leaves}` : "";
-	const owner = item.owner !== "" && item.parent && (item.parent.level < 0 || item.parent.owner !== item.owner) ? `@${item.owner}` : "";
+	const owner = !item.place && item.owner !== "" && item.parent && (item.parent.level < 0 || item.parent.owner !== item.owner) ? `@${item.owner}` : "";
 	return { agent, progress, owner };
 }
 

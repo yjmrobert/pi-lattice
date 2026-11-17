@@ -95,6 +95,10 @@ export type CanopyAction =
 	| { do: "on"; number: number }
 	/** Say something about an item, an issue by its number or a session, to whatever tends it. */
 	| { do: "steer"; number?: number; nodeId?: string; text: string }
+	/** Start the host of a repository that is asleep, so that its sessions are drawn. */
+	| { do: "wake"; key: string }
+	/** Show the chat of the session open here: where the first message of a repository with no tree is written. */
+	| { do: "chat" }
 	/** Offer the session on an item to a teammate, or ask a teammate for theirs. */
 	| { do: "hand"; what: "offer" | "take"; id: string }
 	/** The person has been through everything agents changed. */
@@ -102,7 +106,7 @@ export type CanopyAction =
 	| { do: "say"; text: string };
 
 /** What an item is called beside its name: an issue's type, a helper's kind, or the name of its level. */
-const kindOf = (world: World, item: Item): string => (item.issue || item.parent?.buds.includes(item) ? item.kind : (world.levels[item.level] ?? item.kind));
+const kindOf = (world: World, item: Item): string => (item.issue || item.place || item.parent?.buds.includes(item) ? item.kind : (world.levels[item.level] ?? item.kind));
 
 /** Narrower or shorter than this, a label and its branch cannot both be read. */
 export const FLOOR = { cols: 60, rows: 20 };
@@ -179,6 +183,13 @@ export function planOf(world: World, state: CanopyState, width?: number, height?
 	known.set(key, plan);
 	return plan;
 }
+
+/** What there is to say about a repository drawn as one item, and what to press. */
+const PLACE_SAYS = {
+	asleep: "Its host is asleep, so what is in it is not known here. Press enter to wake it.",
+	here: "Nothing has been started here yet. Press enter for the chat: your first message starts its tree.",
+	starting: "Its tree is starting with your first message.",
+} as const;
 
 /** The session on an item that can change hands: its id, and whether it is this person's to offer or a teammate's to ask for. */
 function handOf(world: World, item: Item): { id: string; mine: boolean; owner: string } | undefined {
@@ -357,6 +368,7 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 	// Say something about what is selected, to whatever tends it. It is the one way a person changes the work.
 	if (key === " ") {
 		if (!item) return keep(state);
+		if (item.place) return keep(state, [{ do: "say", text: PLACE_SAYS[item.place] }]);
 		if (item.issue) {
 			if (world.stale) return keep(state, [{ do: "say", text: `Nothing can be said: ${world.stale}` }]);
 			return keep({ ...state, typing: { what: "say", label: `to ${tendedBy(world, item)}, about ${cut(item.name, 28)}`, text: "", number: item.issue.number } });
@@ -411,6 +423,12 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 		return person ? keep({ ...state, spotlight: state.spotlight === person.name ? undefined : person.name }) : keep(state);
 	}
 	if (!item) return keep(state);
+	// A repository drawn as one item has nothing on it to open, start or hand over: enter is the one thing it takes.
+	if (item.place) {
+		if (key !== "enter") return key === "s" || key === "o" || key === "t" ? keep(state, [{ do: "say", text: PLACE_SAYS[item.place] }]) : keep(state);
+		if (item.place === "asleep") return keep(state, [{ do: "say", text: `Waking ${item.name}…` }, { do: "wake", key: item.tree }]);
+		return item.place === "here" ? keep(state, [{ do: "chat" }]) : keep(state, [{ do: "say", text: PLACE_SAYS.starting }]);
+	}
 	if (key === "f") {
 		if (item.children.length === 0) return keep(state);
 		const folded = new Set(state.folded);
@@ -538,7 +556,8 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 	let at = 1;
 	for (const [key, does] of keys) {
 		if (taken.has(key)) continue;
-		if (at + cells(key) + does.length + 4 > room) break;
+		// One that does not fit is left to the list; a shorter one after it may still fit.
+		if (at + cells(key) + does.length + 4 > room) continue;
 		at = run(grid, at, 0, [[` ${key} `, KEYCAP], [` ${does}   `, DIM]]);
 	}
 	if (last) run(grid, at, 0, [[` ${last[0]} `, KEYCAP], [` ${last[1]}`, DIM]]);
@@ -557,19 +576,24 @@ export function footerKeys(world: World, state: CanopyState, leave?: ReadonlyArr
 	if (state.help !== undefined) return [["↑↓", "read on"], ["?", "back to the tree"]];
 	// In a layout, the keys that lead to the chat are said first: they are what a person arriving
 	// needs, and the canopy may be narrow there. As an overlay, escape goes back and is said last.
-	const keys: Array<[string, string]> = [...named, ["←↑↓→", "move"], ["/", "go to"], ["space", "say what you want"]];
+	// What is done to the thing selected comes before what goes somewhere else: it is what the eye is on, and the foot may be short.
+	const keys: Array<[string, string]> = [...named, ["←↑↓→", "move"]];
+	if (item?.place) {
+		if (item.place !== "starting") keys.push(["⏎", item.place === "asleep" ? "wake" : "start here"]);
+	} else {
+		if (item?.issue && item.node) keys.push(["⏎", "open"]);
+		else if (item && !item.issue && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
+		keys.push(["space", "say what you want"]);
+		if (item?.issue) keys.push(["s", "put this session on it"]);
+		else if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
+		const hand = item ? handOf(world, item) : undefined;
+		// Offering needs someone to offer to; asking needs a session that is someone else's.
+		if (hand && (hand.mine ? world.people.length > 1 : true)) keys.push(hand.mine ? ["o", "offer"] : ["t", "take"]);
+		if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
+	}
+	keys.push(["/", "go to"]);
 	if (world.changes.length > 0) keys.push(["u", `${world.changes.length} changed by agents`]);
-	keys.push(["tab", "next that needs someone"]);
-	if (item?.issue) {
-		if (item.node) keys.push(["⏎", "open"]);
-		keys.push(["s", "put this session on it"]);
-	} else if (item?.planned && item.owner === world.me) keys.push(["s", "put a session on it"]);
-	else if (item && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
-	const hand = item ? handOf(world, item) : undefined;
-	// Offering needs someone to offer to; asking needs a session that is someone else's.
-	if (hand && (hand.mine ? world.people.length > 1 : true)) keys.push(hand.mine ? ["o", "offer"] : ["t", "take"]);
-	if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
-	keys.push([".", "next to start"]);
+	keys.push(["tab", "next that needs someone"], [".", "next to start"]);
 	if (!leave) keys.push(["esc", "back"]);
 	return keys;
 }
@@ -733,6 +757,13 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 	const kind = kindOf(world, item);
 	line([[cut(item.name, inner - cells(kind) - 1), { fg: COLOR.bright, bold: true }]]);
 	grid.text(width - 1 - cells(kind), 0, kind, DIM);
+	if (item.place) {
+		// A repository, not work: where it is, and the one thing there is to do with it.
+		line([[item.place === "asleep" ? "asleep" : item.place === "here" ? "this directory" : "starting", DIM]]);
+		row++;
+		for (const part of wrap(PLACE_SAYS[item.place], inner)) line([[part, { fg: COLOR.text }]]);
+		return grid;
+	}
 	if (item.issue) {
 		const issue = item.issue;
 		line([[`#${issue.number}`, { fg: COLOR.text }], [`  ${issue.state}  `, DIM], issue.assignee ? [`@${issue.assignee}`, { fg: color }] : ["unassigned", DIM]]);

@@ -37,4 +37,4 @@
                                                                                                               │
                                                                                                               │
                                                                                                               │
-  ←↑↓→  move    /  go to    space  say what you want    tab  next that needs someone    s  put this session on it    t  take    ?  keys
+  ←↑↓→  move    space  say what you want    s  put this session on it    t  take    /  go to    tab  next that needs someone    esc  back    ?  keys

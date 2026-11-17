@@ -353,4 +353,78 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		pi.press(KEY.altL);
 		await pi.see(/echo\[user\].*结账流程重构/, 30_000);
 	}, 120_000);
+
+	it("shows the work of every repository whichever directory Pi is opened in: running, asleep, and the one with nothing in it yet", async () => {
+		// One home for all of it, as on a person's machine: each repository keeps its own tree, and each Pi finds the others.
+		const env = { LATTICE_PI_COMMAND: JSON.stringify([process.execPath, piCli]), LATTICE_PI_ARGS: JSON.stringify(fauxArgs), LATTICE_EXTENSION_PATHS: JSON.stringify([extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]) };
+		const extensions = [extensionPaths.launcher, extensionPaths.pane, extensionPaths.canopy, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph];
+		const repo = (name: string): string => {
+			const dir = join(sandbox.root, name);
+			mkdirSync(dir);
+			execFileSync("git", ["init", "-q"], { cwd: dir });
+			return realpathSync(dir);
+		};
+		const [shop, billing] = [repo("shop"), repo("billing")];
+		const notes = join(sandbox.root, "notes");
+		mkdirSync(notes);
+		const hosts = [join(shop, ".lattice"), join(billing, ".lattice")];
+		const stopHost = async (dir: string): Promise<void> => {
+			try {
+				const { pid } = JSON.parse(readFileSync(join(dir, "host.json"), "utf8")) as { pid: number };
+				process.kill(pid, "SIGTERM");
+				await eventually(() => !existsSync(join(dir, "host.json")), "the host to stop", 10_000);
+			} catch {
+				// It was not running.
+			}
+		};
+		try {
+			// Work is started in one repository, and that terminal is closed. Its host keeps running.
+			tui = PiTui.start(sandbox, { cols: 120, rows: 36, cwd: shop, extensions, env });
+			await tui.see("Your first message starts the tree.");
+			tui.press("plan the refunds");
+			await new Promise((resolve) => setTimeout(resolve, 80));
+			tui.press(KEY.enter);
+			await tui.see(/p\s+sessions/, 30_000);
+			await eventually(() => existsSync(join(hosts[0] as string, "host.db")), "the tree to be kept", 10_000);
+			await tui.stop();
+
+			// Pi opened in another repository, with nothing in it: the same canopy, with that work on it, and this repository selected.
+			tui = PiTui.start(sandbox, { cols: 120, rows: 36, cwd: billing, extensions, env });
+			const other = await tui.see(/p\s+sessions/, 30_000);
+			expect(other.join("\n")).toContain("plan the refunds");
+			expect(other.join("\n")).toContain("○▸billing");
+			expect(other.join("\n")).toContain("nothing here yet");
+			expect(other.join("\n")).not.toContain("Your first message starts the tree.");
+			expect(other.at(-1)).toMatch(/⏎\s+start here/);
+			// Enter is the chat; the first message there starts this repository's tree, beside the other.
+			tui.press(KEY.enter);
+			await tui.see(/alt\+l\s+tree/);
+			await tui.submit("draft the invoices");
+			await tui.see(/echo\[user\].*draft the invoices/, 30_000);
+			tui.press(KEY.altL);
+			const both = await tui.waitFor((screen) => /p\s+sessions/.test(screen) && !screen.includes("╭") && screen.includes("draft the invoices") && screen.includes("plan the refunds"), "both repositories' work on the tree", 30_000);
+			expect(both.join("\n")).not.toContain("nothing here yet");
+			await tui.stop();
+
+			// Pi opened in a directory that is no repository at all: the same work again.
+			tui = PiTui.start(sandbox, { cols: 120, rows: 36, cwd: notes, extensions, env });
+			const plain = await tui.waitFor((screen) => screen.includes("draft the invoices") && screen.includes("plan the refunds"), "the work of both repositories, from a plain directory", 30_000);
+			expect(plain.at(-1)).toMatch(/p\s+sessions/);
+			await tui.stop();
+
+			// One of the hosts stops. Its repository is still on the canopy, as one item, and enter wakes it.
+			await stopHost(hosts[0] as string);
+			tui = PiTui.start(sandbox, { cols: 120, rows: 36, cwd: billing, extensions, env });
+			const asleep = await tui.waitFor((screen) => /○ shop/.test(screen) && screen.includes("asleep") && screen.includes("draft the invoices"), "the sleeping repository as one item", 30_000);
+			expect(asleep.join("\n")).not.toContain("plan the refunds");
+			tui.press("/", "s", "h", "o", "p");
+			await tui.see("○▸shop");
+			tui.press(KEY.enter, KEY.enter);
+			await tui.waitFor((screen) => screen.includes("plan the refunds") && !/○.shop/.test(screen), "its sessions, once it is awake", 30_000);
+		} finally {
+			await tui?.stop();
+			tui = undefined;
+			for (const dir of hosts) await stopHost(dir);
+		}
+	}, 240_000);
 });

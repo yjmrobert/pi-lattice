@@ -67,7 +67,18 @@ export interface LatticeEvents {
 	 * connections to the hosts fills it in, with the session open here. Asked again for each look,
 	 * so the answer is whatever is known now.
 	 */
-	"lattice:trees:query": { trees?: Array<{ key: string; repo: string; state: UiState }>; current?: string };
+	"lattice:trees:query": {
+		trees?: Array<{ key: string; repo: string; state: UiState }>;
+		current?: string;
+		/** The tree of the repository this terminal is in, by its key, whether it has anything in it yet or not. */
+		home?: string;
+		/** Repositories this person has a tree in whose host is not running: each is drawn as one item, and woken from there. */
+		asleep?: Array<{ key: string; repo: string }>;
+		/** The repository this terminal is in, where it has no tree yet and a first message would start one. */
+		here?: { key: string; repo: string; starting: boolean };
+	};
+	/** Start the host of a repository whose tree is asleep. Whoever can sets `done`. */
+	"lattice:repo:wake": { key: string; done?: boolean };
 	/** Ask for the canopy to be shown, on a session when one is named. Whoever can show it sets `claimed`. */
 	"lattice:canopy:open": { nodeId?: string; claimed: boolean };
 	/**
@@ -96,6 +107,8 @@ export interface LatticeEvents {
 		first?(): { repo: string; starting: boolean } | undefined;
 		/** Run a command typed on the canopy, and show where it answers: it may ask something, and says what it did in the chat. */
 		command?(text: string): void;
+		/** Show the chat of the session open here, with the keyboard: where a first message is written. */
+		chat?(): void;
 		view?: {
 			render(width: number): string[];
 			key(data: string): void;

@@ -100,10 +100,18 @@ export default function (pi: ExtensionAPI) {
 			// The session ended between the check and the asking.
 		}
 	};
+	/**
+	 * Everything there is to draw: the trees of the hosts that are running, and one item for each
+	 * repository there is nothing to draw of yet. `current` is the session open here, or failing
+	 * that the first thing of the repository this terminal is in: the directory decides what is
+	 * selected, not what is shown.
+	 */
 	const look = (): { world: World; current: string | undefined } => {
 		const request: LatticeEvents["lattice:trees:query"] = {};
 		emitEvent(pi.events, "lattice:trees:query", request);
-		return { world: buildWorld(request.trees ?? [], levels()), current: request.current };
+		const world = buildWorld(request.trees ?? [], levels(), "", { ...(request.asleep ? { asleep: request.asleep } : {}), ...(request.here ? { here: request.here } : {}) });
+		const here = request.home !== undefined ? [...world.items.values()].find((item) => item.level >= 0 && item.tree === request.home && (item.parent?.level ?? 0) < 0) : undefined;
+		return { world, current: request.current ?? here?.id };
 	};
 
 	/** Where the canopy is shown: an overlay that closes, or a place in someone's layout that it never leaves. */
@@ -123,6 +131,8 @@ export default function (pi: ExtensionAPI) {
 		first?(): { repo: string; starting: boolean } | undefined;
 		/** Run a command where its answer is shown. */
 		command?(text: string): void;
+		/** Show the chat of the session open here, with the keyboard. */
+		chat?(): void;
 		memory?: { state?: unknown };
 	}
 
@@ -283,6 +293,13 @@ export default function (pi: ExtensionAPI) {
 						emitEvent(pi.events, "lattice:steer", request);
 						if (!request.done) said = { text: "That could not be said from here: the pane is not there to carry it.", until: Date.now() + SAY_MS };
 					}
+					if (action.do === "wake") {
+						const request: LatticeEvents["lattice:repo:wake"] = { key: action.key };
+						emitEvent(pi.events, "lattice:repo:wake", request);
+						if (!request.done) said = { text: "It could not be woken from here: the pane is not there to start it.", until: Date.now() + SAY_MS };
+					}
+					// Where the first message of a repository is written. Over the chat, the canopy closes onto it.
+					if (action.do === "chat") return place.chat ? place.chat() : place.back();
 					// Handing a session over asks who to, or whether to: it is run where that is asked and answered.
 					if (action.do === "hand") {
 						const command = `/lattice ${action.what} ${action.id}`;
@@ -371,7 +388,7 @@ export default function (pi: ExtensionAPI) {
 	// Where the canopy is what Pi opens on, the pane gives it a place in its layout and the keys.
 	onEvent(pi.events, "lattice:canopy:mount", (request) => {
 		if (!context || context.mode !== "tui" || request.view) return;
-		const view = screen(request.tui as TUI, undefined, { height: () => (request.tui as TUI).terminal.rows, back: request.back, open: request.open, keys: request.keys, away: request.away, memory: request.memory, ...(request.dim ? { dim: request.dim } : {}), ...(request.first ? { first: request.first } : {}), ...(request.command ? { command: request.command } : {}) });
+		const view = screen(request.tui as TUI, undefined, { height: () => (request.tui as TUI).terminal.rows, back: request.back, open: request.open, keys: request.keys, away: request.away, memory: request.memory, ...(request.dim ? { dim: request.dim } : {}), ...(request.first ? { first: request.first } : {}), ...(request.command ? { command: request.command } : {}), ...(request.chat ? { chat: request.chat } : {}) });
 		request.view = view;
 	});
 
