@@ -132,6 +132,41 @@ describe("a tree too wide for its window", () => {
 	});
 });
 
+describe("looking at a teammate", () => {
+	it("opens the tree around their work, and folds one's own", () => {
+		const w = harbor();
+		expect(w.people.map((person) => person.name)).toEqual(["yan", "mira", "sam", "teo"]);
+		const mira = press(w, initial(w), "2");
+		expect(mira.spotlight).toBe("mira");
+		const plan = planOf(w, mira, W, H);
+		// The way to each of mira's sessions is open, down to the tasks they run.
+		for (const id of ["sso-rollout", "sign-on", "oidc", "provider", "sessions", "store"]) expect(plan.places.has(id), id).toBe(true);
+		// yan's epic is a line now: it is where the eye was, and it is still selected.
+		expect(plan.places.get("checkout-v2")?.leaf).toBe(true);
+		expect(plan.places.has("webhooks")).toBe(false);
+		expect(mira.selected).toBe("checkout-v2");
+		expect(screen(w, mira)).toContain("⠋▸checkout-v2 6/15 ●3 y");
+		// 0, or their number again, is back to one's own.
+		for (const key of ["0", "2"] as const) {
+			const back = press(w, mira, key);
+			expect(back.spotlight).toBeUndefined();
+			expect(planOf(w, back, W, H).places.has("webhooks")).toBe(true);
+			expect(planOf(w, back, W, H).places.get("sso-rollout")?.leaf).toBe(true);
+		}
+		// What this person opened stays open under any of it.
+		const kept = press(w, { ...initial(w), selected: "pricing-migration" }, "f", "2");
+		expect(planOf(w, kept, W, H).places.get("pricing-migration")?.leaf).toBe(false);
+	});
+
+	it("changes nothing of a tree that is all on the screen but the colours", () => {
+		const w = harbor();
+		const before = planOf(w, initial(w), 300, 60);
+		const after = planOf(w, press(w, initial(w), "2"), 300, 60);
+		expect(after.fold).toBe("whole");
+		expect([...after.places.keys()]).toEqual([...before.places.keys()]);
+	});
+});
+
 describe("lines on a branch", () => {
 	it("puts a frond on the branch to the one thing open over an item, at no cost in width", () => {
 		const w = harbor();

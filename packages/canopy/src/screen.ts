@@ -193,10 +193,10 @@ const plans = new WeakMap<World, Map<string, Layout>>();
  */
 export function planOf(world: World, state: CanopyState, width?: number, height?: number): Layout {
 	const room = width !== undefined && height !== undefined && width >= FLOOR.cols && height >= FLOOR.rows ? windowOf(state, width, height) : undefined;
-	const key = `${state.shape}|${state.order}|${[...state.folded].sort().join(",")}|${[...state.opened].sort().join(",")}|${room ? `${room.width}x${room.height}` : ""}`;
+	const key = `${state.shape}|${state.order}|${[...state.folded].sort().join(",")}|${[...state.opened].sort().join(",")}|${state.spotlight ?? ""}|${room ? `${room.width}x${room.height}` : ""}`;
 	const known = plans.get(world) ?? new Map<string, Layout>();
 	plans.set(world, known);
-	const plan = known.get(key) ?? layout(world, { shape: state.shape, folded: state.folded, opened: state.opened, order: state.order, ...(room ? { room } : {}) });
+	const plan = known.get(key) ?? layout(world, { shape: state.shape, folded: state.folded, opened: state.opened, order: state.order, ...(state.spotlight ? { around: state.spotlight } : {}), ...(room ? { room } : {}) });
 	known.set(key, plan);
 	return plan;
 }
@@ -479,10 +479,15 @@ function act(world: World, given: CanopyState, key: CanopyKey, width: number, he
 	}
 	if (key === "i") return keep({ ...state, letters: !state.letters });
 	if (key === "r") return keep(frame({ ...state, shape: state.shape === "grown" ? "ruled" : "grown" }, planOf(world, { ...state, shape: state.shape === "grown" ? "ruled" : "grown" }, width, height), width, height, true));
-	if (key === "0") return keep({ ...state, spotlight: undefined });
+	// Looking at one person: their work keeps its colour, and a tree folded to fit is open around it and not around one's own.
+	const look = (spotlight: string | undefined): { state: CanopyState; actions: CanopyAction[] } => {
+		const next = { ...state, spotlight };
+		return keep(frame(next, planOf(world, next, width, height), width, height));
+	};
+	if (key === "0") return look(undefined);
 	if (/^[1-9]$/.test(key)) {
 		const person = world.people[Number(key) - 1];
-		return person ? keep({ ...state, spotlight: state.spotlight === person.name ? undefined : person.name }) : keep(state);
+		return person ? look(state.spotlight === person.name ? undefined : person.name) : keep(state);
 	}
 	if (!item) return keep(state);
 	// A repository drawn as one item has nothing on it to open, start or hand over: enter is the one thing it takes.
@@ -698,7 +703,7 @@ export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyAr
 	["The view", [
 		["a", "the panel beside the tree: what is selected, then everyone's agents, then none"],
 		["O", "what must come first on the left, or everything as it was filed"],
-		["1-9  0", "keep one person's colour and grey the rest; 0 brings everyone back"],
+		["1-9  0", "look at one person: their colour is kept and the rest greyed, and a folded tree opens around their work; 0 brings everyone back"],
 		["i", "a letter beside each item for whose it is, to read without colour"],
 		["r", "every level on one row, or grown like a tree"],
 		["?", "show or hide this list"],
