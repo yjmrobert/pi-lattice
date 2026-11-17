@@ -28,8 +28,15 @@ export interface CanopyState {
 	shape: Shape;
 	/** What must come first on the left, or everything as it was filed. */
 	order: Order;
-	/** A line being typed at the foot: what to say about the selected item to whatever tends it, or what to say instead of answering. */
-	typing?: { what: "say"; label: string; text: string; number?: number; nodeId?: string } | { what: "answer"; label: string; text: string; id: string; key: string };
+	/**
+	 * A line being typed at the foot: what to say about the selected item to whatever tends it, what to say
+	 * instead of answering, or part of a name to go to, with where the selection was before it was typed.
+	 */
+	typing?: { what: "say"; label: string; text: string; number?: number; nodeId?: string } | { what: "answer"; label: string; text: string; id: string; key: string } | { what: "find"; label: string; text: string; from: string | undefined };
+	/** The last move made with an arrow: the opposite arrow, pressed where it led, goes back to where it started. */
+	back?: { from: string; to: string; key: Arrow };
+	/** Under each item, what was last left downward: going up again returns there. */
+	came?: ReadonlyMap<string, string>;
 	/** The changes by agents this person has been taken to, since they last looked. */
 	walked: ReadonlySet<string>;
 	/** The change being looked at: who made it, what, and why are written at the foot. */
@@ -60,6 +67,8 @@ export function describeChange(event: IssueEvent): string {
 }
 
 const ago = (ms: number): string => (ms < 60_000 ? "just now" : ms < 3_600_000 ? `${Math.floor(ms / 60_000)}m ago` : ms < 86_400_000 ? `${Math.floor(ms / 3_600_000)}h ago` : `${Math.floor(ms / 86_400_000)}d ago`);
+
+export type Arrow = "up" | "down" | "left" | "right";
 
 export type CanopyKey = "up" | "down" | "left" | "right" | "shift+up" | "shift+down" | "shift+left" | "shift+right" | "home" | "tab" | "enter" | "escape" | (string & {});
 
@@ -129,7 +138,7 @@ const windowOf = (state: CanopyState, width: number, height: number): { width: n
 /** Move the window as little as it takes to bring a place, and its label, into view. A tree smaller than the window is centred. */
 export function frame(state: CanopyState, plan: Layout, width: number, height: number, centre = false): CanopyState {
 	const win = windowOf(state, width, height);
-	const place = state.selected ? plan.places.get(state.selected) : undefined;
+	const place = placeOf(plan, state.selected);
 	let { col, row } = state.camera;
 	const axis = (at: number, size: number, from: number, to: number, total: number, pad: number): number => {
 		if (total <= size) return -Math.floor((size - total) / 2);
@@ -140,7 +149,7 @@ export function frame(state: CanopyState, plan: Layout, width: number, height: n
 		return Math.max(0, Math.min(total - size, next));
 	};
 	if (place) {
-		const reach = [...cut(place.item.name, plan.nameMax)].length + 6;
+		const reach = [...cut(place.item.name, place.helper ? 16 : plan.nameMax)].length + 6;
 		col = axis(col, win.width, place.col - 2, place.col + reach, plan.width, 4);
 		row = axis(row, win.height, place.row - 1, place.row + 2, plan.height, 2);
 	} else {
@@ -175,35 +184,98 @@ const tipsOf = (world: World): { free: Item[]; held: Item[] } => {
 
 // --- keys ----------------------------------------------------------------------
 
-/** Where an arrow leads from an item: across to the nearest thing beside it, up into what is under it, down to what it belongs to. */
-function neighbour(world: World, plan: Layout, from: Place, key: "up" | "down" | "left" | "right"): string | undefined {
+/** How many of an item's helpers are written under it; the rest are counted. */
+const HELPERS_SHOWN = 2;
+
+/** Where something is drawn: an item where the layout put it, or a helper on its line under the item it helps. */
+export interface Spot extends Place {
+	helper?: boolean;
+}
+
+/** Where what has this id is drawn, when it is. */
+export function placeOf(plan: Layout, id: string | undefined): Spot | undefined {
+	if (id === undefined) return undefined;
+	const placed = plan.places.get(id);
+	if (placed) return placed;
+	for (const place of plan.places.values()) {
+		if (place.leaf) continue;
+		const at = place.item.buds.slice(0, HELPERS_SHOWN).findIndex((bud) => bud.id === id);
+		if (at >= 0) return { item: place.item.buds[at] as Item, col: place.col + 4, row: place.row + 2 + at, leaf: true, helper: true };
+	}
+	return undefined;
+}
+
+const OPPOSITE: Record<Arrow, Arrow> = { up: "down", down: "up", left: "right", right: "left" };
+
+/**
+ * Where an arrow leads. The tree grows upward, and the arrows follow what is drawn: up is into what
+ * is under an item, down is to what it belongs to, left and right are along its level. Across, an
+ * item goes to the nearest one of its own level, and a task to the task beside it on the next
+ * stem; only where there is none on that side does it go to whatever is nearest. Helpers are
+ * written under the item they help, so down from the item reads through them first.
+ */
+function step(plan: Layout, state: CanopyState, from: Spot, key: Arrow): string | undefined {
+	// Back the way one came is back where one was, whatever the shape of the tree says is nearest.
+	if (state.back && state.back.to === from.item.id && OPPOSITE[state.back.key] === key && placeOf(plan, state.back.from)) return state.back.from;
+	const top = (item: Item | undefined): string | undefined => (item && item.id !== ROOT_ID ? item.id : undefined);
+	// A helper is on a line of its own under what it helps: up and down read those lines, and across it is where that item is.
+	if (from.helper) {
+		const helped = from.item.parent as Item;
+		const shown = helped.buds.slice(0, HELPERS_SHOWN);
+		const at = shown.indexOf(from.item);
+		if (key === "up") return (shown[at - 1] ?? helped).id;
+		if (key === "down") return shown[at + 1]?.id ?? top(helped.parent);
+		const beside = plan.places.get(helped.id);
+		const { back: _back, ...rest } = state;
+		return beside ? step(plan, rest, beside, key) : undefined;
+	}
 	const item = from.item;
-	const places = [...plan.places.values()].filter((place) => place.item.id !== ROOT_ID && place !== from);
+	const others = [...plan.places.values()].filter((place) => place.item.id !== ROOT_ID && place !== from);
 	if (key === "left" || key === "right") {
-		const side = places.filter((place) => (key === "right" ? place.col > from.col : place.col < from.col));
-		const score = (place: Place): number => Math.abs(place.col - from.col) + Math.abs(place.row - from.row) * 6 + (place.item.level === from.item.level ? 0 : 40);
-		return side.sort((a, b) => score(a) - score(b))[0]?.item.id;
+		const side = others.filter((place) => (key === "right" ? place.col > from.col : place.col < from.col));
+		const nearest = (places: Place[]): string | undefined => places.sort((a, b) => Math.abs(a.col - from.col) - Math.abs(b.col - from.col) || Math.abs(a.row - from.row) - Math.abs(b.row - from.row))[0]?.item.id;
+		// Its own kind first: an item of the same level, or for a task, a task on the nearest stem that way.
+		const level = side.filter((place) => place.leaf === from.leaf && (from.leaf || place.item.level === item.level));
+		if (level.length > 0) return nearest(level);
+		return side.sort((a, b) => Math.abs(a.col - from.col) + Math.abs(a.row - from.row) * 6 - (Math.abs(b.col - from.col) + Math.abs(b.row - from.row) * 6))[0]?.item.id;
 	}
 	if (from.leaf) {
-		const frond = places.filter((place) => place.leaf && place.item.parent === item.parent).concat(from).sort((a, b) => a.row - b.row);
+		const frond = others.filter((place) => place.leaf && place.item.parent === item.parent).concat(from).sort((a, b) => a.row - b.row);
 		const at = frond.indexOf(from);
 		if (key === "up") return frond[at - 1]?.item.id;
-		return frond[at + 1]?.item.id ?? (item.parent && item.parent.id !== ROOT_ID ? item.parent.id : undefined);
+		return frond[at + 1]?.item.id ?? top(item.parent);
 	}
-	if (key === "down") return item.parent && item.parent.id !== ROOT_ID ? item.parent.id : undefined;
-	// Up: into the nearest thing under it.
+	if (key === "down") return item.buds[0]?.id ?? top(item.parent);
+	// Up: where one last came down from, else into the nearest thing under it.
+	const last = state.came?.get(item.id);
+	if (last !== undefined && placeOf(plan, last)) return last;
 	const under = item.children.map((child) => plan.places.get(child.id)).filter((place): place is Place => place !== undefined);
 	return under.sort((a, b) => Math.abs(a.col - from.col) - Math.abs(b.col - from.col) || b.row - a.row)[0]?.item.id;
 }
 
-const ARROWS: Record<string, "up" | "down" | "left" | "right"> = { up: "up", down: "down", left: "left", right: "right", k: "up", j: "down", h: "left", l: "right" };
+/** The items whose name has what was typed in it, or whose number it is, in the order the tree is read. */
+function found(world: World, plan: Layout, text: string): Item[] {
+	const wanted = text.trim().toLowerCase();
+	if (wanted === "") return [];
+	const number = /^#?\d+$/.test(wanted) ? Number(wanted.replace("#", "")) : undefined;
+	const all = walk(world.root).filter((item) => item.level >= 0 && placeOf(plan, item.id));
+	const starts = all.filter((item) => item.name.toLowerCase().startsWith(wanted) || (number !== undefined && item.issue?.number === number));
+	return [...starts, ...all.filter((item) => !starts.includes(item) && item.name.toLowerCase().includes(wanted))];
+}
+
+const ARROWS: Record<string, Arrow> = { up: "up", down: "down", left: "left", right: "right", k: "up", j: "down", h: "left", l: "right" };
 
 /** What a key does. Returns the next state and what the host of the screen must do. */
 export function interpret(world: World, state: CanopyState, key: CanopyKey, width: number, height: number, asking?: Asking): { state: CanopyState; actions: CanopyAction[] } {
 	const plan = planOf(world, state, width, height);
-	const here = state.selected ? plan.places.get(state.selected) : undefined;
+	const here = placeOf(plan, state.selected);
 	const item = here?.item;
-	const go = (id: string | undefined): { state: CanopyState; actions: CanopyAction[] } => ({ state: id ? frame({ ...state, selected: id }, plan, width, height) : state, actions: [] });
+	// Going somewhere by anything but an arrow leaves no way back to retrace.
+	const go = (id: string | undefined): { state: CanopyState; actions: CanopyAction[] } => {
+		if (!id) return { state, actions: [] };
+		const { back: _back, ...rest } = state;
+		return { state: frame({ ...rest, selected: id }, plan, width, height), actions: [] };
+	};
 	const keep = (next: CanopyState, actions: CanopyAction[] = []): { state: CanopyState; actions: CanopyAction[] } => ({ state: next, actions });
 	const win = windowOf(state, width, height);
 	const pan = (dc: number, dr: number): { state: CanopyState; actions: CanopyAction[] } =>
@@ -212,6 +284,21 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 	// While a line is being typed, every key is for it.
 	if (state.typing) {
 		const { typing, ...rest } = state;
+		if (typing.what === "find") {
+			// Each letter goes to the first thing it finds; tab goes on to the next; escape is back where it started.
+			if (key === "escape") return keep(typing.from !== undefined && placeOf(plan, typing.from) ? frame({ ...rest, selected: typing.from }, plan, width, height) : rest);
+			if (key === "enter") return keep(rest);
+			if (key === "tab" || key === "down" || key === "up") {
+				const all = found(world, plan, typing.text);
+				const at = all.findIndex((other) => other.id === state.selected);
+				const next = all[(at + (key === "up" ? all.length - 1 : 1)) % Math.max(1, all.length)];
+				return keep(next ? frame({ ...state, selected: next.id }, plan, width, height) : state);
+			}
+			const text = key === "backspace" ? [...typing.text].slice(0, -1).join("") : [...key].length === 1 ? typing.text + key : typing.text;
+			const first = found(world, plan, text)[0];
+			const { back: _back, ...still } = state;
+			return keep(frame({ ...still, selected: first?.id ?? (text === "" ? typing.from : state.selected), typing: { ...typing, text } }, plan, width, height));
+		}
 		if (key === "escape") return keep(rest);
 		if (key === "backspace") return keep({ ...state, typing: { ...typing, text: [...typing.text].slice(0, -1).join("") } });
 		if (key === "enter") {
@@ -257,7 +344,16 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 		return keep({ ...state, typing: { what: "say", label: `to ${tendedBy(world, item)}, about ${cut(item.name, 28)}`, text: "", nodeId: item.node?.id ?? item.id } });
 	}
 	const arrow = ARROWS[key];
-	if (arrow) return go(here ? neighbour(world, plan, here, arrow) : world.root.children[0]?.id);
+	if (arrow) {
+		if (!here) return go(world.root.children[0]?.id);
+		const to = step(plan, state, here, arrow);
+		if (to === undefined) return keep(state);
+		// Leaving downward is remembered on what one arrives at, so that up from there comes back.
+		const came = arrow === "down" && !placeOf(plan, to)?.leaf ? new Map(state.came).set(to, here.item.id) : state.came;
+		return keep(frame({ ...state, selected: to, back: { from: here.item.id, to, key: arrow }, ...(came ? { came } : {}) }, plan, width, height));
+	}
+	// Go to something by its name: the tree may be larger than what the arrows cross quickly.
+	if (key === "/") return keep({ ...state, typing: { what: "find", label: "go to", text: "", from: state.selected } });
 	if (key === "shift+left") return pan(-12, 0);
 	if (key === "shift+right") return pan(12, 0);
 	if (key === "shift+up") return pan(0, -4);
@@ -402,7 +498,8 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 	if (state.typing) {
 		const room = Math.max(8, width - [...state.typing.label].length - 30);
 		const shown = [...state.typing.text].slice(-room).join("");
-		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], [" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]]);
+		const keys: Array<[string, Style]> = state.typing.what === "find" ? [[" ⏎ ", KEYCAP], [" stay here   ", DIM], [" tab ", KEYCAP], [" next   ", DIM], [" esc ", KEYCAP], [" back", DIM]] : [[" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]];
+		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], ...keys]);
 		return grid;
 	}
 	const named = (leave ?? []).map(([key, does]): [string, string] => [key, does]);
@@ -719,7 +816,7 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const speaking = win.height > 16 && (view.typing?.what === "say" || view.viewing || !moving?.asking) ? speakingBand(world, view, win.width, moving?.now ?? 0, tick, moving?.away === true) : undefined;
 	const band = speaking ? lines(speaking) : moving?.asking && win.height > 16 ? lines(askingBand(moving.asking, win.width, moving.away === true, view.typing?.what === "answer" ? view.typing : undefined)) : [];
 	const left = win.height - band.length;
-	const selected = view.selected ? plan.places.get(view.selected) : undefined;
+	const selected = placeOf(plan, view.selected);
 	const hidden = selected !== undefined && selected.row - view.camera.row + 2 >= left;
 	const canvas = [...lines(tree, camera.col, camera.row + (hidden ? band.length : 0), win.width, left), ...band];
 	const panel = side > 0 ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick)) : [];
@@ -735,7 +832,7 @@ export function anchorOf(world: World, state: CanopyState, width: number, height
 	if (width < FLOOR.cols || height < FLOOR.rows) return undefined;
 	const plan = planOf(world, state, width, height);
 	const view = state.framed ? state : frame(state, plan, width, height, true);
-	const place = view.selected ? plan.places.get(view.selected) : undefined;
+	const place = placeOf(plan, view.selected);
 	if (!place) return undefined;
 	const win = windowOf(view, width, height);
 	return { col: Math.max(0, Math.min(win.width - 1, place.col - view.camera.col)), row: HEADER + Math.max(0, Math.min(win.height - 1, place.row - view.camera.row)) };
