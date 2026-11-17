@@ -87,6 +87,8 @@ export default function (pi: ExtensionAPI) {
 		dim?(): number;
 		/** Where there is no tree yet and a first message would start one (ADR 0035). */
 		first?(): { repo: string; starting: boolean } | undefined;
+		/** Run a command where its answer is shown. */
+		command?(text: string): void;
 		memory?: { state?: unknown };
 	}
 
@@ -209,9 +211,13 @@ export default function (pi: ExtensionAPI) {
 					const next = firstKey(draft, key);
 					draft = next.draft;
 					if (next.send !== undefined) {
-						// A command is run, as it would be from the editor; anything else is the message that starts the tree.
-						if (!next.send.startsWith("/")) sent = { text: next.send, at: Date.now(), started: false };
-						send(next.send);
+						// A command is run where its answer is read: it may ask something first, and says what it did in the chat.
+						// Anything else is the message that starts the tree.
+						if (next.send.startsWith("/") && place.command) place.command(next.send);
+						else {
+							if (!next.send.startsWith("/")) sent = { text: next.send, at: Date.now(), started: false };
+							send(next.send);
+						}
 					}
 					tui.requestRender();
 					return;
@@ -330,7 +336,7 @@ export default function (pi: ExtensionAPI) {
 	// Where the canopy is what Pi opens on, the pane gives it a place in its layout and the keys.
 	onEvent(pi.events, "lattice:canopy:mount", (request) => {
 		if (!context || context.mode !== "tui" || request.view) return;
-		const view = screen(request.tui as TUI, undefined, { height: () => (request.tui as TUI).terminal.rows, back: request.back, open: request.open, keys: request.keys, away: request.away, memory: request.memory, ...(request.dim ? { dim: request.dim } : {}), ...(request.first ? { first: request.first } : {}) });
+		const view = screen(request.tui as TUI, undefined, { height: () => (request.tui as TUI).terminal.rows, back: request.back, open: request.open, keys: request.keys, away: request.away, memory: request.memory, ...(request.dim ? { dim: request.dim } : {}), ...(request.first ? { first: request.first } : {}), ...(request.command ? { command: request.command } : {}) });
 		request.view = view;
 	});
 

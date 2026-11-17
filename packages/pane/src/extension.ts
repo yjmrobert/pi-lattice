@@ -317,6 +317,8 @@ function firstHere(): { repo: string; starting: boolean } | undefined {
 		const link = homeLink();
 		// A tree that is here, or not yet read: what it has is drawn, not a first message.
 		if (link && (!link.state || link.state.nodes.some((node) => !node.archived))) return undefined;
+		// A board with work on it is drawn as soon as it is joined: a teammate sees the team's work before starting anything of their own.
+		if ([...shared.links.values()].some((candidate) => (candidate.state?.work?.issues.length ?? 0) > 0)) return undefined;
 		const repo = basename(projectRoot(ctx.cwd));
 		if (shared.starting) return { repo, starting: true };
 		if (link) return toggleSetting(settings().settings, "pane.autoJoin") ? { repo, starting: false } : undefined;
@@ -434,6 +436,7 @@ function mountCanopy(): void {
 		// Behind an open session the tree is still read, and does not compete with it.
 		dim: () => 1 - 0.62 * shared.grow,
 		first: firstHere,
+		command: dispatch,
 	};
 	emitEvent(pi.events, "lattice:canopy:mount", request);
 	if (!request.view) return; // the canopy has not started in this session yet, or is not installed
@@ -1463,7 +1466,8 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		if (!client) return;
 		try {
 			const { text } = await client.ui("server", { action, args: action === "join" ? words : action === "start" ? words.slice(1) : [] });
-			ctx.ui.notify(text, "info");
+			// Where the canopy is what Pi shows, the work is drawn behind this as it is said; beside the chat, it is a key away.
+			ctx.ui.notify((action === "join" || action === "start") && !homeAble() ? `${text} Press c in the pane for the canopy.` : text, "info");
 			// Say so when teammates are there; when nobody is yet, there is nothing to report.
 			if (action === "join") void lookAround(ctx, 10_000, true).catch(() => {});
 		} catch (error) {

@@ -223,7 +223,7 @@ describe("the team's work", () => {
 		work.sync();
 		expect(await work.server("status", [])).toBe("You are on no server. Start a board on this machine with /lattice server start, or join your team's with /lattice server <address>.");
 		await (await teammate("sam")).create({ title: "Checkout", type: "epic" });
-		expect(await work.server("join", [address])).toBe(`Joined ${address.replace(/\/#.*/, "")} as tester. It has 1 issue. Press c in the pane for the canopy.`);
+		expect(await work.server("join", [address])).toBe(`Joined ${address.replace(/\/#.*/, "")} as tester. It has 1 issue.`);
 		expect(h.uiState().work).toMatchObject({ me: "tester", connected: true });
 		expect(await work.server("status", [])).toMatch(/as tester\. 1 issue, 2 people \(2 online\), 0 sessions running\.$/);
 
@@ -280,7 +280,7 @@ describe("the team's work", () => {
 		try {
 			expect(await work.server("share", []).catch((error: Error) => error.message)).toBe("Only the board on this machine can be shared from here. Start one with /lattice server start.");
 			expect(await work.server("start", [])).toBe(
-				"A board is running on this machine, and you are on it as tester. There is no work on it yet: tell a session what you want done, and it writes the work down. Press c in the pane for the canopy. Only this machine can reach it. To let teammates join, /lattice server share.",
+				"A board is running on this machine, and you are on it as tester. There is no work on it yet: tell a session what you want done, and it writes the work down. Only this machine can reach it. To let teammates join, /lattice server share.",
 			);
 			await h.runWork({ do: "add", change: { title: "Checkout", type: "epic" } });
 			expect(await work.server("status", [])).toBe("The board on this machine, not shared, as tester. 1 issue, 1 person (1 online), 0 sessions running.");

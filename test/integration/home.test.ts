@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSandbox, eventually, extensionPaths, piCli, type Sandbox } from "../support/harness.ts";
+import { joinServer, WorkClient, WorkServer } from "../../packages/server/src/index.ts";
 import { canRunTui, KEY, PiTui } from "../support/tui.ts";
 
 let sandbox: Sandbox;
@@ -247,5 +248,43 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		await eventually(() => existsSync(join(stateDir, "host.db")), "the tree to be kept in the repository", 10_000);
 		pi.press(KEY.altL);
 		await pi.see(/echo\[user\].*plan the refunds/, 30_000);
+	}, 120_000);
+
+	it("draws a team's board as soon as it is joined, from a repository with no tree of its own", async () => {
+		// What a teammate does first: a fresh clone, Pi opened in it, and the address they were given typed where the cursor is.
+		const server = new WorkServer({ file: ":memory:", host: "127.0.0.1" });
+		const address = `http://127.0.0.1:${await server.start()}/#${server.tracker.code}`;
+		const yan = new WorkClient(await joinServer(address, "yan"));
+		try {
+			await yan.create({ title: "Checkout", type: "epic", assignee: "yan" });
+			await yan.create({ title: "Pay by card", parent: 1 });
+			await yan.create({ title: "Enter a card", parent: 2 });
+			await yan.create({ title: "Card form", parent: 3 });
+			const shop = join(sandbox.root, "shop");
+			mkdirSync(shop);
+			execFileSync("git", ["init", "-q"], { cwd: shop });
+			stateDir = join(realpathSync(shop), ".lattice");
+			const env = { LATTICE_PI_COMMAND: JSON.stringify([process.execPath, piCli]), LATTICE_PI_ARGS: JSON.stringify(fauxArgs), LATTICE_EXTENSION_PATHS: JSON.stringify([extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]) };
+			tui = PiTui.start(sandbox, { cols: 120, rows: 36, cwd: shop, extensions: [extensionPaths.launcher, extensionPaths.pane, extensionPaths.canopy, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph], env });
+			const pi = tui;
+			await pi.see("Your first message starts the tree.");
+
+			pi.press(`/lattice server ${address}`);
+			await new Promise((resolve) => setTimeout(resolve, 80));
+			pi.press(KEY.enter);
+			// The command answers in the chat, which opens for it: it may have a question to ask first.
+			const joined = await pi.see(/Joined http:\/\/127\.0\.0\.1:\d+ as tester\. It has 4 issues\./, 30_000);
+			expect(joined.join("\n")).not.toContain("Press c in the pane");
+			expect(joined.some((row) => OPEN.test(row) || /╭─.*alt\+l\s+tree/.test(row))).toBe(true);
+
+			// Behind it the board is drawn, with nothing started here: the first message is no longer what the canopy asks for.
+			pi.press(KEY.altL);
+			const board = await pi.waitFor((screen) => /p\s+sessions/.test(screen) && !screen.includes("╭"), "the board alone");
+			for (const title of ["Checkout", "Pay by card", "Enter a card", "Card form"]) expect(board.join("\n")).toContain(title);
+			expect(board.join("\n")).not.toContain("Your first message starts the tree.");
+			expect(board[0]).toMatch(/1 @tester.*2 @yan/);
+		} finally {
+			await server.stop();
+		}
 	}, 120_000);
 });

@@ -284,7 +284,7 @@ export class Work implements WorkPort {
 			this.sync();
 			await this.client?.refresh().catch(() => {});
 			const count = this.state()?.issues.length ?? 0;
-			return `A board is running on this machine, and you are on it as ${account.name}. ${count === 0 ? "There is no work on it yet: tell a session what you want done, and it writes the work down. Press c in the pane for the canopy." : `It has ${count} issue${count === 1 ? "" : "s"}. Press c in the pane for the canopy.`} Only this machine can reach it. To let teammates join, /lattice server share.`;
+			return `A board is running on this machine, and you are on it as ${account.name}. ${count === 0 ? "There is no work on it yet: tell a session what you want done, and it writes the work down." : `It has ${count} issue${count === 1 ? "" : "s"}.`} Only this machine can reach it. To let teammates join, /lattice server share.`;
 		}
 		if (action === "share" || action === "unshare") {
 			if (!readAccount(this.options.home)?.board) throw new Error("Only the board on this machine can be shared from here. Start one with /lattice server start.");
@@ -314,7 +314,7 @@ export class Work implements WorkPort {
 			this.sync();
 			await this.client?.refresh().catch(() => {});
 			const count = this.state()?.issues.length ?? 0;
-			return `Joined ${account.url} as ${account.name}. ${count === 0 ? "There is no work on it yet." : `It has ${count} issue${count === 1 ? "" : "s"}.`}${before && before.url !== account.url ? ` You have left ${before.url}.` : ""} Press c in the pane for the canopy.`;
+			return `Joined ${account.url} as ${account.name}. ${count === 0 ? "There is no work on it yet." : `It has ${count} issue${count === 1 ? "" : "s"}.`}${before && before.url !== account.url ? ` You have left ${before.url}.` : ""}`;
 		}
 		if (action === "leave") {
 			const account = readAccount(this.options.home);

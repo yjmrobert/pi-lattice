@@ -94,6 +94,8 @@ export interface LatticeEvents {
 		 * whether that is happening now. The canopy then takes the first message itself (ADR 0035).
 		 */
 		first?(): { repo: string; starting: boolean } | undefined;
+		/** Run a command typed on the canopy, and show where it answers: it may ask something, and says what it did in the chat. */
+		command?(text: string): void;
 		view?: {
 			render(width: number): string[];
 			key(data: string): void;
