@@ -4,6 +4,13 @@ import type { TreeSource } from "../src/index.ts";
 
 export const LEVELS = ["epic", "feature", "story", "task"];
 
+/**
+ * Everything that has something under it, as a person who opened it all would have it in their
+ * state: the whole tree is drawn whatever the room. A tree wider than its window otherwise folds
+ * around this person's work; a test of how the whole of it is moved over wants it whole.
+ */
+export const allOpen = (items: Iterable<{ id: string; children: readonly unknown[] }>): Set<string> => new Set([...items].filter((item) => item.children.length > 0).map((item) => item.id));
+
 type Spec = [name: string, kind: string, how: string, kids?: Spec[]];
 
 /**
@@ -67,3 +74,27 @@ export const HARBOR: Spec[] = [
 		]],
 	]],
 ];
+
+/**
+ * A project of many people, larger than any window: `epics` epics of `features` features of
+ * `stories` stories of `tasks` tasks, each epic someone's. The same one every time it is built.
+ * This person runs sessions in a few places in the first epic, and one of them asks; so does one
+ * task in every other epic, of whoever that epic is.
+ */
+export function large(epics: number, features: number, stories: number, tasks: number, people = ["yan", "sam", "mira", "teo", "ines"]): Spec[] {
+	let seed = 11;
+	const chance = (): number => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+	return Array.from({ length: epics }, (_e, e): Spec => {
+		const owner = people[e % people.length] as string;
+		return [`epic-${e}`, "epic", `@${owner} coordinator run`, Array.from({ length: features }, (_f, f): Spec => {
+			const mine = e === 0 && f < 2;
+			return [`feat-${e}-${f}`, "feature", mine ? "planner run" : "plan", Array.from({ length: stories }, (_s, s): Spec => {
+				const here = mine && s === 0;
+				return [`story-${e}-${f}-${s}`, "story", "plan", Array.from({ length: tasks }, (_t, t): Spec => {
+					const state = here && t === 0 ? (f === 0 ? "worker ask" : "worker run") : e > 0 && f === 0 && s === 0 && t === 0 ? "worker ask" : chance() < 0.3 ? "worker done" : chance() < 0.08 ? "worker run" : "plan";
+					return [`task-${e}-${f}-${s}-${t}`, "task", state];
+				})];
+			})];
+		})];
+	});
+}

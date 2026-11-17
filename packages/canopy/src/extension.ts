@@ -9,7 +9,7 @@ import { type Component, matchesKey, truncateToWidth, type TUI, visibleWidth } f
 import { emitEvent, type LatticeEvents, onEvent, SETTINGS } from "@pi-lattice/protocol";
 import { type Animation, advance, happenings, type Motion } from "./animate.ts";
 import { cells, fit, styled } from "./grid.ts";
-import type { Shape } from "./layout.ts";
+import { type Shape, sameFolds } from "./layout.ts";
 import { buildWorld, type World } from "./model.ts";
 import { type FirstKey, firstKey, renderFirst } from "./first.ts";
 import { BEAT } from "./paint.ts";
@@ -219,7 +219,8 @@ export default function (pi: ExtensionAPI) {
 				const now = Date.now();
 				moving = advance(moving, motion === "full" ? happenings(before, world) : [], world, now);
 				// Something changed place among its siblings: the tree moves there, as it does when an item is folded.
-				if (motion !== "off" && !morph && reordered(before, world, state.order)) morph = { from: planOf(before, state, width, place.height()), camera: state.camera, start: now };
+				// So it does when the work changes what is folded to fit: a session started somewhere opens the way to it.
+				if (motion !== "off" && !morph && (reordered(before, world, state.order) || !sameFolds(planOf(before, state, width, place.height()), planOf(world, state, width, place.height())))) morph = { from: planOf(before, state, width, place.height()), camera: state.camera, start: now };
 				// What was selected may be gone: archived, or handed to someone whose tree is not shown.
 				// Nothing may be selected yet either: the canopy was put in the layout before there was a tree.
 				if (!state.selected || !world.items.has(state.selected)) {
@@ -275,7 +276,8 @@ export default function (pi: ExtensionAPI) {
 				const was = state;
 				const next = interpret(world, state, key, width, place.height(), asking, place.keys?.().map((entry) => [entry.key, entry.does] as const));
 				state = next.state;
-				if (motion !== "off" && state.folded !== was.folded) morph = { from: planOf(world, was, width, place.height()), camera: was.camera, start: Date.now() };
+				// Whatever changed what is folded: f, or a key that changed the room and with it how much fits.
+				if (motion !== "off" && !sameFolds(planOf(world, was, width, place.height()), planOf(world, state, width, place.height()))) morph = { from: planOf(world, was, width, place.height()), camera: was.camera, start: Date.now() };
 				if (place.memory) place.memory.state = state;
 				for (const action of next.actions) {
 					if (action.do === "close") return place.back();

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { blend, buildWorld, type CanopyKey, type CanopyState, initial, interpret, planOf, render, renderPlain } from "../src/index.ts";
-import { HARBOR, LEVELS, world } from "./fixture.ts";
+import { allOpen, HARBOR, LEVELS, world } from "./fixture.ts";
 
 const W = 150;
 const H = 44;
 const harbor = (extra = {}) => buildWorld([world(HARBOR, "yan", extra)], LEVELS);
 const press = (w: ReturnType<typeof harbor>, state: CanopyState, ...keys: CanopyKey[]): CanopyState => keys.reduce((at, key) => interpret(w, at, key, W, H).state, state);
+/** With everything opened by hand: the whole tree, wider than the window, as these tests of moving over it want it. */
+const whole = (w: ReturnType<typeof harbor>, id?: string): CanopyState => ({ ...initial(w, id), opened: allOpen(w.items.values()) });
 const screen = (w: ReturnType<typeof harbor>, state: CanopyState): string => renderPlain(w, state, W, H).join("\n");
 
 describe("the screen", () => {
@@ -42,7 +44,7 @@ describe("the screen", () => {
 describe("moving", () => {
 	it("goes down to what an item belongs to and up into what is under it", () => {
 		const w = harbor();
-		const at = initial(w, "tables");
+		const at = whole(w, "tables");
 		expect(press(w, at, "down").selected).toBe("new-tables");
 		expect(press(w, at, "down", "down").selected).toBe("pricing-migration");
 		// The root is not something to select.
@@ -55,7 +57,7 @@ describe("moving", () => {
 
 	it("goes across to what is beside an item", () => {
 		const w = harbor();
-		const at = initial(w, "payments");
+		const at = whole(w, "payments");
 		expect(press(w, at, "right").selected).toBe("cart");
 		expect(press(w, at, "left").selected).toBe("invoices");
 		expect(press(w, at, "l", "h").selected).toBe("payments");
@@ -63,14 +65,14 @@ describe("moving", () => {
 
 	it("jumps to the next thing that needs someone", () => {
 		const w = harbor();
-		const seen = [1, 2, 3, 4, 5].map((n) => press(w, initial(w, "tables"), ...Array.from({ length: n }, () => "tab" as const)).selected);
+		const seen = [1, 2, 3, 4, 5].map((n) => press(w, whole(w, "tables"), ...Array.from({ length: n }, () => "tab" as const)).selected);
 		expect(seen).toEqual(["webhooks", "stripe-listen", "conflicts", "pdf", "webhooks"]);
 	});
 
 	it("keeps what is selected in the window, moving it only as far as needed", () => {
 		const w = harbor();
-		const plan = planOf(w, initial(w));
-		let state = press(w, initial(w, "checkout-v2"), "tab");
+		const plan = planOf(w, whole(w));
+		let state = press(w, whole(w, "checkout-v2"), "tab");
 		const place = plan.places.get("webhooks");
 		expect(place).toBeDefined();
 		const inView = (s: CanopyState, id: string): boolean => {
@@ -89,7 +91,7 @@ describe("moving", () => {
 
 	it("pans with shift and the arrows, and never past the edge of the tree", () => {
 		const w = harbor();
-		const start = press(w, initial(w, "checkout-v2"), "home");
+		const start = press(w, whole(w, "checkout-v2"), "home");
 		const right = press(w, start, "shift+right");
 		expect(right.camera.col).toBe(start.camera.col + 12);
 		expect(right.selected).toBe("checkout-v2");
@@ -100,7 +102,7 @@ describe("moving", () => {
 
 	it("says at the edge how many things that need someone are out of view", () => {
 		const w = harbor();
-		const text = screen(w, press(w, initial(w, "tables")));
+		const text = screen(w, press(w, whole(w, "tables")));
 		expect(text).toMatch(/1▶/);
 	});
 });

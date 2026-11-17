@@ -6,7 +6,7 @@
 import type { IssueEvent, Steer } from "@pi-lattice/protocol";
 import type { Animation } from "./animate.ts";
 import { cells, Grid, pad, type Style, tail } from "./grid.ts";
-import { cut, type Layout, layout, type Place, type Shape } from "./layout.ts";
+import { cut, type Layout, layout, type Place, rollup, type Shape } from "./layout.ts";
 import { type Item, pathTo, ROOT_ID, walk, type World } from "./model.ts";
 import { blend, ease } from "./morph.ts";
 import { canStart, inOrder, type Order } from "./order.ts";
@@ -21,7 +21,10 @@ export interface CanopyState {
 	camera: { col: number; row: number };
 	/** Whether the window has been placed yet: it is, the first time the size is known. */
 	framed: boolean;
+	/** What this person folded: each stays one line, whatever room there is. */
 	folded: ReadonlySet<string>;
+	/** What this person opened: it stays open, and so does the way to it, when the tree is folded to fit its window. */
+	opened: ReadonlySet<string>;
 	spotlight: string | undefined;
 	side: Side;
 	letters: boolean;
@@ -30,9 +33,10 @@ export interface CanopyState {
 	order: Order;
 	/**
 	 * A line being typed at the foot: what to say about the selected item to whatever tends it, what to say
-	 * instead of answering, or part of a name to go to, with where the selection was before it was typed.
+	 * instead of answering, or part of a name to go to, with where the selection was before it was typed
+	 * and what it has found: that may be folded away, and then the line it is in is what is selected.
 	 */
-	typing?: { what: "say"; label: string; text: string; number?: number; nodeId?: string } | { what: "answer"; label: string; text: string; id: string; key: string } | { what: "find"; label: string; text: string; from: string | undefined };
+	typing?: { what: "say"; label: string; text: string; number?: number; nodeId?: string } | { what: "answer"; label: string; text: string; id: string; key: string } | { what: "find"; label: string; text: string; from: string | undefined; to?: string };
 	/** The last move made with an arrow: the opposite arrow, pressed where it led, goes back to where it started. */
 	back?: { from: string; to: string; key: Arrow };
 	/** Under each item, what was last left downward: going up again returns there. */
@@ -119,6 +123,8 @@ export const initial = (world: World, current?: string, shape: Shape = "grown", 
 	camera: { col: 0, row: 0 },
 	framed: false,
 	folded: new Set(),
+	// Where one starts is never folded away: it is open, and the way to it, as if this person had opened them.
+	opened: new Set(current && world.items.get(current) ? [...above(world, world.items.get(current)), ...((world.items.get(current)?.children.length ?? 0) > 0 ? [current] : [])] : []),
 	spotlight: undefined,
 	side: "inspector",
 	letters: false,
@@ -126,6 +132,17 @@ export const initial = (world: World, current?: string, shape: Shape = "grown", 
 	order,
 	walked: new Set(),
 });
+
+/** The ids of everything an item is under, short of the root: what must be open for it to be drawn. */
+const above = (world: World, item: Item | undefined): string[] => (item ? pathTo(item).slice(1).filter((at) => at !== world.root).map((at) => at.id) : []);
+
+/** The state with the way to an item opened: nothing above it is folded, by this person or to fit. */
+function reveal(world: World, state: CanopyState, item: Item): CanopyState {
+	const way = above(world, item);
+	const folded = new Set(state.folded);
+	for (const id of way) folded.delete(id);
+	return { ...state, folded, opened: new Set([...state.opened, ...way]) };
+}
 
 /** Who a line about an item goes to, as it is said before the line is sent. */
 function tendedBy(world: World, item: Item): string {
@@ -176,10 +193,10 @@ const plans = new WeakMap<World, Map<string, Layout>>();
  */
 export function planOf(world: World, state: CanopyState, width?: number, height?: number): Layout {
 	const room = width !== undefined && height !== undefined && width >= FLOOR.cols && height >= FLOOR.rows ? windowOf(state, width, height) : undefined;
-	const key = `${state.shape}|${state.order}|${[...state.folded].sort().join(",")}|${room ? `${room.width}x${room.height}` : ""}`;
+	const key = `${state.shape}|${state.order}|${[...state.folded].sort().join(",")}|${[...state.opened].sort().join(",")}|${room ? `${room.width}x${room.height}` : ""}`;
 	const known = plans.get(world) ?? new Map<string, Layout>();
 	plans.set(world, known);
-	const plan = known.get(key) ?? layout(world, { shape: state.shape, folded: state.folded, order: state.order, ...(room ? { room } : {}) });
+	const plan = known.get(key) ?? layout(world, { shape: state.shape, folded: state.folded, opened: state.opened, order: state.order, ...(room ? { room } : {}) });
 	known.set(key, plan);
 	return plan;
 }
@@ -227,6 +244,25 @@ export function placeOf(plan: Layout, id: string | undefined): Spot | undefined 
 	return undefined;
 }
 
+/** What stands for an item on the screen: itself where it is drawn, else the nearest thing it is under that is: the line it is folded into. */
+export function shownAs(plan: Layout, item: Item | undefined): string | undefined {
+	for (let at = item; at && at.id !== ROOT_ID; at = at.parent) if (placeOf(plan, at.id)) return at.id;
+	return undefined;
+}
+
+/**
+ * The state with something drawn selected. What was selected may have been folded away since,
+ * by a narrower window or by the work changing: then the line it is in is selected instead.
+ */
+function settled(world: World, plan: Layout, state: CanopyState): CanopyState {
+	if (state.selected === undefined || placeOf(plan, state.selected)) return state;
+	const seen = shownAs(plan, world.items.get(state.selected));
+	return seen === undefined ? state : { ...state, selected: seen };
+}
+
+/** Whether something here needs a person: an item that asks, or a folded one with something in it that does. */
+const needsSomeone = (plan: Layout, item: Item): boolean => (plan.folded.has(item.id) ? rollup(item).asks > 0 : item.asks > 0 || item.agent?.state === "asking");
+
 const OPPOSITE: Record<Arrow, Arrow> = { up: "down", down: "up", left: "right", right: "left" };
 
 /**
@@ -261,26 +297,32 @@ function step(plan: Layout, state: CanopyState, from: Spot, key: Arrow): string 
 		if (level.length > 0) return nearest(level);
 		return side.sort((a, b) => Math.abs(a.col - from.col) + Math.abs(a.row - from.row) * 6 - (Math.abs(b.col - from.col) + Math.abs(b.row - from.row) * 6))[0]?.item.id;
 	}
+	// A frond on the branch to the one thing open over an item is read on the way: up through its lines to that thing, and down through them from it.
+	const lines = (of: Item | undefined): Place[] => (of && plan.trunks.has(of.id) ? others.concat(from).filter((place) => place.leaf && place.item.parent === of).sort((a, b) => a.row - b.row) : []);
 	if (from.leaf) {
 		const frond = others.filter((place) => place.leaf && place.item.parent === item.parent).concat(from).sort((a, b) => a.row - b.row);
 		const at = frond.indexOf(from);
-		if (key === "up") return frond[at - 1]?.item.id;
+		if (key === "up") return frond[at - 1]?.item.id ?? (lines(item.parent).length > 0 ? item.parent?.children.find((child) => plan.places.get(child.id)?.leaf === false)?.id : undefined);
 		return frond[at + 1]?.item.id ?? top(item.parent);
 	}
-	if (key === "down") return item.buds[0]?.id ?? top(item.parent);
+	if (key === "down") return item.buds[0]?.id ?? lines(item.parent)[0]?.item.id ?? top(item.parent);
 	// Up: where one last came down from, else into the nearest thing under it.
 	const last = state.came?.get(item.id);
 	if (last !== undefined && placeOf(plan, last)) return last;
+	const onWay = lines(item).at(-1);
+	if (onWay) return onWay.item.id;
 	const under = item.children.map((child) => plan.places.get(child.id)).filter((place): place is Place => place !== undefined);
 	return under.sort((a, b) => Math.abs(a.col - from.col) - Math.abs(b.col - from.col) || b.row - a.row)[0]?.item.id;
 }
 
-/** The items whose name has what was typed in it, or whose number it is, in the order the tree is read. */
+/** The items whose name has what was typed in it, or whose number it is, in the order the tree is read: also those folded away. */
 function found(world: World, plan: Layout, text: string): Item[] {
 	const wanted = text.trim().toLowerCase();
 	if (wanted === "") return [];
 	const number = /^#?\d+$/.test(wanted) ? Number(wanted.replace("#", "")) : undefined;
-	const all = walk(world.root).filter((item) => item.level >= 0 && placeOf(plan, item.id));
+	// Everything there is, drawn or folded away. What is drawn comes first: it is where the eye already is.
+	const every = walk(world.root).filter((item) => item.level >= 0 && shownAs(plan, item) !== undefined);
+	const all = [...every.filter((item) => placeOf(plan, item.id)), ...every.filter((item) => !placeOf(plan, item.id))];
 	const starts = all.filter((item) => item.name.toLowerCase().startsWith(wanted) || (number !== undefined && item.issue?.number === number));
 	return [...starts, ...all.filter((item) => !starts.includes(item) && item.name.toLowerCase().includes(wanted))];
 }
@@ -288,8 +330,17 @@ function found(world: World, plan: Layout, text: string): Item[] {
 const ARROWS: Record<string, Arrow> = { up: "up", down: "down", left: "left", right: "right", k: "up", j: "down", h: "left", l: "right" };
 
 /** What a key does. Returns the next state and what the host of the screen must do. */
-export function interpret(world: World, state: CanopyState, key: CanopyKey, width: number, height: number, asking?: Asking, leave?: ReadonlyArray<readonly [string, string]>): { state: CanopyState; actions: CanopyAction[] } {
-	const plan = planOf(world, state, width, height);
+export function interpret(world: World, given: CanopyState, key: CanopyKey, width: number, height: number, asking?: Asking, leave?: ReadonlyArray<readonly [string, string]>): { state: CanopyState; actions: CanopyAction[] } {
+	const next = act(world, given, key, width, height, asking, leave);
+	// A key may change how much of the tree fits, and fold away what was selected: then the line it is in is.
+	const plan = planOf(world, next.state, width, height);
+	const state = settled(world, plan, next.state);
+	return state === next.state ? next : { state: frame(state, plan, width, height), actions: next.actions };
+}
+
+function act(world: World, given: CanopyState, key: CanopyKey, width: number, height: number, asking?: Asking, leave?: ReadonlyArray<readonly [string, string]>): { state: CanopyState; actions: CanopyAction[] } {
+	const plan = planOf(world, given, width, height);
+	const state = settled(world, plan, given);
 	const here = placeOf(plan, state.selected);
 	const item = here?.item;
 	// Going somewhere by anything but an arrow leaves no way back to retrace.
@@ -309,17 +360,25 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 		if (typing.what === "find") {
 			// Each letter goes to the first thing it finds; tab goes on to the next; escape is back where it started.
 			if (key === "escape") return keep(typing.from !== undefined && placeOf(plan, typing.from) ? frame({ ...rest, selected: typing.from }, plan, width, height) : rest);
-			if (key === "enter") return keep(rest);
+			if (key === "enter") {
+				// What was found may be folded away: the way to it is opened, and it is where one arrives.
+				const target = typing.to !== undefined ? world.items.get(typing.to) : undefined;
+				if (!target || placeOf(plan, target.id)) return keep(rest);
+				const opened = reveal(world, rest, target);
+				const next = planOf(world, opened, width, height);
+				return keep(frame({ ...opened, selected: shownAs(next, target) ?? rest.selected }, next, width, height));
+			}
+			const { to: _to, ...line } = typing;
 			if (key === "tab" || key === "down" || key === "up") {
 				const all = found(world, plan, typing.text);
-				const at = all.findIndex((other) => other.id === state.selected);
+				const at = all.findIndex((other) => other.id === (typing.to ?? state.selected));
 				const next = all[(at + (key === "up" ? all.length - 1 : 1)) % Math.max(1, all.length)];
-				return keep(next ? frame({ ...state, selected: next.id }, plan, width, height) : state);
+				return keep(next ? frame({ ...state, selected: shownAs(plan, next), typing: { ...line, to: next.id } }, plan, width, height) : state);
 			}
 			const text = key === "backspace" ? [...typing.text].slice(0, -1).join("") : [...key].length === 1 ? typing.text + key : typing.text;
 			const first = found(world, plan, text)[0];
 			const { back: _back, ...still } = state;
-			return keep(frame({ ...still, selected: first?.id ?? (text === "" ? typing.from : state.selected), typing: { ...typing, text } }, plan, width, height));
+			return keep(frame({ ...still, selected: first ? shownAs(plan, first) : text === "" ? typing.from : state.selected, typing: { ...line, text, ...(first ? { to: first.id } : {}) } }, plan, width, height));
 		}
 		if (key === "escape") return keep(rest);
 		if (key === "backspace") return keep({ ...state, typing: { ...typing, text: [...typing.text].slice(0, -1).join("") } });
@@ -394,8 +453,11 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 	// Home: the whole tree, centred on its middle.
 	if (key === "home") return keep({ ...frame({ ...state, selected: undefined }, plan, width, height, true), selected: state.selected });
 	if (key === "tab") {
-		// The next thing that needs someone, in the order the tree is read.
-		const asking = walk(world.root).filter((other) => other.asks > 0 || other.agent?.state === "asking").filter((other) => plan.places.has(other.id));
+		// The next thing that needs someone, in the order the tree is read: what is this person's first.
+		// A folded item stands for what in it needs someone; opening it is how one goes on in.
+		const drawn = walk(world.root).filter((other) => plan.places.has(other.id) && other.level >= 0 && needsSomeone(plan, other));
+		const mine = (other: Item): boolean => (other.agent?.owner ?? other.owner) === world.me;
+		const asking = [...drawn.filter(mine), ...drawn.filter((other) => !mine(other))];
 		const at = asking.findIndex((other) => other.id === state.selected);
 		return asking.length > 0 ? go(asking[(at + 1) % asking.length]?.id) : keep(state, [{ do: "say", text: "Nothing needs anyone." }]);
 	}
@@ -431,13 +493,22 @@ export function interpret(world: World, state: CanopyState, key: CanopyKey, widt
 	}
 	if (key === "f") {
 		if (item.children.length === 0) return keep(state);
+		// Either way it is this person's doing, and it stays: what they fold is folded whatever the room,
+		// and what they open is open when the rest is folded to fit.
 		const folded = new Set(state.folded);
-		if (!folded.delete(item.id)) folded.add(item.id);
-		const next = { ...state, folded };
+		const opened = new Set(state.opened);
+		if (plan.folded.has(item.id)) {
+			folded.delete(item.id);
+			opened.add(item.id);
+		} else {
+			opened.delete(item.id);
+			folded.add(item.id);
+		}
+		const next = { ...state, folded, opened };
 		return keep(frame(next, planOf(world, next, width, height), width, height));
 	}
 	if (key === "enter") {
-		if (state.folded.has(item.id)) return interpret(world, state, "f", width, height);
+		if (plan.folded.has(item.id)) return interpret(world, state, "f", width, height);
 		if (item.outside) return keep(state, [{ do: "say", text: `${item.agent?.role ?? "An agent"} holds #${item.issue?.number} from a shell: it is not a session, and there is nothing here to open.` }]);
 		if (item.planned) return keep(state, [{ do: "say", text: item.issue ? `Nobody is on #${item.issue.number} yet. Press space to say what should happen to it, or s to put the session open here on it.` : `Nobody is on "${item.name}" yet. Press s to put a session on it.` }]);
 		// With a server, a teammate's session is known only as the server tells it: there is nothing here to open.
@@ -533,7 +604,7 @@ function header(world: World, state: CanopyState, width: number, tick: number): 
 	return grid;
 }
 
-function footer(world: World, state: CanopyState, width: number, leave?: ReadonlyArray<readonly [string, string]>, away = false, asking?: Asking, banded = false): Grid {
+function footer(world: World, state: CanopyState, width: number, leave?: ReadonlyArray<readonly [string, string]>, away = false, asking?: Asking, banded = false, folded: ReadonlySet<string> = state.folded): Grid {
 	const grid = new Grid(width, FOOTER);
 	if (state.typing && banded) {
 		// The line itself is in the band, under the question: here are only its keys.
@@ -543,11 +614,13 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
 	if (state.typing) {
 		const room = Math.max(8, width - cells(state.typing.label) - (state.typing.what === "find" ? 50 : 30));
 		const shown = tail(state.typing.text, room);
-		const keys: Array<[string, Style]> = state.typing.what === "find" ? [[" ⏎ ", KEYCAP], [" stay here   ", DIM], [" tab ", KEYCAP], [" next   ", DIM], [" esc ", KEYCAP], [" back", DIM]] : [[" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]];
+		// What was found may be inside the folded line that is selected: enter opens the way to it.
+		const hidden = state.typing.what === "find" && state.typing.to !== undefined && state.typing.to !== state.selected ? world.items.get(state.typing.to) : undefined;
+		const keys: Array<[string, Style]> = state.typing.what === "find" ? [[" ⏎ ", KEYCAP], [hidden ? ` unfold to ${cut(hidden.name, 20)}   ` : " stay here   ", DIM], [" tab ", KEYCAP], [" next   ", DIM], [" esc ", KEYCAP], [" back", DIM]] : [[" ⏎ ", KEYCAP], [" send   ", DIM], [" esc ", KEYCAP], [" cancel", DIM]];
 		run(grid, 1, 0, [[` ${state.typing.label}: `, { fg: COLOR.bright, bold: true }], [`${shown}▏`, { fg: COLOR.text }], ["   ", DIM], ...keys]);
 		return grid;
 	}
-	const keys = footerKeys(world, state, leave, away);
+	const keys = footerKeys(world, state, leave, away, folded);
 	// A key that answers what is asked means only that while it is asked: it is not listed twice.
 	const taken = new Set(away ? [] : (asking?.keys ?? []).map((entry) => keyName(entry.key)));
 	// The key that lists every key is always there, at the end: the rest are the ones that fit before it.
@@ -568,7 +641,7 @@ function footer(world: World, state: CanopyState, width: number, leave?: Readonl
  * The keys said at the foot, most useful first: what leads out, how to move, and what can be done
  * to what is selected. Each is one the canopy acts on here and now. `?` lists the rest.
  */
-export function footerKeys(world: World, state: CanopyState, leave?: ReadonlyArray<readonly [string, string]>, away = false): Array<[key: string, does: string]> {
+export function footerKeys(world: World, state: CanopyState, leave?: ReadonlyArray<readonly [string, string]>, away = false, folded: ReadonlySet<string> = state.folded): Array<[key: string, does: string]> {
 	const item = state.selected ? world.items.get(state.selected) : undefined;
 	const named = (leave ?? []).map(([key, does]): [string, string] => [key, does]);
 	// The keys are not the canopy's while the keyboard is elsewhere: only what leads here is said.
@@ -581,7 +654,9 @@ export function footerKeys(world: World, state: CanopyState, leave?: ReadonlyArr
 	if (item?.place) {
 		if (item.place !== "starting") keys.push(["⏎", item.place === "asleep" ? "wake" : "start here"]);
 	} else {
-		if (item?.issue && item.node) keys.push(["⏎", "open"]);
+		// Enter on what is folded unfolds it; the session on it is opened once it is.
+		if (item && folded.has(item.id)) keys.push(["⏎", "unfold"]);
+		else if (item?.issue && item.node) keys.push(["⏎", "open"]);
 		else if (item && !item.issue && !item.planned && (item.node || !item.agent?.owner)) keys.push(["⏎", item.owner === world.me ? "open" : "read"]);
 		keys.push(["space", "say what you want"]);
 		if (item?.issue) keys.push(["s", "put this session on it"]);
@@ -589,7 +664,7 @@ export function footerKeys(world: World, state: CanopyState, leave?: ReadonlyArr
 		const hand = item ? handOf(world, item) : undefined;
 		// Offering needs someone to offer to; asking needs a session that is someone else's.
 		if (hand && (hand.mine ? world.people.length > 1 : true)) keys.push(hand.mine ? ["o", "offer"] : ["t", "take"]);
-		if (item && item.children.length > 0) keys.push(["f", state.folded.has(item.id) ? "unfold" : "fold"]);
+		if (item && item.children.length > 0 && !folded.has(item.id)) keys.push(["f", "fold"]);
 	}
 	keys.push(["/", "go to"]);
 	if (world.changes.length > 0) keys.push(["u", `${world.changes.length} changed by agents`]);
@@ -602,8 +677,8 @@ export function footerKeys(world: World, state: CanopyState, leave?: ReadonlyArr
 export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyArray<readonly [key: string, does: string]>]> = [
 	["Moving", [
 		["← ↑ ↓ →  h j k l", "along a level, up into what is under an item, down to what it belongs to"],
-		["/", "go to an item by part of its name, or an issue by its number; tab goes on to the next"],
-		["tab", "the next thing that needs someone"],
+		["/", "go to an item by part of its name, or an issue by its number, also one that is folded away; tab goes on to the next"],
+		["tab", "the next thing that needs someone, yours first; a folded line stands for what in it does"],
 		[".", "the next thing nobody is on and nothing holds"],
 		["shift+← ↑ ↓ →", "move the window over a tree larger than it"],
 		["home", "the middle of the whole tree"],
@@ -614,7 +689,7 @@ export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyAr
 		["s", "put the session open here on an issue; start a planned item of your own"],
 		["o", "offer the session on it to a teammate"],
 		["t", "ask a teammate for the session on it"],
-		["f", "fold what is under it into it, or unfold it"],
+		["f", "fold what is under it into one line, or unfold it; a tree too wide for its window folds around your work, and what you unfold stays open"],
 	]],
 	["What agents changed", [
 		["u", "go to the next thing an agent changed since you looked, with who and why"],
@@ -739,7 +814,7 @@ function speakingBand(world: World, state: CanopyState, width: number, now: numb
 	return grid;
 }
 
-function inspector(world: World, state: CanopyState, width: number, height: number, tick: number): Grid {
+function inspector(world: World, state: CanopyState, width: number, height: number, tick: number, folded: ReadonlySet<string> = state.folded): Grid {
 	const grid = new Grid(width, height);
 	const item = state.selected ? world.items.get(state.selected) : undefined;
 	for (let row = 0; row < height; row++) grid.text(0, row, "│", { fg: COLOR.faint });
@@ -837,7 +912,7 @@ function inspector(world: World, state: CanopyState, width: number, height: numb
 	const under = [...inOrder(world.flow, item, state.order), ...item.buds];
 	if (under.length > 0) {
 		row++;
-		line([[state.folded.has(item.id) ? "UNDER IT (folded)" : state.order === "dependency" && item.children.length > 1 ? "UNDER IT, FIRST TO LAST" : "UNDER IT", DIM]]);
+		line([[folded.has(item.id) ? "UNDER IT (folded)" : state.order === "dependency" && item.children.length > 1 ? "UNDER IT, FIRST TO LAST" : "UNDER IT", DIM]]);
 		under.forEach((child, index) => {
 			if (row >= height - 1) return;
 			const branch = index === under.length - 1 ? "└" : "├";
@@ -888,11 +963,11 @@ function roster(world: World, state: CanopyState, width: number, height: number,
 	return grid;
 }
 
-/** Things that need someone and are outside the window: an arrow at the nearest edge, with how many. */
+/** Things that need someone and are outside the window: an arrow at the nearest edge, with how many. A folded item with such a thing in it is one. */
 function edges(plan: Layout, state: CanopyState, win: { width: number; height: number }): Array<{ col: number; row: number; text: string }> {
 	const out = new Map<string, number>();
 	for (const place of plan.places.values()) {
-		if (!(place.item.asks > 0 || place.item.agent?.state === "asking")) continue;
+		if (place.item.level < 0 || !needsSomeone(plan, place.item)) continue;
 		const col = place.col - state.camera.col;
 		const row = place.row - state.camera.row;
 		const side = col < 0 ? "left" : col >= win.width ? "right" : row < 0 ? "up" : row >= win.height ? "down" : undefined;
@@ -930,7 +1005,9 @@ function compose(world: World, state: CanopyState, width: number, height: number
 		return lines(grid);
 	}
 	const plan = planOf(world, state, width, height);
-	const view = state.framed ? state : frame(state, plan, width, height, true);
+	// What is selected is something drawn: where it has been folded away, the line it is in, brought into the window.
+	const seen = settled(world, plan, state);
+	const view = seen.framed && seen === state ? state : frame(seen, plan, width, height, !seen.framed);
 	const win = windowOf(view, width, height);
 	const side = sideWidth(view, width);
 	// Between two shapes of the tree, the window moves with it: what stays is drawn where it was, sliding to where it will be.
@@ -950,8 +1027,8 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	// The list of keys has the whole width, the panel's too: it is read, and then the tree is back.
 	const list = view.help !== undefined ? helpList(width, moving?.leave) : undefined;
 	const canvas = list ? lines(list, 0, Math.min(view.help ?? 0, Math.max(0, list.height - win.height)), width, win.height) : [...lines(tree, camera.col, camera.row + (hidden ? band.length : 0), win.width, left), ...band];
-	const panel = side > 0 && !list ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick)) : [];
-	return [...lines(header(world, view, width, tick)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away, moving?.asking, band.length > 0))];
+	const panel = side > 0 && !list ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick, plan.folded)) : [];
+	return [...lines(header(world, view, width, tick)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away, moving?.asking, band.length > 0, plan.folded))];
 }
 
 /** The screen as terminal lines, exactly `height` of them and `width` cells wide. */

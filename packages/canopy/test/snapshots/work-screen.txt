@@ -5,35 +5,35 @@
                                                                                                               │
                                                                                                               │ SITTING HERE
                                                                                                               │ ⠋ implementation  working
-                          ⢠⠤○ Error states                                                                    │   sam's, in shop
-                          ⢸⠤⠋▸Card form                                                                       │   editing form.tsx
-                          ⢸⠤✓ Validate number                                                                 │   tended by nothing yet
-                         ⢀⢼⢄                                                                                  │
-                         ⡇◉ Enter a card ●1                                                                   │ UNDER IT
-                         ⠈⢺⠊● implementation · 1/3                                                            │ └ · sam-review      review, idle
-                          ⢸                                                                                   │
-                          ⣸                                                                                   │
-  ⢠⠤⠋ Total is wrong @yan⠴⠃                                                                                   │
-  ⢸               ⢀⣀⠤⠔⠚⠉                                                                                      │
-  ⢸            ⣠⠴⠊⠉                                                                                           │
-  ⠸⠤⠤⠤⠤⠤⢤⣀⣀⣀⣀⣀⣰⠃                                                                                              │
-              ○ Pay by card                                                                                   │
-              ⢸ doing · 1/4 · @sam                   ○ Refunds                                                │
-              ⢸                                      ⢸ todo · @teo                                            │
-              ⠸⣀                                     ⢸                                                        │
-               ⠈⠑⠒⠤⠤⣄⣀⣀⡀                            ⣀⡼                 ⢠⠤○ Loose end                          │
-                       ⠉⠉⠉⠓⠒⠒⠦⠤⢄⣀     ⢀⣀⣀⣀⡤⠤⠤⠤⠖⠒⠒⠚⠉⠉                   ⢸                                    ⢀⠤│
-                                 ⠙⢢⠖⠊⠉⠉                                ○ Search                             ⡇◉│
-                                  ○ Checkout                           ⢸⡇todo · 0/1    ⢀⠤⢄                  ⠈⢺│
-                                  ⢸⡇doing · 1/5 · @yan                 ⢸⡇              ⡇◉ scratch            ⢸│
-                                  ⢸⡇                                   ⢸⡇              ⠈⢺⡏· scratch · @yan  ⣀⣼│
-                                  ⠸⢧⣄⣀⣀                                ⠸⣧               ⢸⡇    ⣀⣀⣀⣀⣀⣠⠤⠤⠤⠴⠒⠒⠛⠉⠉ │
-                                      ⠉⠉⠉⠉⠙⠒⠒⠒⠒⠒⠒⠲⠦⠤⠤⠤⠤⠤⠤⢤⣄⣀⣀⣀⣀⣀⣀⡀      ⢿⡄  ⣀⣀⣀⡤⠤⠤⠤⢖⣒⣒⣒⣶⠾⠏⠉⠉⠉⠉⠁               │
-                                                                 ⠉⠉⠉⠉⠛⢒⢶⢾⣷⢿⠛⠛⠒⠋⠉⠉⠉⠉⠉                          │
-                                                                     ⢔⢵⣷⣿⣷⣷⢕⠄                                 │
-                                                                     ⢕⢿⣿⣿⣿⣿⢗⠅                                 │
-                                                                     ⠑⢝⢟⢿⢟⢟⠕⠁                                 │
-                                                         lattice.example.com · 3 people                       │
+   ⢠⠤○ Error states                                                                                           │   sam's, in shop
+   ⢸⠤⠋▸Card form                                                                                              │   editing form.tsx
+   ⢸⠤✓ Validate number                                                                                        │   tended by nothing yet
+  ⢀⢼⢄                                                                                                         │
+  ⡇◉ Enter a card ●1                                                                                          │ UNDER IT
+  ⠈⢺⠊● implementation · 1/3                                                                                   │ └ · sam-review      review, idle
+   ⢸                                                                                                          │
+   ⢸                                                                                                          │
+   ⢸                                                                                                          │
+   ⢸                                                                                                          │
+   ⢸⠤⠋ Total is wrong @yan                                                                                    │
+   ⢸                                                                                                          │
+   ○ Pay by card                                                                                              │
+   ⢸ doing · 1/4 · @sam      ○ Refunds                                                                        │
+   ⢸                         ⢸ todo · @teo                                                                    │
+   ⢸⡀                        ⢸                                                                                │
+    ⠉⠒⠤⣄⣀⡀                  ⢀⡼                ⢠⠤○ Loose end                                                   │
+         ⠈⠉⠒⠒⠦⢄⡀   ⢀⣀⣠⠤⠤⠴⠒⠒⠉⠁                 ⢸                                  ⢀⠤⢄                          │
+               ⠈⢳⠖⠉⠁                          ○ Search                           ⡇◉ teo-scratch               │
+                ○ Checkout                    ⢸⡇todo · 0/1   ⢀⠤⢄                 ⠈⢺⡏· implementation · @teo   │
+                ⢸⡇doing · 1/5 · @yan          ⢸⡇             ⡇◉ scratch           ⢸⡇                          │
+                ⢸⡇                            ⢸⡇             ⠈⢺⡏· scratch · @yan ⣀⣼⠇                          │
+                ⠸⢧⣄⣀⡀                         ⠈⢷⡀             ⢸⡇     ⣀⣀⣀⣀⣠⠤⠤⠤⠶⠒⠚⠉⠉                            │
+                   ⠈⠉⠉⠉⠙⠓⠒⠒⠒⠒⠲⠤⠤⠤⠤⠤⠤⠤⣄⣀⣀⣀⣀⣀⡀    ⠙⣦   ⣀⣀⣤⠤⠤⢤⣖⣒⣲⠾⠟⠉⠉⠉⠉⠉⠁                                        │
+                                          ⠈⠉⠉⠉⠙⢓⢶⢾⣷⢟⠛⠓⠋⠉⠉⠉⠉                                                   │
+                                              ⢔⢵⣷⣿⣷⣷⢕⠄                                                        │
+                                              ⢕⢿⣿⣿⣿⣿⢗⠅                                                        │
+                                              ⠑⢝⢟⢿⢟⢟⠕⠁                                                        │
+                                  lattice.example.com · 3 people                                              │
                                                                                                               │
                                                                                                               │
                                                                                                               │

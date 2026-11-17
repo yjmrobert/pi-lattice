@@ -83,7 +83,11 @@ describe("the tree, in the room there is", () => {
 		const w = build(MEDIUM);
 		const open = planOf(w, initial(w), 160, 40);
 		const closed = planOf(w, { ...initial(w), side: "none" }, 160, 40);
-		expect(open.width).toBeGreaterThan(120);
+		// Beside the panel there is not the room for all of it, and it is folded to fit; without the panel all of it is drawn.
+		expect(open.fold).not.toBe("whole");
+		expect(open.width).toBeLessThanOrEqual(120);
+		expect(closed.fold).toBe("whole");
+		expect(closed.width).toBeGreaterThan(120);
 		expect(closed.width).toBeLessThanOrEqual(160);
 	});
 

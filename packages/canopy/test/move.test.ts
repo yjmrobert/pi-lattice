@@ -1,7 +1,7 @@
 /** Moving over the tree with the arrows: everything is reached, the way back is the way one came, and what is selected stays in view. */
 import { describe, expect, it } from "vitest";
 import { type Arrow, buildWorld, type CanopyKey, type CanopyState, initial, interpret, placeOf, planOf, renderPlain, ROOT_ID } from "../src/index.ts";
-import { HARBOR, LEVELS, world } from "./fixture.ts";
+import { allOpen, HARBOR, LEVELS, world } from "./fixture.ts";
 
 const W = 150;
 const H = 44;
@@ -10,13 +10,15 @@ type Harbor = ReturnType<typeof harbor>;
 const ARROWS: Arrow[] = ["up", "down", "left", "right"];
 const OPPOSITE: Record<Arrow, Arrow> = { up: "down", down: "up", left: "right", right: "left" };
 const press = (w: Harbor, state: CanopyState, ...keys: CanopyKey[]): CanopyState => keys.reduce((at, key) => interpret(w, at, key, W, H).state, state);
+/** With everything opened by hand: the whole tree, wider than the window. Left to itself a tree that wide folds around this person's work. */
+const whole = (w: Harbor, id?: string): CanopyState => ({ ...initial(w, id), opened: allOpen(w.items.values()) });
 /** Everything that can be selected: the items, and the helpers written under them. */
-const everything = (w: Harbor): string[] => [...w.items.values()].filter((item) => item.id !== ROOT_ID && placeOf(planOf(w, initial(w), W, H), item.id)).map((item) => item.id);
+const everything = (w: Harbor): string[] => [...w.items.values()].filter((item) => item.id !== ROOT_ID && placeOf(planOf(w, whole(w), W, H), item.id)).map((item) => item.id);
 
 describe("the arrows", () => {
 	it("reach everything on the tree, helpers included", () => {
 		const w = harbor();
-		const start = initial(w);
+		const start = whole(w);
 		const seen = new Map<string, CanopyState>([[start.selected as string, start]]);
 		const queue = [start];
 		for (let at = queue.shift(); at; at = queue.shift()) {
@@ -38,7 +40,7 @@ describe("the arrows", () => {
 		const failed: string[] = [];
 		for (const id of everything(w)) {
 			for (const key of ARROWS) {
-				const moved = press(w, initial(w, id), key);
+				const moved = press(w, whole(w, id), key);
 				if (moved.selected === id) continue;
 				if (press(w, moved, OPPOSITE[key]).selected !== id) failed.push(`${id} ${key} → ${moved.selected} ${OPPOSITE[key]} → ${press(w, moved, OPPOSITE[key]).selected}`);
 			}
@@ -49,7 +51,7 @@ describe("the arrows", () => {
 	it("retrace a path of several steps: down to the top and up again ends on the task it began on", () => {
 		const w = harbor();
 		for (const task of ["verify-copy", "3ds-flow", "conflicts", "review"]) {
-			let at = initial(w, task);
+			let at = whole(w, task);
 			let steps = 0;
 			for (let next = press(w, at, "down"); next.selected !== at.selected; next = press(w, at, "down")) {
 				at = next;
@@ -62,13 +64,13 @@ describe("the arrows", () => {
 
 	it("go along a level: left and right land on something of the same level wherever there is one on that side", () => {
 		const w = harbor();
-		const plan = planOf(w, initial(w), W, H);
+		const plan = planOf(w, whole(w), W, H);
 		for (const id of everything(w)) {
 			const from = placeOf(plan, id);
 			if (!from || from.helper) continue;
 			for (const key of ["left", "right"] as const) {
 				const alike = [...plan.places.values()].filter((place) => place.item.id !== ROOT_ID && place.leaf === from.leaf && (from.leaf || place.item.level === from.item.level) && (key === "right" ? place.col > from.col : place.col < from.col));
-				const to = placeOf(plan, press(w, initial(w, id), key).selected);
+				const to = placeOf(plan, press(w, whole(w, id), key).selected);
 				if (alike.length === 0) continue;
 				expect(to?.leaf, `${id} ${key} → ${to?.item.name}`).toBe(from.leaf);
 				if (!from.leaf) expect(to?.item.level, `${id} ${key} → ${to?.item.name}`).toBe(from.item.level);
@@ -78,12 +80,12 @@ describe("the arrows", () => {
 
 	it("do nothing only at an edge of the tree", () => {
 		const w = harbor();
-		const plan = planOf(w, initial(w), W, H);
+		const plan = planOf(w, whole(w), W, H);
 		const cols = [...plan.places.values()].filter((place) => place.item.id !== ROOT_ID).map((place) => place.col);
 		for (const id of everything(w)) {
 			const from = placeOf(plan, id);
 			if (!from) continue;
-			const stuck = ARROWS.filter((key) => press(w, initial(w, id), key).selected === id);
+			const stuck = ARROWS.filter((key) => press(w, whole(w, id), key).selected === id);
 			for (const key of stuck) {
 				const item = from.item;
 				const edge =
@@ -98,14 +100,14 @@ describe("the arrows", () => {
 
 	it("read through an item's helpers on the way down, and back up to it", () => {
 		const w = harbor();
-		const at = initial(w, "export");
+		const at = whole(w, "export");
 		expect(press(w, at, "down").selected).toBe("review");
 		expect(press(w, at, "down", "up").selected).toBe("export");
 		expect(press(w, at, "down", "down").selected).toBe("invoices");
 		// Across, a helper is where the item it helps is.
-		expect(press(w, initial(w, "review"), "right").selected).toBe(press(w, at, "right").selected);
+		expect(press(w, whole(w, "review"), "right").selected).toBe(press(w, at, "right").selected);
 		// It is pointed at like anything else, and the path at the top leads to it.
-		const drawn = renderPlain(w, initial(w, "review"), W, H).join("\n");
+		const drawn = renderPlain(w, whole(w, "review"), W, H).join("\n");
 		expect(drawn).toContain("▸review");
 	});
 
@@ -133,7 +135,7 @@ describe("the arrows", () => {
 describe("going to something by its name", () => {
 	it("goes to the first item that matches as it is typed, and on to the next with tab", () => {
 		const w = harbor();
-		const typing = press(w, initial(w, "tables"), "/", "c", "a");
+		const typing = press(w, whole(w, "tables"), "/", "c", "a");
 		expect(typing.typing).toMatchObject({ what: "find", text: "ca" });
 		// Names that start with it come before names that only have it in them.
 		expect(typing.selected).toBe("cards");
@@ -142,12 +144,12 @@ describe("going to something by its name", () => {
 		for (const name of names) expect(name).toContain("ca");
 		expect(renderPlain(w, typing, W, H).at(-1)).toMatch(/go to: ca▏.*⏎\s+stay here.*tab\s+next.*esc\s+back/);
 		// Letters are the name, not keys: f does not fold.
-		expect(press(w, initial(w, "tables"), "/", "f").folded.size).toBe(0);
+		expect(press(w, whole(w, "tables"), "/", "f").folded.size).toBe(0);
 	});
 
 	it("stays where it went with enter, and is back where it started with escape", () => {
 		const w = harbor();
-		const typing = press(w, initial(w, "tables"), "/", "o", "i", "d");
+		const typing = press(w, whole(w, "tables"), "/", "o", "i", "d");
 		expect(typing.selected).toBe("oidc");
 		const stayed = press(w, typing, "enter");
 		expect([stayed.selected, stayed.typing]).toEqual(["oidc", undefined]);
@@ -156,5 +158,28 @@ describe("going to something by its name", () => {
 		// Nothing matches: it stays on the last thing found, and deleting the letters brings the start back.
 		expect(press(w, typing, "z", "z").selected).toBe("oidc");
 		expect(press(w, typing, "backspace", "backspace", "backspace").selected).toBe("tables");
+	});
+
+	it("finds what is folded away: the line it is in is selected, and enter opens the way to it", () => {
+		const w = harbor();
+		// Beside the panel the tree is folded around this person's work: oidc is mira's, in an epic that is one line.
+		const start = initial(w);
+		expect(placeOf(planOf(w, start, W, H), "oidc")).toBeUndefined();
+		const typing = press(w, start, "/", "o", "i", "d");
+		expect(typing.selected).toBe("sso-rollout");
+		expect(typing.typing).toMatchObject({ what: "find", text: "oid", to: "oidc" });
+		expect(renderPlain(w, typing, W, H).at(-1)).toMatch(/go to: oid▏.*⏎\s+unfold to oidc.*tab\s+next.*esc\s+back/);
+		// Nothing is opened while it is typed: the tree does not move under the letters.
+		expect(typing.opened).toEqual(start.opened);
+		const there = press(w, typing, "enter");
+		expect([there.selected, there.typing]).toEqual(["oidc", undefined]);
+		expect(placeOf(planOf(w, there, W, H), "oidc")).toBeDefined();
+		// It was this person's doing, so it stays open.
+		expect([...there.opened]).toEqual(expect.arrayContaining(["sso-rollout", "sign-on"]));
+		// Escape is back where it started, with nothing opened.
+		const back = press(w, typing, "escape");
+		expect([back.selected, back.opened]).toEqual(["checkout-v2", start.opened]);
+		// What is drawn is found before what is folded away: the eye is already on it.
+		expect(press(w, start, "/", "c", "a").selected).toBe("cards");
 	});
 });
