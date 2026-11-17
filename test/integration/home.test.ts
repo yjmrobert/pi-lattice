@@ -3,10 +3,11 @@
  * the chat was, the chat sliding in beside it, and the keyboard moving between the two.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSandbox, eventually, extensionPaths, piCli, type Sandbox } from "../support/harness.ts";
+import { contrast, PALETTES } from "../../packages/canopy/src/palette.ts";
 import { joinServer, WorkClient, WorkServer } from "../../packages/server/src/index.ts";
 import { canRunTui, KEY, PiTui } from "../support/tui.ts";
 
@@ -79,7 +80,7 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		pi.press(ALT_L_RELEASED);
 		const tree = await alone(pi);
 		expect(tree.at(-1)).toMatch(/alt\+l\s+chat.*move/);
-		expect(tree.some((row) => row.includes("◉ work"))).toBe(true);
+		expect(tree.some((row) => row.includes("◉▸work"))).toBe(true);
 		expect(tree.join("\n")).not.toContain("echo[user]");
 		// The keys are the tree's now: nothing is typed into Pi's editor.
 		pi.press("zzz");
@@ -121,9 +122,9 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		expect(tree.some((row) => row.includes("payments"))).toBe(true);
 		// Folding the session hides what is under it and says how much that is; unfolding brings it back.
 		pi.press("f");
-		await pi.waitFor((screen) => /◉ work \+1/.test(screen) && screen.includes("UNDER IT (folded)"), "the session folded");
+		await pi.waitFor((screen) => /◉▸work \+1/.test(screen) && screen.includes("UNDER IT (folded)"), "the session folded");
 		pi.press("f");
-		await pi.waitFor((screen) => !/◉ work \+1/.test(screen) && !screen.includes("UNDER IT (folded)"), "the session unfolded");
+		await pi.waitFor((screen) => !/◉▸work \+1/.test(screen) && !screen.includes("UNDER IT (folded)"), "the session unfolded");
 		pi.press(KEY.up);
 		await pi.see(/work ▸ payments/);
 		pi.press(KEY.enter);
@@ -287,4 +288,20 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 			await server.stop();
 		}
 	}, 120_000);
+
+	it("is drawn for a light terminal where Pi's theme is light, and points at what is selected", async () => {
+		// Pi's theme follows the terminal's background; here it is chosen, since the test's terminal reports none.
+		writeFileSync(join(sandbox.agentDir, "settings.json"), JSON.stringify({ theme: "light" }));
+		const pi = await withTree({ cols: 160, rows: 40 });
+		await pi.see(OPEN);
+		pi.press(KEY.altL);
+		const tree = await alone(pi);
+		// The name of what is selected is dark on a tint, with the mark before it: none of it is the near-white a dark terminal gets.
+		expect(tree.some((row) => row.includes("◉▸work"))).toBe(true);
+		const light = PALETTES.light.color;
+		expect(await pi.colors("▸work")).toEqual({ fg: light.bright, bg: light.select });
+		const said = await pi.colors("first to last");
+		expect(said?.fg).toBe(light.text);
+		expect(contrast(said?.fg ?? "#ffffff", "#ffffff")).toBeGreaterThan(7);
+	}, 90_000);
 });

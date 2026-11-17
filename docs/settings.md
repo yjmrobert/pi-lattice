@@ -73,6 +73,7 @@ A setting takes its value from the first of these that has one:
 | `canopy.shape` | Grown: each item sits a little above or below its level, so the tree looks like one. Ruled: every level on one row. Applies the next time the canopy is opened. | grown \| ruled | grown |  |
 | `canopy.order` | Dependency: what must come first is on the left, and at the bottom of a story's tasks; what waits on something comes after it. Filed: everything in the order it was filed. `o` in the canopy switches. Applies the next time the canopy is opened. | dependency \| filed | dependency |  |
 | `canopy.motion` | Full: a message moves along the branches, a finished task lights its branch, a question spreads a ring. Calm: only working agents and what needs someone move. Off: nothing moves. Applies the next time the canopy is opened. | full \| calm \| off | full |  |
+| `canopy.palette` | Auto: colours for a dark terminal or a light one, as Pi's theme is. Dark or light: always those. Applies at once. | auto \| dark \| light | auto |  |
 
 ## Roles and templates
 

@@ -194,7 +194,7 @@ describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 		const canopy = await pi.see("next that needs someone");
 		expect(canopy[0]).toMatch(/^ ◆ work\s+1 @tester/);
 		expect(canopy[1]).toMatch(/^ work ▸ /);
-		expect(canopy.join("\n")).toMatch(/◉ work/);
+		expect(canopy.join("\n")).toMatch(/◉.work/);
 		expect(canopy.join("\n")).toMatch(/payments/);
 		expect(canopy.join("\n")).toContain("SITTING HERE");
 		expect(canopy.join("\n")).not.toContain("alt+l");
@@ -260,7 +260,7 @@ describe.skipIf(!canRunTui)("the pane in Pi's terminal interface", () => {
 			expect(canopy.join("\n")).toContain("Checkout");
 			expect(canopy.join("\n")).toContain("Pay by card");
 			// The session open here is on no issue yet, so it is shown at the foot, beside the work.
-			expect(canopy.join("\n")).toMatch(/◉ work/);
+			expect(canopy.join("\n")).toMatch(/◉.work/);
 
 			// Select the feature and put this session on it: the issue starts, and everyone sees who is on it.
 			pi.press("h");

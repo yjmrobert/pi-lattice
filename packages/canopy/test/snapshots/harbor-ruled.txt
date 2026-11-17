@@ -8,14 +8,14 @@
   ⢸⠤⠋ copy ⧗2         ⢸⠤○ reader          ⢸⠤✓ fixtures        ⢸⠤✓ card-form       ⢸⠤⠋ retry-queue      ⢠⠤⧗ rates           ⢸⠤✓ cache           ⢸⠤● conflicts ●1           ⢸⠤⠋ provider        ⢸⠤⠋ store ⧗1
   ⢸⠤✓ schema          ⢸⠤⠋ writer          ⢸⠤✓ csv             ⢸⠤✓ card-vault      ⢸⠤● stripe-listen ●1 ⢸⠤○ display         ⢸⠤✓ endpoint        ⢸⠤✓ local-store            ⢸⠤✓ claims          ⢸⠤✓ failover
  ⢀⢼⢄                  ⢸                   ⢸                   ⢸                  ⢀⢼⢄                   ⢸                   ⢸                   ⢸                          ⢸                   ⢸
- ⡇◉ tables            ○ dual-write        ○ export            ○ cards            ⡇◉ webhooks ●1        ○ tax-lines         ✓ totals-api        ○ offline                  ○ oidc              ○ sessions
- ⠈⢺⠊· planner · 1/3   ⢸ planned · 0/4     ⢸ planned · 2/3     ⢸ planned · 2/4    ⠈⢺⠊● reviewer · 0/3   ⢈ planned · 0/2     ⢸ planned · 3/3     ⢸ planned · 1/3 · @teo     ⢸ planned · 1/3     ⢸ planned · 1/3
-  ⢸                   ⢸                   ⢸ ╰ ⠋ review        ⢸                   ⢸                    ⢈                   ⢸                   ⢸                          ⢸                   ⢸
-  ⢸                   ⢸                   ⢸                   ⢸⡀                  ⢸                    ⠠                   ⢸                   ⢸                          ⢸                   ⢸
-  ⠈⢧⡀                ⣠⠏                   ⢸                    ⠑⢤⣀                ⢸                  ⡀⠄⠁                   ⠈⢧⡀                ⣠⠏                          ⠈⢧⡀                ⣠⠏
-    ⠙⠢⣄⡀          ⣀⡤⠚⠁                    ⢸                      ⠈⠙⠒⠦⠤⣄⣀          ⠘⡆           ⣀ ⠤ ⠒⠈                        ⠙⠢⣄⡀          ⣀⡤⠚⠁                             ⠙⠢⣄⡀          ⣀⡤⠚⠁
-       ⠉⠓⠦⣀   ⢀⡠⠖⠋⠁                       ⢸                             ⠉⠉⠑⠒⠦⠤⣄⣀   ⣇   ⢀ ⠤ ⠒ ⠉                                  ⠉⠓⠦⣀   ⢀⡠⠖⠋⠁                                   ⠉⠓⠦⣀   ⢀⡠⠖⠋⠁
-          ⠈⠳⡄⡴⠋                           ⢸                                    ⠈⠙⠲⢄⢸⢠⠐⠂⠈                                           ⠈⠳⡄⡴⠋                                          ⠈⠳⡄⡴⠋
+ ⡇◉▸tables            ○ dual-write        ○ export            ○ cards            ⡇◉ webhooks ●1        ○ tax-lines         ✓ totals-api        ○ offline                  ○ oidc              ○ sessions
+ ⠈⢺⠊· planner · 1/3   ⢸ planned · 0/4     ⢸ planned · 2/3     ⢸ planned · 2/4    ⠈⢺⠊● reviewer · 0/3   ⢸ planned · 0/2     ⢸ planned · 3/3     ⢸ planned · 1/3 · @teo     ⢸ planned · 1/3     ⢸ planned · 1/3
+  ⢸                   ⢸                   ⢸ ╰ ⠋ review        ⢸                   ⢸                    ⢸                   ⢸                   ⢸                          ⢸                   ⢸
+  ⢸                   ⢸                   ⢸                   ⢸⡀                  ⢸                    ⣸                   ⢸                   ⢸                          ⢸                   ⢸
+  ⠈⢧⡀                ⣠⠏                   ⢸                    ⠑⢤⣀                ⢸                  ⣀⠴⠁                   ⠈⢧⡀                ⣠⠏                          ⠈⢧⡀                ⣠⠏
+    ⠙⠢⣄⡀          ⣀⡤⠚⠁                    ⢸                      ⠈⠙⠒⠦⠤⣄⣀          ⠘⡆          ⢀⣀⣠⠤⠖⠚⠉                        ⠙⠢⣄⡀          ⣀⡤⠚⠁                             ⠙⠢⣄⡀          ⣀⡤⠚⠁
+       ⠉⠓⠦⣀   ⢀⡠⠖⠋⠁                       ⢸                             ⠉⠉⠑⠒⠦⠤⣄⣀   ⣇   ⢀⣀⡤⠴⠒⠒⠉⠁                                 ⠉⠓⠦⣀   ⢀⡠⠖⠋⠁                                   ⠉⠓⠦⣀   ⢀⡠⠖⠋⠁
+          ⠈⠳⡄⡴⠋                           ⢸                                    ⠈⠙⠲⢄⢸⢠⠔⠊⠉                                           ⠈⠳⡄⡴⠋                                          ⠈⠳⡄⡴⠋
             ⢹⠁                            ⢸                                       ⢀⢿⢇                                                ⢹⠁                                            ⢀⢽⢅
             ○ new-tables                  ○ invoices                              ⡇◉ payments                                        ○ cart                                        ⡇◉ sign-on
             ⢸ planned · 1/7               ⢸ planned · 2/3                         ⠈⢺⠊⠋ planner · 2/9                                 ⢸ planned · 4/6                               ⠈⢺⠊⠋ planner · 2/6

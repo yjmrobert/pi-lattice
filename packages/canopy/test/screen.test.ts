@@ -177,7 +177,7 @@ describe("acting", () => {
 		const folded = press(w, initial(w, "checkout-v2"), "f");
 		expect(planOf(w, folded).places.has("payments")).toBe(false);
 		// It says how many items it holds, and the inspector still lists what is under it.
-		expect(screen(w, folded)).toContain("◉ checkout-v2 +22");
+		expect(screen(w, folded)).toContain("◉▸checkout-v2 +22");
 		expect(screen(w, folded)).toContain("UNDER IT (folded)");
 		expect(planOf(w, press(w, folded, "enter")).places.has("payments")).toBe(true);
 	});

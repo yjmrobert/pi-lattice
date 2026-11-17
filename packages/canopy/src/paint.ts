@@ -18,6 +18,9 @@ export const BEAT = 12;
 /** The spinner's glyph at a beat. */
 export const spin = (frame: number): string => SPINNER[Math.floor(frame) % SPINNER.length] as string;
 
+/** What points at the selected item, in the cell between its node and its name. */
+export const MARK = "▸";
+
 export interface PaintOptions {
 	/** The item the cursor is on. */
 	selected?: string;
@@ -62,12 +65,14 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		if (happening.kind === "handed") sweeping.set(happening.id, { t: progress(animation, now), from: happening.from });
 	}
 
-	// Branches: bright once everything on them has landed, dotted while only planned.
+	// Branches: bright once everything on them has landed, quieter while only planned.
 	for (const branch of plan.branches) {
 		const item = branch.to;
 		const landed = item.leaves > 0 && item.landed === item.leaves;
 		const planned = !landed && item.landed === 0 && !alive(item) && (item.planned || item.children.length > 0) && !item.agent;
-		const style: Style = { fg: item.failed ? COLOR.failed : hue(item), level: strength(item, landed ? 1 : planned ? 0.5 : 0.62) };
+		// What nobody has started is a quieter line, and still a line: broken into dots it read as noise where everything is unstarted.
+		// Nobody's is grey already, so it is dimmed less than a person's colour is.
+		const style: Style = { fg: item.failed ? COLOR.failed : hue(item), level: strength(item, landed ? 1 : planned ? (hue(item) === COLOR.dim ? 0.75 : 0.5) : 0.62) };
 		const weight = landed ? 2 : planned ? 0 : 1;
 		const thick = branch.kind === "branch" && item.level === 0;
 		const grown = branch.kind === "stem" ? 1 : (growing.get(item.id) ?? 1);
@@ -76,7 +81,6 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		const count = branch.points.length;
 		branch.points.forEach(([x, y], index) => {
 			if (index > grown * count) return;
-			if (planned && branch.kind !== "twig" && index % 7 > 1) return;
 			// The new colour spreads from the item back toward its parent.
 			const paintAs = old && index < (1 - (sweep?.t ?? 1)) * count ? old : style;
 			grid.plot(x, y, paintAs, weight);
@@ -158,7 +162,7 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		for (let x = -8; x <= 8; x++) {
 			const far = Math.hypot(x, y);
 			if (far <= pulse) grid.plot(rx + x, ry + y, { fg: COLOR.root }, 9);
-			else if (far <= pulse + 2.5 && (x + y) % 2 === 0) grid.plot(rx + x, ry + y, { fg: COLOR.root, level: 0.5 }, 8);
+			else if (far <= pulse + 2.5 && (x + y) % 2 === 0) grid.plot(rx + x, ry + y, { fg: COLOR.root, level: 0.62 }, 8);
 		}
 	}
 	const rootPlace = plan.places.get(world.root.id) as Place;
@@ -187,6 +191,8 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		const held = world.flow.held.has(item.id) && !item.agent && !landed;
 		const behind = world.flow.behind.get(item.id)?.length ?? 0;
 		const nameStyle: Style = { fg: held || (place.leaf && item.done) ? grey(item, COLOR.dim) : grey(item, place.leaf ? COLOR.text : COLOR.bright), bold: !place.leaf && !held, ...(selected ? (options.away ? { bg: COLOR.selectAway } : { bg: COLOR.select, fg: COLOR.bright, bold: true }) : {}) };
+		// What is selected is pointed at as well as tinted: the mark is there whatever the terminal makes of the colour.
+		if (selected) grid.text(col + 1, row, MARK, options.away ? { fg: COLOR.text, bg: COLOR.selectAway } : { fg: COLOR.bright, bg: COLOR.select, bold: true });
 		/** After the name: how many things need someone here, and how many wait on this. */
 		const marks = (from: number): number => {
 			let at = from;
@@ -276,6 +282,7 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 			grid.text(col + 2, row + 2 + index, "╰", { fg: grey(bud, COLOR.faint) });
 			grid.text(col + 4, row + 2 + index, bud.failed ? "✗" : bud.done ? "✓" : bud.agent ? agentGlyph(bud.agent, frame) : "○", bud.asks > 0 || bud.agent?.state === "asking" ? amber : { fg: hue(bud), level: strength(bud, 1) });
 			grid.text(col + 6, row + 2 + index, `${cut(bud.name, 16)}${more}`, { fg: bud.id === options.selected ? COLOR.bright : grey(bud, COLOR.dim), ...(bud.id === options.selected ? { bg: options.away ? COLOR.selectAway : COLOR.select } : {}) });
+			if (bud.id === options.selected) grid.text(col + 5, row + 2 + index, MARK, { fg: COLOR.bright, bg: options.away ? COLOR.selectAway : COLOR.select });
 		});
 	}
 	return grid;

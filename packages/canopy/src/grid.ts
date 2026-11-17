@@ -3,13 +3,14 @@
  * four down in every cell. Text is written into cells; branches are plotted as dots; a cell
  * that holds text hides the dots behind it. No Pi, no terminal.
  */
+import { COLOR } from "./palette.ts";
 
 export interface Style {
 	/** Colour as #rrggbb. */
 	fg?: string;
 	bg?: string;
 	bold?: boolean;
-	/** Brightness from 0 to 1. Colour is scaled by it, so a dim branch keeps its hue. */
+	/** Brightness from 0 to 1. Less of it moves the colour toward the background, so a dim branch keeps its hue. */
 	level?: number;
 }
 
@@ -30,19 +31,28 @@ const BIT = [
 	[0x40, 0x80],
 ];
 
+/** A colour at a brightness: at less than 1 it goes toward the terminal's background, dark or light. */
 const scale = (hex: string, level: number): [number, number, number] => {
 	const value = Number.parseInt(hex.slice(1), 16);
+	const ground = Number.parseInt(COLOR.ground.slice(1), 16);
 	const k = Math.max(0, Math.min(1, level));
-	return [Math.round(((value >> 16) & 255) * k), Math.round(((value >> 8) & 255) * k), Math.round((value & 255) * k)];
+	const mix = (shift: number): number => Math.round(((value >> shift) & 255) * k + ((ground >> shift) & 255) * (1 - k));
+	return [mix(16), mix(8), mix(0)];
 };
 
-/** `fade` darkens everything by the same share: what is behind something else is still read, and does not compete. */
+/** `fade` moves everything toward the background by the same share: what is behind something else is still read, and does not compete. */
 const sgr = (style: Style, fade = 1): string => {
 	const parts: string[] = [];
 	if (style.bold && fade === 1) parts.push("1");
 	if (style.fg) parts.push(`38;2;${scale(style.fg, (style.level ?? 1) * fade).join(";")}`);
 	if (style.bg) parts.push(`48;2;${scale(style.bg, fade).join(";")}`);
 	return parts.length > 0 ? `\x1b[${parts.join(";")}m` : "";
+};
+
+/** Text in a style, as a terminal takes it. */
+export const styled = (text: string, style: Style): string => {
+	const code = sgr(style);
+	return code === "" ? text : `${code}${text}\x1b[0m`;
 };
 
 export class Grid {

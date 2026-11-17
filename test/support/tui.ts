@@ -92,6 +92,20 @@ export class PiTui {
 		return Array.from({ length: this.terminal.rows }, (_unused, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "");
 	}
 
+	/** The colours the first cell of a piece of text on the screen is drawn in, as #rrggbb, where it names them outright. */
+	async colors(text: string): Promise<{ fg?: string; bg?: string } | undefined> {
+		await this.pending;
+		const buffer = this.terminal.buffer.active;
+		const hex = (value: number): string => `#${value.toString(16).padStart(6, "0")}`;
+		for (let row = 0; row < this.terminal.rows; row++) {
+			const line = buffer.getLine(buffer.viewportY + row);
+			const at = line?.translateToString(true).indexOf(text) ?? -1;
+			const cell = at >= 0 ? line?.getCell(at) : undefined;
+			if (cell) return { ...(cell.isFgRGB() ? { fg: hex(cell.getFgColor()) } : {}), ...(cell.isBgRGB() ? { bg: hex(cell.getBgColor()) } : {}) };
+		}
+		return undefined;
+	}
+
 	/** Press keys, or type text. */
 	press(...keys: string[]): void {
 		for (const key of keys) this.child.stdin.write(key);

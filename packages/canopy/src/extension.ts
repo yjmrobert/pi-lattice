@@ -8,10 +8,12 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type Component, matchesKey, type TUI } from "@earendil-works/pi-tui";
 import { emitEvent, type LatticeEvents, onEvent, SETTINGS } from "@pi-lattice/protocol";
 import { type Animation, advance, happenings, type Motion } from "./animate.ts";
+import { styled } from "./grid.ts";
 import type { Shape } from "./layout.ts";
 import { buildWorld, type World } from "./model.ts";
 import { type FirstKey, firstKey, renderFirst } from "./first.ts";
 import { BEAT } from "./paint.ts";
+import { type Appearance, COLOR, usePalette } from "./palette.ts";
 import type { Layout } from "./layout.ts";
 import { reordered } from "./order.ts";
 import { anchorOf, type Asking, type CanopyKey, type CanopyState, initial, interpret, placed, planOf, render, sessionFrame } from "./screen.ts";
@@ -65,6 +67,21 @@ export default function (pi: ExtensionAPI) {
 	const levels = (): string[] => {
 		const value = settings()["canopy.levels"];
 		return Array.isArray(value) && value.length > 0 ? (value as string[]) : DEFAULT_LEVELS;
+	};
+	/**
+	 * Draw for the terminal as it is: the setting when it says, else what Pi's theme is, which follows
+	 * the terminal's background. Asked at every draw, since either can change while the canopy is open.
+	 */
+	const palette = (): void => {
+		// A session being replaced leaves its view on the screen for a moment, with a `pi` that may no longer be asked anything: what was in use stays.
+		if (!context) return;
+		try {
+			const chosen = settings()["canopy.palette"];
+			const appearance: Appearance = chosen === "light" || chosen === "dark" ? chosen : (context.ui.theme as { appearance?: string } | undefined)?.appearance === "light" ? "light" : "dark";
+			usePalette(appearance);
+		} catch {
+			// The session ended between the check and the asking.
+		}
 	};
 	const look = (): { world: World; current: string | undefined } => {
 		const request: LatticeEvents["lattice:trees:query"] = {};
@@ -159,6 +176,7 @@ export default function (pi: ExtensionAPI) {
 			render(columns) {
 				// A session being replaced leaves this view on the screen for a moment, with a `pi` that may no longer be used.
 				if (!context) return drawn;
+				palette();
 				// The room changed, because the chat slid in or out or the terminal was resized: place the window again.
 				if (columns !== width) state = { ...state, framed: false };
 				width = columns;
@@ -167,7 +185,7 @@ export default function (pi: ExtensionAPI) {
 					const lines = renderFirst({ repo: first.repo, draft, ...(sent ? { sent: sent.text } : first.starting ? { sent: "" } : {}), leave: place.keys?.().filter((entry) => !entry.run).map((entry) => [entry.key, entry.does] as const) ?? [], ...(place.away?.() ? { away: true } : {}), dim: Math.max(0, Math.min(1, place.dim?.() ?? 1)) }, width, place.height(), motion === "off" ? 0 : beat());
 					if (said && lines.length > 0) {
 						const text = said.text.slice(0, Math.max(0, width - 2));
-						lines[lines.length - 1] = ` \x1b[38;2;243;246;251m${text}\x1b[0m${" ".repeat(Math.max(0, width - 1 - text.length))}`;
+						lines[lines.length - 1] = ` ${styled(text, { fg: COLOR.bright })}${" ".repeat(Math.max(0, width - 1 - text.length))}`;
 					}
 					drawn = lines;
 					return lines;
@@ -198,7 +216,7 @@ export default function (pi: ExtensionAPI) {
 				const lines = render(world, state, width, place.height(), motion === "off" ? 0 : beat(), { animations: moving, now, ...(leave ? { leave } : {}), ...(place.away?.() ? { away: true } : {}), ...(asking ? { asking } : {}), ...(dim < 1 ? { dim } : {}), ...(morph ? { morph: { from: morph.from, camera: morph.camera, t: (now - morph.start) / MORPH_MS } } : {}) });
 				if (said && lines.length > 0) {
 					const text = said.text.slice(0, Math.max(0, width - 2));
-					lines[lines.length - 1] = ` \x1b[38;2;243;246;251m${text}\x1b[0m${" ".repeat(Math.max(0, width - 1 - text.length))}`;
+					lines[lines.length - 1] = ` ${styled(text, { fg: COLOR.bright })}${" ".repeat(Math.max(0, width - 1 - text.length))}`;
 				}
 				drawn = lines;
 				return lines;
@@ -268,7 +286,7 @@ export default function (pi: ExtensionAPI) {
 			},
 			dispose,
 			anchor: () => anchorOf(world, state, width, place.height()),
-			frame: (nodeId, columns, rows, leave) => sessionFrame(world, nodeId, columns, rows, leave, motion === "off" ? 0 : beat()),
+			frame: (nodeId, columns, rows, leave) => (palette(), sessionFrame(world, nodeId, columns, rows, leave, motion === "off" ? 0 : beat())),
 		};
 	}
 

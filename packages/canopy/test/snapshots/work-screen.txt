@@ -6,7 +6,7 @@
                                                                                                               │ SITTING HERE
                                                                                                               │ ⠋ implementation  working
                           ⢠⠤○ Error states                                                                    │   sam's, in shop
-                          ⢸⠤⠋ Card form                                                                       │   editing form.tsx
+                          ⢸⠤⠋▸Card form                                                                       │   editing form.tsx
                           ⢸⠤✓ Validate number                                                                 │   tended by nothing yet
                          ⢀⢼⢄                                                                                  │
                          ⡇◉ Enter a card ●1                                                                   │ UNDER IT
@@ -20,19 +20,19 @@
   ⢸            ⡜⠁                                                                                             │
   ⠸⠤⠤⠤⠤⠤⢤⣀⣀⣀⣀⣀⣸⠁                                                                                              │
               ○ Pay by card                          ○ Refunds                                                │
-              ⢸ doing · 1/4 · @sam                   ⢈ todo · @teo                                            │
-              ⢸                                      ⢈                                                        │
-              ⠸⣄⣀                                   ⡀⡰                                                        │
-                ⠈⠉⠙⠒⠒⠒⠢⠤⠤⠤⠤⣀⣀⣀⣀        ⣀ ⢀ ⠠⠄ ⠆ ⠒ ⠁⠈                                                          │
-                              ⠈⠉⠙⠒⢦⠄⠂⠈                                                                        │
+              ⢸ doing · 1/4 · @sam                   ⢸ todo · @teo                                            │
+              ⢸                                      ⢸                                                        │
+              ⠸⣄⣀                                   ⣀⡼                                                        │
+                ⠈⠉⠙⠒⠒⠒⠢⠤⠤⠤⠤⣀⣀⣀⣀       ⢀⣀⣀⣀⡤⠤⠤⠤⠖⠒⠒⠚⠉⠉                                                          │
+                              ⠈⠉⠙⠒⢦⠖⠊⠉⠉                                                                       │
                                   ○ Checkout                                           ⢀⠤⢄                    │
-                                  ⢸⡇doing · 1/5 · @yan                 ⢀⠤○ Loose end   ⡇◉ scratch           ⢀⠤│
-                                  ⢸⡇                                   ⢈               ⠈⢺⡏· scratch · @yan  ⡇◉│
+                                  ⢸⡇doing · 1/5 · @yan                 ⢠⠤○ Loose end   ⡇◉ scratch           ⢀⠤│
+                                  ⢸⡇                                   ⢸               ⠈⢺⡏· scratch · @yan  ⡇◉│
                                   ⢸⣇                                   ○ Search         ⢸⡇                  ⠈⢺│
-                                   ⠉⠓⠦⣤⣀⡀                              ⢀⡀todo · 0/1     ⣸⡇                   ⢸│
-                                        ⠉⠉⠛⠒⠒⠦⠤⠤⣤⣀⣀⣀⡀                  ⢠⡄            ⣀⣠⠾⠋                   ⣀⣼│
-                                                   ⠈⠉⠉⠉⠙⠓⠒⠒⠶⠤⠤⢤⣀⣀⣀     ⠠⠄    ⢀⣀⣀⡤⠴⠒⠚⠋⠉        ⣀⣀⣀⣀⣀⣠⠤⠤⠤⠴⠒⠒⠛⠉⠉ │
-                                                                 ⠉⠉⠙⠒⠶⢤⣀⣒⣀⣤⠖⣛⣉⣁⡤⠤⠤⠤⠖⠒⠒⠒⠒⠚⠉⠉⠉⠉⠉⠁               │
+                                   ⠉⠓⠦⣤⣀⡀                              ⢸⡇todo · 0/1     ⣸⡇                   ⢸│
+                                        ⠉⠉⠛⠒⠒⠦⠤⠤⣤⣀⣀⣀⡀                  ⢸⡇            ⣀⣠⠾⠋                   ⣀⣼│
+                                                   ⠈⠉⠉⠉⠙⠓⠒⠒⠶⠤⠤⢤⣀⣀⣀     ⢸⡇    ⢀⣀⣀⡤⠴⠒⠚⠋⠉        ⣀⣀⣀⣀⣀⣠⠤⠤⠤⠴⠒⠒⠛⠉⠉ │
+                                                                 ⠉⠉⠙⠒⠶⢤⣘⣷⣀⣤⠖⣛⣉⣁⡤⠤⠤⠤⠖⠒⠒⠒⠒⠚⠉⠉⠉⠉⠉⠁               │
                                                                       ⢀⢌⢿⣿⢟⠉⠉                                 │
                                                                      ⢔⢵⣷⣿⣷⣷⢕⠄                                 │
                                                                      ⢕⢿⣿⣿⣿⣿⢗⠅                                 │

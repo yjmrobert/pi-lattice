@@ -9,17 +9,17 @@
   ⢸⠤⠋ copy ⧗2                             ⢸⠤✓ fixtures                                                 ⢠⠤⧗ rat│
   ⢸⠤✓ schema          ⢠⠤○ cutover         ⢸⠤✓ csv                                                      ⢸⠤○ dis│ UNDER IT, FIRST TO LAST
  ⢀⢼⢄                  ⢸⠤○ flag            ⢸                   ⢠⠤⧗ e2e             ⢠⠤○ signatures       ⢸      │ ├ ✓ schema          landed
- ⡇◉ tables            ⢸⠤○ reader          ○ export            ⢸⠤⠋ 3ds-flow ⧗1     ⢸⠤⠋ retry-queue      ○ tax-l│ ├ ⠋ copy            worker, working
- ⠈⢺⠊· planner · 1/3   ⢸⠤⠋ writer          ⢸ planned · 2/3     ⢸⠤✓ card-form       ⢸⠤● stripe-listen ●1 ⠘ plann│ └ ⧗ verify-copy     worker, waits o…
-  ⢸                   ⢸                   ⢸ ╰ ⠋ review        ⢸⠤✓ card-vault     ⣀⢼⢄                   ⢈      │
-  ⢸                   ○ dual-write        ⢸                   ⢸                 ⠪⡯◉ webhooks ●1        ⢨      │
-  ⠈⢧⡀                 ⢸ planned · 0/4     ⢸                   ○ cards            ⢸⢺⠊● reviewer · 0/3   ⠆      │
-    ⠙⠢⣄⡀              ⢸                   ⢸                   ⢸ planned · 2/4     ⢾                  ⠤⠉       │
-       ⠉⠓⠦⣀          ⢀⡼                   ⢸                   ⢸                   ⢸⡄             ⡀⠤ ⠁         │
-          ⠈⠳⡄ ⢀⣀⣠⠤⠴⠒⠚⠉                    ⢸                   ⢸⡀                  ⢸⠘⠄        ⠄ ⠂⠈             │
-            ⢹⠞⠉                           ⢸                    ⠙⠲⢤⣀⡀              ⠘⡆⠱⡀  ⡀⠐ ⠉                  │
-            ○ new-tables                  ⢸                        ⠈⠉⠑⠒⠒⠤⠤⢄⣀⣀      ⣇ ⡸⢜                       │
-            ⢸ planned · 1/7               ⢸                                  ⠉⠉⠒⠲⢤⣀⢸⡐ ⠈⢂                      │
+ ⡇◉▸tables            ⢸⠤○ reader          ○ export            ⢸⠤⠋ 3ds-flow ⧗1     ⢸⠤⠋ retry-queue      ○ tax-l│ ├ ⠋ copy            worker, working
+ ⠈⢺⠊· planner · 1/3   ⢸⠤⠋ writer          ⢸ planned · 2/3     ⢸⠤✓ card-form       ⢸⠤● stripe-listen ●1 ⢸ plann│ └ ⧗ verify-copy     worker, waits o…
+  ⢸                   ⢸                   ⢸ ╰ ⠋ review        ⢸⠤✓ card-vault     ⣀⢼⢄                   ⢸      │
+  ⢸                   ○ dual-write        ⢸                   ⢸                 ⠪⡯◉ webhooks ●1        ⢸      │
+  ⠈⢧⡀                 ⢸ planned · 0/4     ⢸                   ○ cards            ⢸⢺⠊● reviewer · 0/3  ⢀⡎      │
+    ⠙⠢⣄⡀              ⢸                   ⢸                   ⢸ planned · 2/4     ⢾                 ⢀⡤⠋       │
+       ⠉⠓⠦⣀          ⢀⡼                   ⢸                   ⢸                   ⢸⡄             ⣀⠤⠒⠉         │
+          ⠈⠳⡄ ⢀⣀⣠⠤⠴⠒⠚⠉                    ⢸                   ⢸⡀                  ⢸⠘⠄      ⢀⣀⠤⠔⠚⠉             │
+            ⢹⠞⠉                           ⢸                    ⠙⠲⢤⣀⡀              ⠘⡆⠱⡀ ⢀⡠⠔⠊⠉                  │
+            ○ new-tables                  ⢸                        ⠈⠉⠑⠒⠒⠤⠤⢄⣀⣀      ⣇ ⡸⢞⠁                      │
+            ⢸ planned · 1/7               ⢸                                  ⠉⠉⠒⠲⢤⣀⢸⡞⠁⠈⢂                      │
             ⢸                             ○ invoices                              ⢈⢿⢄   ⠣⡀                 1▶ │
             ⢸                             ⢸ planned · 2/3                         ⡇◉ payments                 │
              ⠳⣄                           ⢸                                       ⠈⢺⠊⠋ planner · 2/9          │

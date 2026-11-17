@@ -38,8 +38,9 @@ export interface FirstScreen {
 	dim?: number;
 }
 
-const DIM: Style = { fg: COLOR.dim };
-const KEYCAP: Style = { fg: COLOR.bright, bg: "#272e3d" };
+// Read from the palette each time they are used: it may be a dark one now and a light one later.
+const DIM: Style = { get fg() { return COLOR.dim; } };
+const KEYCAP: Style = { get fg() { return COLOR.bright; }, get bg() { return COLOR.keycap; } };
 /** The widest the box is, however wide the terminal: a line longer than this is not read as one. */
 const BOX_MOST = 96;
 

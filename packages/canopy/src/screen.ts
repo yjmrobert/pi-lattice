@@ -316,10 +316,11 @@ function wrap(text: string, width: number): string[] {
 	return line ? [...out, line] : out;
 }
 
-const DIM: Style = { fg: COLOR.dim };
-const KEYCAP: Style = { fg: COLOR.bright, bg: "#272e3d" };
+// Read from the palette each time they are used: it may be a dark one now and a light one later.
+const DIM: Style = { get fg() { return COLOR.dim; } };
+const KEYCAP: Style = { get fg() { return COLOR.bright; }, get bg() { return COLOR.keycap; } };
 /** A key that answers what a session asks. */
-const ANSWER: Style = { fg: "#14100a", bg: COLOR.attention, bold: true };
+const ANSWER: Style = { get fg() { return COLOR.onAttention; }, get bg() { return COLOR.attention; }, bold: true };
 
 /** Write runs of styled text one after another, and say where the next would start. */
 function run(grid: Grid, col: number, row: number, parts: Array<[text: string, style?: Style | undefined]>): number {
