@@ -132,7 +132,8 @@ export function chipOf(item: Item): { agent: string; progress: string; owner: st
 	return { agent, progress, owner };
 }
 
-const chipWidth = (item: Item): number => {
+/** How many cells the line under an item's name takes. */
+export const chipWidth = (item: Item): number => {
 	const chip = chipOf(item);
 	return [chip.agent ? cells(chip.agent) + 2 : 0, chip.progress.length, cells(chip.owner)].filter((n) => n > 0).reduce((sum, n) => sum + n + 3, -3);
 };

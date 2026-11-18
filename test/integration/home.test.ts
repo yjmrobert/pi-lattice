@@ -134,6 +134,60 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		expect(opened[0]).toMatch(/^ ◆ work/);
 	}, 120_000);
 
+	it("selects what is clicked on the tree, opens it at a second click, and leaves a click behind an open chat alone", async () => {
+		const pi = await withTree({ cols: 160, rows: 40 });
+		await pi.see(OPEN);
+		pi.press(KEY.altL);
+		await alone(pi);
+		pi.press("p");
+		await pi.see(/owner\s+you/);
+		pi.press("n");
+		await pi.see("New session under work");
+		pi.press("payments", KEY.tab, KEY.tab, KEY.tab, KEY.tab, KEY.tab);
+		await pi.see("what it should do; it sees only this");
+		pi.press("say the word heliotrope");
+		await pi.see("say the word heliotrope▏");
+		pi.press("\x13"); // ctrl+s
+		await pi.see(/roles\s+protocol · reporting · worker/);
+		pi.press(KEY.escape);
+
+		const tree = await alone(pi);
+		expect(tree.some((row) => row.includes("◉▸work"))).toBe(true);
+		/** The cell a name is written in on the tree: under the two rows at the top, left of the panel. A terminal counts cells from one. */
+		const cell = (rows: string[], name: string): { x: number; y: number } => {
+			const y = rows.findIndex((row, index) => index >= 2 && index < rows.length - 1 && row.slice(0, 118).includes(` ${name}`));
+			return { x: (rows[y] as string).indexOf(` ${name}`) + 3, y: y + 1 };
+		};
+		// The left button going down on a cell and coming up there, as a terminal reports it to Pi.
+		const click = (at: { x: number; y: number }): void => pi.press(`\x1b[<0;${at.x};${at.y}M`, `\x1b[<0;${at.x};${at.y}m`);
+		const payments = cell(tree, "payments");
+		click(payments);
+		// The mark is on it and the top of the screen names it: it is selected, and nothing was opened.
+		const selected = await pi.see(/work ▸ payments/);
+		expect(selected.some((row) => row.includes("▸payments"))).toBe(true);
+		expect(selected.join("\n")).not.toContain("╭");
+		// A click on nothing is nothing: what is selected stays.
+		click({ x: 2, y: 5 });
+		const work = cell(selected, "work");
+		click(work);
+		await pi.waitFor((screen) => screen.includes("◉▸work") && !screen.includes("▸payments"), "the first session selected again");
+
+		// A second click on the same thing does what enter does: the terminal moves to that session.
+		click(payments);
+		await pi.see(/work ▸ payments/);
+		click(payments);
+		click(payments);
+		const opened = await pi.see(/│.*heliotrope/);
+		expect(opened.find((row) => row.includes("╭"))).toMatch(/payments\s+@tester/);
+		// Behind an open chat the tree is only read: a click where the first session is drawn selects nothing.
+		click(work);
+		await new Promise((resolve) => setTimeout(resolve, 400));
+		pi.press(KEY.altL);
+		const back = await alone(pi);
+		expect(back.some((row) => row.includes("▸payments"))).toBe(true);
+		expect(back.some((row) => row.includes("◉▸work"))).toBe(false);
+	}, 120_000);
+
 	it("shows a message waiting for approval under the tree, and approves it there with a", async () => {
 		const pi = await withTree({ cols: 160, rows: 40, env: { LATTICE_APPROVAL: "always" } });
 		await pi.see(OPEN);
@@ -318,8 +372,11 @@ describe.skipIf(!canRunTui)("the canopy as what Pi opens on", () => {
 		const list = await pi.see("WHAT IS SELECTED");
 		expect(list.join("\n")).toContain("offer the session on it to a teammate");
 		expect(list.join("\n")).not.toContain("◉▸work");
-		// The keys that lead out of the tree are the ones this layout has, at the end of the list.
+		// The list is longer than this window: j reads on, and so does the wheel, as a terminal reports it turned down.
 		pi.press("j", "j", "j", "j");
+		await pi.see("THE MOUSE");
+		for (let turns = 0; turns < 12; turns++) pi.press("\x1b[<65;40;12M");
+		// The keys that lead out of the tree are the ones this layout has, at the end of the list.
 		await pi.see("the sessions as a list");
 		pi.press("?");
 		await pi.see("◉▸work");

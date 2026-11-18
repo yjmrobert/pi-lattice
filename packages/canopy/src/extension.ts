@@ -16,7 +16,7 @@ import { BEAT } from "./paint.ts";
 import { type Appearance, COLOR, useColorDepth, usePalette } from "./palette.ts";
 import type { Layout } from "./layout.ts";
 import { reordered } from "./order.ts";
-import { anchorOf, type Asking, type CanopyKey, type CanopyState, initial, interpret, placed, planOf, render, sessionFrame } from "./screen.ts";
+import { anchorOf, type Asking, type CanopyAction, type CanopyKey, type CanopyMouse, type CanopyState, initial, interpret, interpretMouse, placed, planOf, render, sessionFrame } from "./screen.ts";
 
 /**
  * How often the canopy is drawn while something moves. A frame costs about a millisecond to make,
@@ -68,6 +68,20 @@ function keyOf(data: string): CanopyKey | undefined {
 	if (named) return named;
 	if (matchesKey(data, "alt+l")) return "escape";
 	return data.length === 1 && data >= " " ? data : undefined;
+}
+
+/** What Pi says the mouse did, in the cells of whatever it was over. */
+type Pointer = Parameters<NonNullable<NonNullable<LatticeEvents["lattice:canopy:mount"]["view"]>["mouse"]>>[0];
+
+/**
+ * The mouse as the canopy reads it: the left button with nothing held, and the wheel. With alt the
+ * wheel goes sideways, by the five lines Pi makes of one with alt held. Anything else is not the
+ * canopy's: another button, a drag, the pointer moving.
+ */
+function mouseOf(event: Pointer): CanopyMouse | undefined {
+	if (event.type === "wheel") return event.wheelDelta && !event.ctrl ? { type: "wheel", by: event.wheelDelta, sideways: event.alt } : undefined;
+	if ((event.type !== "press" && event.type !== "click") || event.button !== "left" || event.alt || event.ctrl || event.shift) return undefined;
+	return { type: event.type, x: event.x, y: event.y, count: event.clickCount ?? 1 };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -199,6 +213,53 @@ export default function (pi: ExtensionAPI) {
 			clearInterval(timer);
 			if (again) clearTimeout(again);
 		};
+		/** Take the state a key or the mouse led to, and do what it asks of whatever shows the canopy. */
+		const carry = (was: CanopyState, next: { state: CanopyState; actions: CanopyAction[] }): void => {
+			state = next.state;
+			// Whatever changed what is folded: f, or a key that changed the room and with it how much fits.
+			if (motion !== "off" && !sameFolds(planOf(world, was, width, place.height()), planOf(world, state, width, place.height()))) morph = { from: planOf(world, was, width, place.height()), camera: was.camera, start: Date.now() };
+			if (place.memory) place.memory.state = state;
+			for (const action of next.actions) {
+				if (action.do === "close") return place.back();
+				if (action.do === "answer") {
+					const request: LatticeEvents["lattice:waiting:answer"] = { id: action.id, key: action.key, ...(action.text !== undefined ? { text: action.text } : {}) };
+					emitEvent(pi.events, "lattice:waiting:answer", request);
+					if (request.done && action.text !== undefined) said = { text: "Told it instead.", until: Date.now() + SAY_MS };
+					if (!request.done) said = { text: "That could not be answered from here. Open the session to answer it.", until: Date.now() + SAY_MS };
+				}
+				if (action.do === "say") said = { text: action.text, until: Date.now() + SAY_MS };
+				if (action.do === "open") return place.open(action.id);
+				if (action.do === "steer") {
+					// The pane has the connection to the host; what is answered comes back in the state and is drawn at the foot.
+					const request: LatticeEvents["lattice:steer"] = { text: action.text, ...(action.number !== undefined ? { number: action.number } : {}), ...(action.nodeId !== undefined ? { nodeId: action.nodeId } : {}) };
+					emitEvent(pi.events, "lattice:steer", request);
+					if (!request.done) said = { text: "That could not be said from here: the pane is not there to carry it.", until: Date.now() + SAY_MS };
+				}
+				if (action.do === "wake") {
+					const request: LatticeEvents["lattice:repo:wake"] = { key: action.key };
+					emitEvent(pi.events, "lattice:repo:wake", request);
+					if (!request.done) said = { text: "It could not be woken from here: the pane is not there to start it.", until: Date.now() + SAY_MS };
+				}
+				// Where the first message of a repository is written. Over the chat, the canopy closes onto it.
+				if (action.do === "chat") return place.chat ? place.chat() : place.back();
+				// Handing a session over asks who to, or whether to: it is run where that is asked and answered.
+				if (action.do === "hand") {
+					const command = `/lattice ${action.what} ${action.id}`;
+					if (place.command) return place.command(command);
+					run(command);
+				}
+				if (action.do === "seen") emitEvent(pi.events, "lattice:seen", {} satisfies LatticeEvents["lattice:seen"]);
+				if (action.do === "on") {
+					said = { text: `Putting this session on #${action.number}…`, until: Date.now() + SAY_MS };
+					run(`/lattice on ${action.number}`);
+				}
+				if (action.do === "start") {
+					said = { text: "Putting a session on it…", until: Date.now() + SAY_MS };
+					run(`/lattice start ${action.id}`);
+				}
+			}
+			tui.requestRender();
+		};
 		return {
 			render(columns) {
 				// A session being replaced leaves this view on the screen for a moment, with a `pi` that may no longer be used.
@@ -273,52 +334,21 @@ export default function (pi: ExtensionAPI) {
 				}
 				// What is on the screen now is where a fold starts from.
 				state = placed(world, state, width, place.height());
-				const was = state;
-				const next = interpret(world, state, key, width, place.height(), asking, place.keys?.().map((entry) => [entry.key, entry.does] as const));
-				state = next.state;
-				// Whatever changed what is folded: f, or a key that changed the room and with it how much fits.
-				if (motion !== "off" && !sameFolds(planOf(world, was, width, place.height()), planOf(world, state, width, place.height()))) morph = { from: planOf(world, was, width, place.height()), camera: was.camera, start: Date.now() };
-				if (place.memory) place.memory.state = state;
-				for (const action of next.actions) {
-					if (action.do === "close") return place.back();
-					if (action.do === "answer") {
-						const request: LatticeEvents["lattice:waiting:answer"] = { id: action.id, key: action.key, ...(action.text !== undefined ? { text: action.text } : {}) };
-						emitEvent(pi.events, "lattice:waiting:answer", request);
-						if (request.done && action.text !== undefined) said = { text: "Told it instead.", until: Date.now() + SAY_MS };
-						if (!request.done) said = { text: "That could not be answered from here. Open the session to answer it.", until: Date.now() + SAY_MS };
-					}
-					if (action.do === "say") said = { text: action.text, until: Date.now() + SAY_MS };
-					if (action.do === "open") return place.open(action.id);
-					if (action.do === "steer") {
-						// The pane has the connection to the host; what is answered comes back in the state and is drawn at the foot.
-						const request: LatticeEvents["lattice:steer"] = { text: action.text, ...(action.number !== undefined ? { number: action.number } : {}), ...(action.nodeId !== undefined ? { nodeId: action.nodeId } : {}) };
-						emitEvent(pi.events, "lattice:steer", request);
-						if (!request.done) said = { text: "That could not be said from here: the pane is not there to carry it.", until: Date.now() + SAY_MS };
-					}
-					if (action.do === "wake") {
-						const request: LatticeEvents["lattice:repo:wake"] = { key: action.key };
-						emitEvent(pi.events, "lattice:repo:wake", request);
-						if (!request.done) said = { text: "It could not be woken from here: the pane is not there to start it.", until: Date.now() + SAY_MS };
-					}
-					// Where the first message of a repository is written. Over the chat, the canopy closes onto it.
-					if (action.do === "chat") return place.chat ? place.chat() : place.back();
-					// Handing a session over asks who to, or whether to: it is run where that is asked and answered.
-					if (action.do === "hand") {
-						const command = `/lattice ${action.what} ${action.id}`;
-						if (place.command) return place.command(command);
-						run(command);
-					}
-					if (action.do === "seen") emitEvent(pi.events, "lattice:seen", {} satisfies LatticeEvents["lattice:seen"]);
-					if (action.do === "on") {
-						said = { text: `Putting this session on #${action.number}…`, until: Date.now() + SAY_MS };
-						run(`/lattice on ${action.number}`);
-					}
-					if (action.do === "start") {
-						said = { text: "Putting a session on it…", until: Date.now() + SAY_MS };
-						run(`/lattice start ${action.id}`);
-					}
-				}
-				tui.requestRender();
+				carry(state, interpret(world, state, key, width, place.height(), asking, place.keys?.().map((entry) => [entry.key, entry.does] as const)));
+			},
+			mouse(event) {
+				// Before there is a tree there is nothing to point at; and while the keyboard is elsewhere, so is the mouse.
+				if (!context || firstNow() || place.away?.()) return undefined;
+				const mouse = mouseOf(event);
+				if (!mouse) return undefined;
+				state = placed(world, state, width, place.height());
+				const leave = place.keys?.().map((entry) => [entry.key, entry.does] as const);
+				const next = interpretMouse(world, state, mouse, width, place.height(), { now: Date.now(), ...(asking ? { asking } : {}), ...(leave ? { leave } : {}) });
+				if (!next) return undefined;
+				// A press only says the click to come is the canopy's: there is nothing to draw.
+				if (mouse.type === "press") return { handled: true, render: false };
+				carry(state, next);
+				return { handled: true };
 			},
 			dispose,
 			anchor: () => anchorOf(world, state, width, place.height()),
@@ -363,6 +393,7 @@ export default function (pi: ExtensionAPI) {
 				return {
 					render: (width) => view.render(width),
 					handleInput: (data) => view.key(data),
+					handleMouse: (event) => view.mouse?.(event),
 					invalidate() {},
 					dispose() {
 						view.dispose();

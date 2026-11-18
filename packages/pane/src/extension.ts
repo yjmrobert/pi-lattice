@@ -695,7 +695,8 @@ function installPane(tui: Hooked): void {
 		invalidate() {},
 	};
 	// Where the canopy is what Pi opens on, it is the whole screen, and a session's chat opens over it.
-	const tree: Component = { render: (width) => shared.canopy?.view.render(width) ?? [], invalidate() {} };
+	// The mouse is the tree's where the keys are: a click behind an open chat is not a click on the tree.
+	const tree: Component = { render: (width) => shared.canopy?.view.render(width) ?? [], handleMouse: (event) => (shared.at === "tree" ? shared.canopy?.view.mouse?.(event) : undefined), invalidate() {} };
 	const nothing: Component = { render: () => [], invalidate() {} };
 	/** The box the chat is in: opaque, so the tree does not show through where Pi draws nothing, and titled with whose session it is. */
 	const frame: Component = {

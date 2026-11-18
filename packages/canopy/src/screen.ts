@@ -6,7 +6,7 @@
 import type { IssueEvent, Steer } from "@pi-lattice/protocol";
 import type { Animation } from "./animate.ts";
 import { cells, Grid, pad, type Style, tail } from "./grid.ts";
-import { cut, type Finished, finishedIn, type Layout, layout, type Place, rollup, type Shape } from "./layout.ts";
+import { chipWidth, cut, type Finished, finishedIn, type Layout, layout, type Place, rollup, type Shape } from "./layout.ts";
 import { type Item, pathTo, ROOT_ID, walk, type World } from "./model.ts";
 import { blend, ease } from "./morph.ts";
 import { canStart, inOrder, type Order } from "./order.ts";
@@ -330,6 +330,13 @@ function found(world: World, plan: Layout, text: string): Item[] {
 	return [...starts, ...all.filter((item) => !starts.includes(item) && item.name.toLowerCase().includes(wanted))];
 }
 
+/** The window moved over a tree larger than it, as far as the tree goes. A tree that fits stays where it is. */
+function panned(state: CanopyState, plan: Layout, win: { width: number; height: number }, dc: number, dr: number): CanopyState {
+	const col = plan.width <= win.width ? state.camera.col : Math.max(0, Math.min(plan.width - win.width, state.camera.col + dc));
+	const row = plan.height <= win.height ? state.camera.row : Math.max(0, Math.min(plan.height - win.height, state.camera.row + dr));
+	return col === state.camera.col && row === state.camera.row ? state : { ...state, camera: { col, row } };
+}
+
 const ARROWS: Record<string, Arrow> = { up: "up", down: "down", left: "left", right: "right", k: "up", j: "down", h: "left", l: "right" };
 
 /** What a key does. Returns the next state and what the host of the screen must do. */
@@ -354,8 +361,7 @@ function act(world: World, given: CanopyState, key: CanopyKey, width: number, he
 	};
 	const keep = (next: CanopyState, actions: CanopyAction[] = []): { state: CanopyState; actions: CanopyAction[] } => ({ state: next, actions });
 	const win = windowOf(state, width, height);
-	const pan = (dc: number, dr: number): { state: CanopyState; actions: CanopyAction[] } =>
-		keep({ ...state, camera: { col: plan.width <= win.width ? state.camera.col : Math.max(0, Math.min(plan.width - win.width, state.camera.col + dc)), row: plan.height <= win.height ? state.camera.row : Math.max(0, Math.min(plan.height - win.height, state.camera.row + dr)) } });
+	const pan = (dc: number, dr: number): { state: CanopyState; actions: CanopyAction[] } => keep(panned(state, plan, win, dc, dr));
 
 	// While a line is being typed, every key is for it.
 	if (state.typing) {
@@ -730,6 +736,16 @@ export const ALL_KEYS: ReadonlyArray<readonly [section: string, keys: ReadonlyAr
 	]],
 ];
 
+/**
+ * What the mouse does, listed after the keys. It is not among them: there is a key for each of
+ * these, and nothing is done with the mouse only. Pi reports the mouse where it has the whole screen.
+ */
+export const MOUSE: ReadonlyArray<readonly [what: string, does: string]> = [
+	["click", "select what is under it"],
+	["click again", "what ⏎ does: open the session on it; unfold it when it is folded"],
+	["wheel", "move the window over a tree larger than it; sideways with alt"],
+];
+
 /** What a key that leads out of the canopy does, said in full: the foot has room for a word. */
 const LEAVES: Record<string, string> = {
 	chat: "the chat of the session open here, over the tree; from there, back to the tree",
@@ -741,7 +757,7 @@ const LEAVES: Record<string, string> = {
 function helpList(width: number, leave?: ReadonlyArray<readonly [string, string]>): Grid {
 	// What leads out of the canopy depends on where it is shown: those keys come from there, and are said last.
 	const out: ReadonlyArray<readonly [string, string]> = leave ? leave.map(([key, does]) => [key, LEAVES[does] ?? does] as const) : [["esc  q", "back to where the canopy was opened from"]];
-	const all = [...ALL_KEYS, ...(out.length > 0 ? [["Leaving", out] as const] : [])];
+	const all = [...ALL_KEYS, ["The mouse", MOUSE] as const, ...(out.length > 0 ? [["Leaving", out] as const] : [])];
 	const keyWidth = Math.max(...all.flatMap(([, keys]) => keys.map(([key]) => cells(key))));
 	const room = Math.max(16, width - keyWidth - 8);
 	const rows: Array<Array<[number, string, Style]>> = [];
@@ -1022,6 +1038,30 @@ export interface Moving {
 /** The state with its window placed on the tree, as it is drawn. */
 export const placed = (world: World, state: CanopyState, width: number, height: number): CanopyState => (state.framed || width < FLOOR.cols || height < FLOOR.rows ? state : frame(state, planOf(world, state, width, height), width, height, true));
 
+/** The tree as it is laid out for a state, and the state as it is drawn: what is selected is something drawn, where it has been folded away the line it is in, brought into the window. */
+function viewOf(world: World, state: CanopyState, width: number, height: number): { plan: Layout; view: CanopyState } {
+	const plan = planOf(world, state, width, height);
+	const seen = settled(world, plan, state);
+	return { plan, view: seen.framed && seen === state ? state : frame(seen, plan, width, height, !seen.framed) };
+}
+
+/**
+ * What is written under the tree, at the foot of its window: what is asked, or what is said.
+ * What is being said, or a change being looked at, comes before a question: the person is in the middle of it.
+ */
+function bandOf(world: World, view: CanopyState, win: { width: number; height: number }, moving: Pick<Moving, "asking" | "away" | "now"> | undefined, tick: number): Grid | undefined {
+	if (win.height <= 16) return undefined;
+	const speaking = view.typing?.what === "say" || view.viewing || !moving?.asking ? speakingBand(world, view, win.width, moving?.now ?? 0, tick, moving?.away === true) : undefined;
+	return speaking ?? (moving?.asking ? askingBand(moving.asking, win.width, moving.away === true, view.typing?.what === "answer" ? view.typing : undefined) : undefined);
+}
+
+/** The rows of its window the tree has above a band of so many, and how far up it is drawn so that what is selected is not under the band: the rows the band takes are the ones the selection is not in. */
+function treeRows(plan: Layout, view: CanopyState, win: { width: number; height: number }, band: number): { rows: number; up: number } {
+	const rows = win.height - band;
+	const selected = placeOf(plan, view.selected);
+	return { rows, up: selected !== undefined && selected.row - view.camera.row + 2 >= rows ? band : 0 };
+}
+
 function compose(world: World, state: CanopyState, width: number, height: number, tick: number, moving: Moving | undefined, lines: (grid: Grid, col?: number, row?: number, width?: number, height?: number) => string[]): string[] {
 	if (width < FLOOR.cols || height < FLOOR.rows) {
 		const grid = new Grid(width, height);
@@ -1029,10 +1069,7 @@ function compose(world: World, state: CanopyState, width: number, height: number
 		run(grid, 1, 2, [[`This terminal is ${width} by ${height}. esc goes back.`, DIM]]);
 		return lines(grid);
 	}
-	const plan = planOf(world, state, width, height);
-	// What is selected is something drawn: where it has been folded away, the line it is in, brought into the window.
-	const seen = settled(world, plan, state);
-	const view = seen.framed && seen === state ? state : frame(seen, plan, width, height, !seen.framed);
+	const { plan, view } = viewOf(world, state, width, height);
 	const win = windowOf(view, width, height);
 	const side = sideWidth(view, width);
 	// Between two shapes of the tree, the window moves with it: what stays is drawn where it was, sliding to where it will be.
@@ -1042,16 +1079,12 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const tree = paint(world, drawn, { frame: tick, letters: view.letters, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(moving?.away ? { away: true } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
 	const blink = tick === 0 || tick % BEAT < BEAT / 2;
 	for (const edge of morph ? [] : edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
-	// What is asked takes the foot of the tree's window. The rows it takes are the ones the selection is not in.
-	// What is being said, or a change being looked at, comes before a question: the person is in the middle of it.
-	const speaking = win.height > 16 && (view.typing?.what === "say" || view.viewing || !moving?.asking) ? speakingBand(world, view, win.width, moving?.now ?? 0, tick, moving?.away === true) : undefined;
-	const band = speaking ? lines(speaking) : moving?.asking && win.height > 16 ? lines(askingBand(moving.asking, win.width, moving.away === true, view.typing?.what === "answer" ? view.typing : undefined)) : [];
-	const left = win.height - band.length;
-	const selected = placeOf(plan, view.selected);
-	const hidden = selected !== undefined && selected.row - view.camera.row + 2 >= left;
+	const under = bandOf(world, view, win, moving, tick);
+	const band = under ? lines(under) : [];
+	const { rows: left, up } = treeRows(plan, view, win, band.length);
 	// The list of keys has the whole width, the panel's too: it is read, and then the tree is back.
 	const list = view.help !== undefined ? helpList(width, moving?.leave) : undefined;
-	const canvas = list ? lines(list, 0, Math.min(view.help ?? 0, Math.max(0, list.height - win.height)), width, win.height) : [...lines(tree, camera.col, camera.row + (hidden ? band.length : 0), win.width, left), ...band];
+	const canvas = list ? lines(list, 0, Math.min(view.help ?? 0, Math.max(0, list.height - win.height)), width, win.height) : [...lines(tree, camera.col, camera.row + up, win.width, left), ...band];
 	const panel = side > 0 && !list ? lines(view.side === "roster" ? roster(world, view, side, win.height, tick) : inspector(world, view, side, win.height, tick, plan.folded)) : [];
 	return [...lines(header(world, view, width, tick, plan.hidden.size)), ...canvas.map((line, index) => line + (panel[index] ?? "")), ...lines(footer(world, view, width, moving?.leave, moving?.away, moving?.asking, band.length > 0, plan.folded))];
 }
@@ -1069,6 +1102,76 @@ export function anchorOf(world: World, state: CanopyState, width: number, height
 	if (!place) return undefined;
 	const win = windowOf(view, width, height);
 	return { col: Math.max(0, Math.min(win.width - 1, place.col - view.camera.col)), row: HEADER + Math.max(0, Math.min(win.height - 1, place.row - view.camera.row)) };
+}
+
+// --- the mouse -------------------------------------------------------------------
+
+/**
+ * What the mouse did, as the canopy reads it: the left button pressed on a cell, or pressed and let
+ * go there, `count` times running; or the wheel turned by so many lines, down when positive. Cells
+ * are counted from the canopy's top left.
+ */
+export type CanopyMouse = { type: "press" | "click"; x: number; y: number; count?: number } | { type: "wheel"; by: number; sideways?: boolean };
+
+/** What else is on the screen and takes rows from the tree: what the selected session asks, and when it is. */
+export type Shown = Pick<Moving, "asking" | "away" | "now" | "leave">;
+
+/**
+ * The item drawn at a cell of the screen: on its node, its name, or the line under its name, and a
+ * helper on its own line. Nothing anywhere else: not on a branch, the panel, or what is written
+ * above and under the tree.
+ */
+export function itemAt(world: World, state: CanopyState, x: number, y: number, width: number, height: number, shown?: Shown): string | undefined {
+	if (width < FLOOR.cols || height < FLOOR.rows || state.help !== undefined) return undefined;
+	const { plan, view } = viewOf(world, state, width, height);
+	const win = windowOf(view, width, height);
+	const { rows, up } = treeRows(plan, view, win, bandOf(world, view, win, shown, 0)?.height ?? 0);
+	if (x < 0 || x >= win.width || y < HEADER || y >= HEADER + rows) return undefined;
+	const col = view.camera.col + x;
+	const row = view.camera.row + up + y - HEADER;
+	const on = (from: number, wide: number): boolean => col >= from && col < from + wide;
+	const places = [...plan.places.values()].filter((place) => place.item.level >= 0);
+	// A name first: where things are drawn close, the line under one name is not taken for the name beside it.
+	for (const place of places) {
+		if (place.row !== row) continue;
+		const folded = place.leaf && plan.folded.has(place.item.id) ? 1 + rollup(place.item).progress.length : 0;
+		if (on(place.col, 2 + cells(cut(place.item.name, plan.nameMax)) + folded)) return place.item.id;
+	}
+	for (const place of places) {
+		if (place.leaf) continue;
+		if (row === place.row + 1 && on(place.col + 2, chipWidth(place.item))) return place.item.id;
+		const at = row - place.row - 2;
+		const bud = at >= 0 && at < HELPERS_SHOWN ? place.item.buds[at] : undefined;
+		if (bud && on(place.col + 4, 2 + cells(cut(bud.name, 16)))) return bud.id;
+	}
+	return undefined;
+}
+
+/**
+ * What the mouse does, which is little. A click on an item selects it, and a second click there
+ * does what enter does. The wheel moves the window over a tree larger than it, and reads on in the
+ * list of keys. Nothing else is the canopy's, and nothing at all while a line is typed: then
+ * nothing comes back, and the mouse is left to whatever else has a use for it. The window stays
+ * where it is under a click, so the second lands on what the first did. A click never answers what
+ * a session asks: that is a key, named under the question.
+ */
+export function interpretMouse(world: World, given: CanopyState, mouse: CanopyMouse, width: number, height: number, shown?: Shown): { state: CanopyState; actions: CanopyAction[] } | undefined {
+	if (width < FLOOR.cols || height < FLOOR.rows) return undefined;
+	const { plan, view } = viewOf(world, given, width, height);
+	if (mouse.type === "wheel") {
+		const win = windowOf(view, width, height);
+		if (view.help !== undefined) return { state: { ...view, help: Math.max(0, Math.min(Math.max(0, helpList(width, shown?.leave).height - win.height), view.help + mouse.by)) }, actions: [] };
+		return { state: panned(view, plan, win, mouse.sideways ? mouse.by : 0, mouse.sideways ? 0 : mouse.by), actions: [] };
+	}
+	if (view.typing) return undefined;
+	const id = itemAt(world, view, mouse.x, mouse.y, width, height, shown);
+	if (id === undefined) return undefined;
+	// A press is taken so that letting go there is a click: nothing has happened yet.
+	if (mouse.type === "press") return { state: view, actions: [] };
+	if (view.selected === id) return (mouse.count ?? 1) % 2 === 0 ? interpret(world, view, "enter", width, height, undefined, shown?.leave) : { state: view, actions: [] };
+	// Going somewhere by anything but an arrow leaves no way back to retrace, and a change being looked at has been.
+	const { back: _back, viewing: _viewing, ...rest } = view;
+	return { state: { ...rest, selected: id }, actions: [] };
 }
 
 /**

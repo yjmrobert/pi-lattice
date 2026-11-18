@@ -112,6 +112,12 @@ export interface LatticeEvents {
 		view?: {
 			render(width: number): string[];
 			key(data: string): void;
+			/**
+			 * The mouse, as Pi says what it did, in cells from the canopy's top left. What comes back says it
+			 * was the canopy's, and whether there is something new to draw; nothing comes back where it was
+			 * not, and the mouse is left to whatever else is there.
+			 */
+			mouse?(event: { type: string; button: string; x: number; y: number; alt: boolean; ctrl: boolean; shift: boolean; wheelDelta?: number; clickCount?: number }): { handled: true; render?: boolean } | undefined;
 			dispose(): void;
 			/** Where what is selected was last drawn, in cells from the canopy's top left. */
 			anchor?(): { col: number; row: number } | undefined;
