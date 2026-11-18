@@ -82,6 +82,7 @@ Each package depends only on `protocol` and works on its own; `app` is the one p
 ```bash
 npm install
 npm run check          # typecheck and tests
+npm run e2e            # a server and two people's machines as containers, with the network changed under them (needs Docker)
 npm run dev            # open Pi on this checkout, in a scratch repository under .dev/ (-- --faux for the scripted model)
 npm run eval           # the scenarios with a real model: what sessions did, checked against what their roles say (spends tokens)
 npm run docs           # rewrite docs/settings.md from the settings table, and docs/roles-composed.md from the role fragments
@@ -89,7 +90,7 @@ npm run build          # build the package that is published into dist/pi-lattic
 npm run spike:phase0   # re-run the Phase 0 verification against real Pi processes
 ```
 
-Requires Node 22.19 or newer and git. Tests and spikes run real Pi processes against a scripted model: no network, no tokens, and they do not read your Pi configuration. The canopy is also held to being read: its colours to a contrast on dark and light backgrounds, every line to the width of the terminal, a small project to fitting it, and every key to being listed ([ADR 0042](docs/decisions/0042-the-canopy-is-held-to-being-read.md)). The tests of the pane in Pi's terminal interface need `script` (util-linux) for a pseudo-terminal and are skipped where it is missing.
+Requires Node 22.19 or newer and git. Tests and spikes run real Pi processes against a scripted model: no network, no tokens, and they do not read your Pi configuration. `npm run e2e` is apart from them: it builds the package, installs it on three containers and runs the tests between them, and a test that fails leaves what every machine said under `test/e2e/.build/logs/`. The canopy is also held to being read: its colours to a contrast on dark and light backgrounds, every line to the width of the terminal, a small project to fitting it, and every key to being listed ([ADR 0042](docs/decisions/0042-the-canopy-is-held-to-being-read.md)). The tests of the pane in Pi's terminal interface need `script` (util-linux) for a pseudo-terminal and are skipped where it is missing.
 
 ### Releasing
 
@@ -111,7 +112,7 @@ node scripts/release.ts
 ## Not done yet
 
 - **Models of other providers, and larger work.** The mechanics are tested against a scripted model. Whether a model does what the roles, the notes and the tool guidelines say is checked with eleven small scenarios on Claude Haiku 5.5 and Sonnet 5.5, which pass ([ADR 0039](docs/decisions/0039-what-agents-are-told-is-measured.md)). Nothing has been run on another provider's models, or on work the size of a real feature. [The hand test](docs/testing.md) has the steps for the pane.
-- **Two real machines.** Sharing is tested with two isolated hosts on one machine ([manual script](docs/two-machine-handoff.md)).
+- **Two real machines.** Sharing is tested between containers that each have their own filesystem, keys and network addresses, with machines taken off the network and put back ([ADR 0046](docs/decisions/0046-machines-are-tested-as-containers.md)). Two real machines, a real VPN and a firewall are a [manual script](docs/two-machine-handoff.md).
 - **Sharing across arbitrary networks.** The two machines must reach each other directly (LAN, VPN, SSH tunnel). Hole-punching is not built ([ADR 0012](docs/decisions/0012-peer-to-peer-collab.md)).
 - **The side pane relies on Pi internals.** It falls back to a compact list if they change ([ADR 0013](docs/decisions/0013-pane-inside-pi.md)).
 - **Licence.** None has been chosen.

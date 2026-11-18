@@ -1,6 +1,6 @@
 # Manual check: a team across two machines
 
-The automated tests run isolated hosts on one machine. This script checks the same thing across two real machines that can reach each other directly: the same LAN, or the same VPN.
+The automated tests run isolated hosts on one machine, and a server and two machines as containers with the network changed under them (`npm run e2e`, [ADR 0046](decisions/0046-machines-are-tested-as-containers.md)). This script checks the same thing across two real machines that can reach each other directly: the same LAN, or the same VPN. The steps below and those of "Things to try on purpose" that are marked *(also automated)* are run between containers on every push; real hardware, a real VPN and a firewall are only here.
 
 Call the people **A** and **B**.
 
@@ -54,8 +54,8 @@ There is no port to choose. If a firewall asks whether to let `node` accept conn
 
 ## Things to try on purpose
 
-- **A server that stays on.** Run `pi-lattice server` on a third machine and have both join that instead. Expected: the same, and A's machine can be off without B losing the team's work.
-- **A wrong address.** A sets `LATTICE_ADVERTISE` to an address where nothing listens and runs `/lattice restart`. Expected on B: A's sessions do not appear in the pane, though the canopy shows them on the server's work; `/lattice team`, "Look for teammates again" names the address and "nothing is listening there".
+- **A server that stays on** *(also automated)*. Run `pi-lattice server` on a third machine and have both join that instead. Expected: the same, and A's machine can be off without B losing the team's work.
+- **A wrong address** *(also automated)*. A sets `LATTICE_ADVERTISE` to an address where nothing listens and runs `/lattice restart`. Expected on B: `/lattice team`, "Look for teammates again" names the address and "nothing is listening there". A's sessions still appear on B while A's machine can reach B's, because A's host connects from its side. With B's address wrong as well, they do not appear in the pane, though the canopy shows them on the server's work.
 - **Another repository.** On both machines, open `pi` in a second project both have. Expected: each sees the other's sessions there too, with nothing more to set up.
 - **A repository only one of you has.** B opens `pi` in a project A does not have, and starts a session. Expected on A: the pane's first line names B; after A's own repositories there is the project's name with "not here"; with the pane focused, B's session is under it. A moves onto it: what it last did shows beside the pane, and changes as B's session works. A moves away, B's session works some more, A moves back: it has caught up.
 - **Take with a clone.** A presses `t` on that session. Expected: A is asked once which folder to clone into, shown the address B's checkout has as `origin`, and after confirming the project is cloned there and B sees A's request. B approves; the session is A's, in the clone. Note whether the clone needed credentials and how that went.
@@ -63,12 +63,12 @@ There is no port to choose. If a firewall asks whether to let `node` accept conn
 - **A third person.** C joins with the same line. Expected: C sees both A's and B's sessions, with nobody doing anything. With the server on A's machine and A's machine off, C cannot join; note what C is told.
 - **Open in a terminal.** A opens a session, B asks for it, A approves from another terminal's pane. Expected: A's pane says it goes when A leaves it, and it does.
 - **Decline and withdraw.** B asks; A presses `x`. B is told, and nothing moved. B asks again, then presses `t` again: the request disappears from A's pane.
-- **Away.** B asks, then stops their host. A approves. Expected: nothing moves until B is back, then it does by itself.
+- **Away** *(also automated)*. B asks, then stops their host. A approves. Expected: nothing moves until B is back, then it does by itself.
 - **Drop the connection mid-release.** After A approves, pull B's cable during the transfer if you can: A's pane should show it is still sending, and it should arrive when B is back.
 - **Changed key.** On B, delete `~/.pi/agent/lattice/identity/<B>.key` and restart the host. A should be told someone connected as B with a different key, and B should not get in until A accepts the new key in `/lattice team`. Note also what the server says to B: it refuses a second key under one name.
-- **Someone without the code.** A third machine that joins the server's address with the code changed should be refused, see nothing and appear nowhere.
+- **Someone without the code** *(also automated)*. A third machine that joins the server's address with the code changed should be refused, see nothing and appear nowhere.
 - **Mail while offline.** With B's host stopped, have A's agent message B's node. It should be delivered when B returns, and then wait for B's approval.
 - **VPN.** Repeat steps 1 to 6 with the machines on different networks joined by a VPN. If the address a machine gives the server is not the one the other should use, set `LATTICE_ADVERTISE` to its VPN address and restart the host (`/lattice restart`).
-- **Reachable server, unreachable machines.** Put the server where both reach it, and the two machines where neither reaches the other. Expected: each sees the other's sessions on the server's work and in the canopy; an offer arrives and can be accepted; the session does not move until the machines can connect.
+- **Reachable server, unreachable machines** *(also automated)*. Put the server where both reach it, and the two machines where neither reaches the other. Expected: each sees the other's sessions on the server's work and in the canopy; an offer arrives and can be accepted; the session does not move until the machines can connect.
 
 Record what you find, especially which addresses each machine gave the server, firewalls, and path differences between the machines.
