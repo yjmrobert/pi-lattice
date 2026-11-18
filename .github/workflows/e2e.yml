@@ -1,0 +1,32 @@
+name: Between machines
+
+# A team's server and two people's machines, as three containers on the runner, each with its
+# own filesystem, keys and network addresses, running Pi with the packed package installed
+# (ADR 0046). The tests take machines off networks and put them back, which nothing on one
+# machine's loopback can do. It runs beside CI and does not hold a release back.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  machines:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Builds the package and the image of a machine, then runs the tests. Scripted model: no tokens.
+      - run: npm run e2e
+      # What every machine said and what each host logged, for a test that failed.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: what-the-machines-said
+          path: test/e2e/.build/logs
+          if-no-files-found: ignore
