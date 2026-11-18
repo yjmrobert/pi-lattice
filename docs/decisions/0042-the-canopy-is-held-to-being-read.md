@@ -18,7 +18,7 @@ Each of these is now something a test holds the canopy to, so the next one is fo
 **Not done**
 
 - A font that draws braille badly is not something a test here can see. Ghostty, kitty and WezTerm draw it themselves.
-- The mouse does nothing.
+- The mouse did nothing when this was written. It selects, opens and moves the window since [0045](0045-the-mouse-does-little.md).
 - A tree wider than the window was still scrolled when this was written, with nothing folded for the person. It folds around their work since [0043](0043-a-large-tree-folds-around-your-work.md).
 
 **Evidence**

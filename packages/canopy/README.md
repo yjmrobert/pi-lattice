@@ -72,6 +72,18 @@ Agents keep the issues; you steer. `space` on an item opens a line at the foot o
 | `?` | every key, in place of the tree; the foot always ends with it |
 | `esc` | back |
 
+## The mouse
+
+It does little, and nothing that a key does not do.
+
+| | Does |
+|---|---|
+| click | select the item under it: on its node, its name, or the line under its name |
+| click again | what `enter` does on it: open its session, or unfold it |
+| wheel | move the window over a tree larger than it; sideways with `alt`. In the list of keys, read on |
+
+A click anywhere else is not the canopy's, so text is still selected by dragging as everywhere in Pi. A click never answers what a session asks. Pi reports the mouse where it has the whole screen (`tuiMode` `fullscreen`, its default); in `regular` the canopy is keys only ([ADR 0045](../../docs/decisions/0045-the-mouse-does-little.md)).
+
 ## What is in it
 
 | File | What |
