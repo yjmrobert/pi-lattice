@@ -268,7 +268,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private polling = false;
 	private summary = "";
 	private directoryStamp = "";
-	private readonly waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; peer: string }>();
+	private readonly waiting = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; peer: string; relayed: boolean }>();
 	private readonly timers = new Map<string, NodeJS.Timeout>();
 	private requestId = 0;
 	private bound: string | undefined;
@@ -689,9 +689,15 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		}
 	}
 
+	/**
+	 * A connection is gone: what was asked over it will not be answered. What went by the relay
+	 * was never on it, and is answered or not by itself. Two hosts that dial each other at once
+	 * drop one of the two connections, and a request on its way through the server at that moment
+	 * was failed here while the other side took it.
+	 */
 	private failWaiting(peer: string): void {
 		for (const [id, entry] of this.waiting) {
-			if (entry.peer !== peer) continue;
+			if (entry.peer !== peer || entry.relayed) continue;
 			clearTimeout(entry.timer);
 			this.waiting.delete(id);
 			entry.reject(new Error(`${personOf(peer)} went offline.`));
@@ -726,7 +732,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 				reject(new Error(`${personOf(peer)} did not answer in time.`));
 			}, this.options.requestTimeoutMs ?? 60_000);
 			timer.unref();
-			this.waiting.set(id, { resolve: resolvePromise as (value: unknown) => void, reject, timer, peer });
+			this.waiting.set(id, { resolve: resolvePromise as (value: unknown) => void, reject, timer, peer, relayed: relay !== undefined });
 			entry.send({ t: "req", id, op, p: params } satisfies Frame);
 		});
 	}

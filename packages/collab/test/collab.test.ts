@@ -387,7 +387,51 @@ describe("handoff", () => {
 	});
 });
 
+/** What carries frames between hosts in place of their connection, as the team's server does. It can be made to hold them. */
+const carrier = () => {
+	const handlers = new Map<string, (from: string, frame: unknown) => void>();
+	let held: Array<() => void> | undefined;
+	return {
+		of: (name: string): Relay => ({
+			send: async (to, frame) => {
+				const deliver = (): void => handlers.get(to)?.(name, frame);
+				if (held) held.push(deliver);
+				else deliver();
+			},
+			listen: (handler) => void handlers.set(name, handler),
+			online: (other) => handlers.has(other),
+		}),
+		hold: (): void => void (held = []),
+		release: (): void => {
+			const waiting = held ?? [];
+			held = undefined;
+			for (const deliver of waiting) deliver();
+		},
+	};
+};
+
 describe("asking for a session", () => {
+	it("is not lost when the connection to its owner goes while the request is on its way through the server", async () => {
+		const server = carrier();
+		const yan = seat("yan", undefined, undefined, TEAM, server.of("yan"));
+		const kid = yan.host.add("impl", yan.host.add("checkout").id);
+		await yan.collab.start();
+		const sam = seat("sam", whereIs(yan.collab), undefined, TEAM, server.of("sam"));
+		await sam.collab.start();
+		await until(() => sam.host.node(kid.id), "sam to see yan's nodes");
+
+		// Both hosts dialled each other at once and one of the two connections is dropped, or the network
+		// blinked: either way the connection goes, and the request never was on it.
+		server.hold();
+		const asking = sam.collab.ask(kid.id);
+		(sam.collab as unknown as { channels: Map<string, { channel: { close(): void } }> }).channels.get("yan")?.channel.close();
+		server.release();
+		await asking;
+		// Both know of it. Before, yan's host had the request and sam's had been told yan went offline.
+		expect(sam.collab.requests()).toMatchObject([{ nodeId: kid.id, from: "sam", to: "yan", role: "asker" }]);
+		expect(yan.collab.requests()).toMatchObject([{ nodeId: kid.id, from: "sam", to: "yan", role: "owner" }]);
+	});
+
 	it("moves it as soon as its owner approves, with nothing more for the asker to do", async () => {
 		const { yan, sam, kid } = await pair();
 		await sam.collab.ask(kid.id);
