@@ -1,0 +1,45 @@
+# A team as it is in the world, small: a server that stays on, and two people's machines.
+# Three containers of one image, so nothing is shared but what is said here: the networks
+# they reach each other over, and the place their repository is cloned from.
+#
+# `mesh` is the network everyone is on. Each machine is also on a link of its own to the server,
+# as a laptop is on the office network and a VPN at once: it has two addresses, and tells the
+# server both. The tests take a machine off a network to make the shapes the manual check asks
+# for: off `mesh`, the machines reach the server and not each other; off both, a machine is away.
+
+x-machine: &machine
+  image: pi-lattice-e2e
+  init: true
+  volumes:
+    # Test support only: the scripted model, and the probe that asks a host what it knows.
+    - ../..:/repo:ro
+    - origin:/srv/git
+  environment:
+    # Every session a host starts runs the scripted model.
+    LATTICE_PI_ARGS: '["-e","/repo/test/support/faux-provider.ts","--provider","lattice-faux","--model","scripted","--no-skills","--no-context-files"]'
+    LATTICE_FAUX_SCRIPT: /repo/test/support/director.mjs
+
+services:
+  server:
+    <<: *machine
+    hostname: server
+    command: ["pi-lattice", "server"]
+    networks: [mesh, yan-link, sam-link]
+
+  yan:
+    <<: *machine
+    hostname: yan
+    networks: [mesh, yan-link]
+
+  sam:
+    <<: *machine
+    hostname: sam
+    networks: [mesh, sam-link]
+
+volumes:
+  origin:
+
+networks:
+  mesh:
+  yan-link:
+  sam-link:

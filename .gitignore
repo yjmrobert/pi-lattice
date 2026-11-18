@@ -6,3 +6,4 @@ spikes/**/out/
 coverage/
 .dev/
 brag-output/
+test/e2e/.build/

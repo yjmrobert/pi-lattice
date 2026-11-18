@@ -22,6 +22,7 @@
     "spike:phase0": "node spikes/phase0/run.mjs",
     "spike:canopy": "vitest --run --dir spikes/canopy --config spikes/canopy/vitest.config.ts",
     "check": "npm run typecheck && npm test",
+    "e2e": "vitest --run --config test/e2e/vitest.config.ts",
     "lattice": "node packages/app/src/cli.ts",
     "dev": "node scripts/dev.mjs",
     "docs": "node scripts/settings-doc.ts && node scripts/roles-doc.ts",
