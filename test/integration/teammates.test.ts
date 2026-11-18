@@ -104,7 +104,10 @@ describe("teammates, through the pane", () => {
 		};
 		/** Start a command that will ask something. It finishes once its prompts are answered, which the test does next. */
 		const start = (text: string): void => void terminal.command(text).catch(() => {});
-		const told = (saying: string) => terminal.waitFor(() => terminal.notifications().find((text) => text.includes(saying)), `to be told "${saying}"`, 40_000);
+		// When it was not told, what it was told instead is what says why.
+		const told = (saying: string) => terminal.waitFor(() => terminal.notifications().find((text) => text.includes(saying)), `to be told "${saying}"`, 40_000).catch((error: Error) => {
+			throw new Error(`${error.message}\nIt was told:\n${terminal.notifications().map((text) => `  ${text}`).join("\n")}`);
+		});
 		const stateOf = async (dir: string): Promise<UiState> => {
 			const client = await eventually(() => connectHost(dir), `the host of ${dir}`, 20_000);
 			clients.push(client);
@@ -149,7 +152,12 @@ describe("teammates, through the pane", () => {
 		expect(String(confirm.message)).toContain(apiOrigin);
 		const cloned = join(clones, "work"); // what sam calls the repository
 		hostDirs.push(join(cloned, ".lattice"));
-		await told("Asked sam");
+		await told("Asked sam").catch(async (error: Error) => {
+			// The clone's host has to find sam's before the session can be asked for: say what it knew and what it logged.
+			const knew = await connectHost(join(cloned, ".lattice")).then(async (client) => (client ? (clients.push(client), (await client.ui("state", {})).sharing) : "no host")).catch((failed: Error) => failed.message);
+			const logged = ["daemon.log", "daemon.err"].map((name) => { try { return readFileSync(join(cloned, ".lattice", name), "utf8"); } catch { return ""; } }).join("\n");
+			throw new Error(`${error.message}\nThe clone's host knew:\n${JSON.stringify(knew, null, 1)}\nand logged:\n${logged}\nSam's host knew:\n${JSON.stringify(sam.uiState().sharing, null, 1)}`);
+		});
 		expect(readFileSync(join(cloned, "README.md"), "utf8")).toBe("api\n");
 		expect(JSON.parse(readFileSync(join(yanBox.home, "config.json"), "utf8"))).toMatchObject({ network: { cloneDir: clones } });
 
