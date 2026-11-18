@@ -92,6 +92,8 @@ export interface CollabOptions {
 	relay?: Relay;
 	/** How often to retry unreachable peers, in milliseconds. 0 disables the timer. */
 	redialMs?: number;
+	/** How long a connected teammate may be silent before the connection is taken to be gone, in milliseconds. Default 15 seconds. */
+	silenceMs?: number;
 	/** How long an offer stays open, in milliseconds. */
 	offerTtlMs?: number;
 	requestTimeoutMs?: number;
@@ -131,7 +133,7 @@ export interface ElsewhereTree extends DirectoryTree {
 }
 
 /** What a member working on something else may ask of a host: what is running, and to read it. */
-const GUEST_OPS = new Set(["directory", "messages", "follow"]);
+const GUEST_OPS = new Set(["directory", "messages", "follow", "ping"]);
 
 /** Someone asking to take a session over. `owner`: they ask this person. `asker`: this person asked. */
 export interface RequestView {
@@ -258,6 +260,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private readonly guests = new Map<string, { channel: SecureChannel; initiator: string }>();
 	private readonly guestAddresses = new Map<string, string>(); // name -> `host:port` of one of their other hosts
 	private readonly reached = new Map<string, string>(); // link -> the machine it goes to
+	private readonly lastHeard = new Map<string, number>(); // link -> when anything last came over it
 	private readonly directory = new Map<string, DirectoryTree[]>(); // person -> what they have running, as last told
 	private readonly following = new Map<string, { messages: unknown[]; link: string; asked: number; used: number }>();
 	private readonly followers = new Map<string, Map<string, { until: number; sent: number }>>();
@@ -310,6 +313,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		const redialMs = this.options.redialMs ?? 5000;
 		if (redialMs > 0) {
 			this.redial = setInterval(() => {
+				this.checkLinks();
 				this.tellDirectory();
 				this.reach();
 				void this.settle();
@@ -620,10 +624,12 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			}
 			this.guests.set(id, { channel, initiator });
 			if (from !== undefined) this.reached.set(id, from);
+			this.listenTo(id, channel);
 			channel.on("message", (value) => this.onFrame(id, channel, value as Frame));
 			channel.on("close", () => {
 				if (this.guests.get(id)?.channel !== channel) return;
 				this.guests.delete(id);
+				this.lastHeard.delete(id);
 				this.failWaiting(id);
 				this.emit("changed");
 			});
@@ -644,15 +650,43 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			this.failWaiting(peer);
 		}
 		this.channels.set(peer, { channel, initiator });
+		this.listenTo(peer, channel);
 		channel.on("message", (value) => this.onFrame(peer, channel, value as Frame));
 		channel.on("close", () => {
 			if (this.channels.get(peer)?.channel !== channel) return;
 			this.channels.delete(peer);
+			this.lastHeard.delete(peer);
 			this.failWaiting(peer);
 			this.emit("changed");
 		});
 		this.emit("changed");
 		void this.greet(peer);
+	}
+
+	/** Note when anything comes over a connection, a part of something large included: that is what says they are there. */
+	private listenTo(link: string, channel: SecureChannel): void {
+		this.lastHeard.set(link, this.now());
+		channel.on("heard", () => {
+			if ((this.channels.get(link) ?? this.guests.get(link))?.channel === channel) this.lastHeard.set(link, this.now());
+		});
+	}
+
+	/**
+	 * Ask every connection that has gone quiet whether anyone is there, and close those that have
+	 * said nothing for too long. A machine that leaves the network (a closed laptop, a pulled cable)
+	 * closes nothing: without this its person would be online here until something was sent to them.
+	 * Called on the timer that retries people who are away.
+	 */
+	checkLinks(): void {
+		if (this.stopped) return;
+		const quietMs = this.options.redialMs || 5000;
+		const goneMs = this.options.silenceMs ?? 15_000;
+		for (const [link, { channel }] of [...this.channels, ...this.guests]) {
+			const silent = this.now() - (this.lastHeard.get(link) ?? this.now());
+			if (silent >= goneMs) channel.close();
+			// Any answer will do: a host too old to know the question answers that it does not.
+			else if (silent >= quietMs) channel.send({ t: "req", id: ++this.requestId, op: "ping", p: {} } satisfies Frame);
+		}
 	}
 
 	private failWaiting(peer: string): void {
@@ -742,6 +776,8 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		const peer = personOf(link);
 		if (link !== peer && !GUEST_OPS.has(op)) throw new Error("That needs both of you to be working in the same repository.");
 		switch (op) {
+			case "ping":
+				return {};
 			case "directory":
 				return { trees: this.ownTrees() };
 			case "follow":

@@ -72,6 +72,8 @@ export class HandshakeError extends Error {
 
 export interface ChannelEvents {
 	message: [value: unknown];
+	/** Something arrived from the other end, whole or not: they are there. */
+	heard: [];
 	close: [];
 }
 
@@ -102,6 +104,7 @@ export class SecureChannel extends EventEmitter<ChannelEvents> {
 		this.receiveCounter = receiveCounter;
 		stream.on("data", (chunk: Buffer) => {
 			this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
+			this.emit("heard");
 			this.drain();
 		});
 		stream.on("close", () => this.finish());

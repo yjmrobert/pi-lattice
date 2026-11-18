@@ -257,6 +257,26 @@ describe("a team", () => {
 		await until(() => yan.collab.isOnline("sam"), "yan to see sam's new machine");
 		expect(yan.collab.people().find((p) => p.name === "sam")).toMatchObject({ trust: "trusted", online: true });
 	});
+
+	it("takes a teammate whose machine has said nothing for a while to be away, and one who answers to be there", async () => {
+		const { yan, sam } = await pair();
+		const heard = (yan.collab as unknown as { lastHeard: Map<string, number> }).lastHeard;
+		// Quiet, but not for long: yan's host asks whether sam's is there, and it answers.
+		clock += 14_000;
+		yan.collab.checkLinks();
+		await until(() => heard.get("sam") === clock, "sam's host to answer");
+		clock += 14_000;
+		yan.collab.checkLinks();
+		expect(yan.collab.isOnline("sam")).toBe(true);
+		await until(() => heard.get("sam") === clock, "sam's host to answer again");
+		// A machine that left the network closes nothing and answers nothing. After long enough, sam is away.
+		clock += 15_000;
+		yan.collab.checkLinks();
+		expect(yan.collab.isOnline("sam")).toBe(false);
+		expect(yan.collab.people().find((p) => p.name === "sam")).toMatchObject({ online: false });
+		// Sam's host, which heard yan's close, is not left thinking yan is there either.
+		await until(() => !sam.collab.isOnline("yan"), "sam to see the connection is gone");
+	});
 });
 
 describe("handoff", () => {
