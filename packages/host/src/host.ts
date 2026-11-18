@@ -1734,8 +1734,9 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			const { messages } = await runtime.proc.request<{ messages: RpcRecord[] }>({ type: "get_messages" });
 			return messages;
 		}
-		const file = this.must(id).sessionFile;
-		if (!file || !existsSync(file)) return [];
+		// A session taken over from a teammate has not run here yet: what came with it is read until it has.
+		const file = [this.must(id).sessionFile, this.adoptPath(id)].find((path) => path && existsSync(path));
+		if (!file) return [];
 		const { buildSessionContext, parseSessionEntries } = await piLibrary();
 		const entries = parseSessionEntries(readFileSync(file, "utf8")).filter((entry) => entry.type !== "session");
 		return buildSessionContext(entries as never).messages as RpcRecord[];

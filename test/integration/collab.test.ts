@@ -127,6 +127,8 @@ describe("two people sharing a tree, machine to machine", () => {
 		expect(adopted?.cwd.startsWith(sam.sandbox.work)).toBe(true);
 		expect(readFileSync(join(adopted?.cwd ?? "", "work.txt"), "utf8")).toBe("yan's work in progress\n");
 		await eventually(() => yan.collab.pendingTransfers().length === 0, "sam's receipt to reach yan");
+		// It can be read on sam's machine at once, before it has run there.
+		expect(JSON.stringify(await sam.host.readMessages(kid.id))).toContain("heliotrope");
 
 		await sam.host.prompt(kid.id, "what do you remember?");
 		await eventually(async () => (await assistantTexts(sam.host, kid.id)).includes("what do you remember?"), "the adopted session to answer");
