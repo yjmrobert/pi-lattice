@@ -192,7 +192,8 @@ class Sharing implements SharingPort {
 		collab.on("log", (level, message) => this.host.emit("log", level, message));
 		await collab.start();
 		this.collab = collab;
-		work.setPeering({ scope, addresses: collab.listening(), key: identity.publicKey, heard: (from, body) => this.heard(from, body) });
+		// Where this host is, is read each time it is said: the machine may be on another network by then.
+		work.setPeering({ scope, addresses: () => collab.listening(), key: identity.publicKey, heard: (from, body) => this.heard(from, body) });
 		this.introduce();
 	}
 

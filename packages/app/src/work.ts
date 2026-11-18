@@ -76,6 +76,12 @@ async function reachAgain(home: string, before: Account, address: string): Promi
 	return account;
 }
 
+/**
+ * How a host can be connected to. Where it is, is asked each time it is said: a laptop that
+ * moves to another network, or joins a VPN, has other addresses than when its host started.
+ */
+export type HostPeering = Omit<Peering, "addresses"> & { addresses: () => string[]; heard: (from: string, body: unknown) => void };
+
 export interface WorkOptions {
 	home: string;
 	/** Tells this host apart from the same person's hosts for other repositories. */
@@ -102,7 +108,9 @@ export class Work implements WorkPort {
 	private readonly spawnBoard: (args: string[]) => void;
 	private reviving = 0;
 	private refused = "";
-	private peering: (Peering & { heard: (from: string, body: unknown) => void }) | undefined;
+	private peering: HostPeering | undefined;
+	/** The addresses last said to the server, to say them again as soon as they are others. */
+	private said = "";
 	private teams = new Map<string, { name: string; secret: string }>();
 
 	constructor(options: WorkOptions) {
@@ -128,7 +136,11 @@ export class Work implements WorkPort {
 		} catch {
 			stamp = "";
 		}
-		if (stamp === this.stamp) return this.revive();
+		if (stamp === this.stamp) {
+			// The machine has other addresses than the server was told: say so now, not at the next beat.
+			if (this.peering && this.client && this.peering.addresses().join() !== this.said) this.send();
+			return this.revive();
+		}
 		this.stamp = stamp;
 		this.client?.stop();
 		this.client = undefined;
@@ -198,7 +210,7 @@ export class Work implements WorkPort {
 	 * Say that this host can be connected to, where, and with which key; and take what teammates
 	 * hand the server for it. Undefined takes that back. One at a time: a host works on one thing.
 	 */
-	setPeering(peering: (Peering & { heard: (from: string, body: unknown) => void }) | undefined): void {
+	setPeering(peering: HostPeering | undefined): void {
 		const listen = peering && !this.peering && this.client;
 		this.peering = peering;
 		// The client's listening ends with the client, which is replaced when the server joined changes.
@@ -266,7 +278,8 @@ export class Work implements WorkPort {
 
 	private send(): void {
 		// Not reaching the server is shown by the copy going stale; saying it again here would only repeat it.
-		const peering = this.peering ? { scope: this.peering.scope, addresses: this.peering.addresses, key: this.peering.key } : undefined;
+		const peering = this.peering ? { scope: this.peering.scope, addresses: this.peering.addresses(), key: this.peering.key } : undefined;
+		this.said = peering?.addresses.join() ?? "";
 		void this.client?.publish(this.options.hostId, this.options.repo, this.sessions, peering).catch((error: unknown) => {
 			// A key the server refuses is the one thing here a person must act on.
 			const problem = error instanceof Error ? error.message : String(error);
