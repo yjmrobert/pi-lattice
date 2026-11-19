@@ -61,12 +61,12 @@ jobs:
     name: mutants (${{ matrix.piece.name }})
     needs: pieces
     runs-on: ubuntu-latest
-    # The largest piece takes under an hour from nothing. A push after it tries only what changed.
+    # The largest piece takes 51 minutes from nothing. A push after it tries only what changed.
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        # All of them together are a day or more of one core.
+        # All of them together are some fourteen hours of one core.
         piece: ${{ fromJSON(needs.pieces.outputs.pieces) }}
     steps:
       - uses: actions/checkout@v4
@@ -129,5 +129,6 @@ jobs:
         with:
           pattern: mutants-*
           path: reports
-      # The table by package, on the page of the run.
-      - run: node scripts/mutants.ts reports
+      # The table by package, on the page of the run. It fails when, of the mutants the tests reach,
+      # under this share was noticed: 72.3% when the floor was set. It is there to be raised.
+      - run: node scripts/mutants.ts reports --floor 70
