@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { piLibrary, piPackageOf } from "../src/pi-library.ts";
 
-const piPackage = fileURLToPath(new URL("../../../node_modules/@earendil-works/pi-coding-agent", import.meta.url));
+// Where it really is: `node_modules` may be a link, as it is in the copy that mutants are made in.
+const piPackage = realpathSync(fileURLToPath(new URL("../../../node_modules/@earendil-works/pi-coding-agent", import.meta.url)));
 
 describe("Pi's library, for a host that has no copy of its own", () => {
 	it("finds Pi's package from any file inside it, and nothing from a file outside", () => {
