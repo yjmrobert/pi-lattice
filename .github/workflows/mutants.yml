@@ -40,14 +40,11 @@ jobs:
       BY_FILE: canopy
     steps:
       - uses: actions/checkout@v4
-      # A piece is a package that has tests of its own, or one file of a package named above.
-      # Stryker stops where no test reaches the code at all, and the summary names a package
-      # that was left out.
+      # A piece is a package, or one file of a package named above.
       - name: List the pieces
         id: list
         run: |
-          for dir in packages/*/test; do
-            package=$(basename "$(dirname "$dir")")
+          for package in $(ls packages); do
             if [[ " $BY_FILE " == *" $package "* ]]; then
               for file in $(cd "packages/$package/src" && find . -name '*.ts' | sed 's|^\./||' | sort); do
                 name=${file%.ts}
@@ -87,7 +84,20 @@ jobs:
           key: mutants-${{ matrix.piece.name }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: mutants-${{ matrix.piece.name }}-
       # Every package's tests are run on this piece's mutants: a mutant in the contracts may be noticed by a test of the host.
-      - run: npm run mutants -- --mutate "${{ matrix.piece.mutate }}"
+      - name: Put it to mutants
+        run: |
+          set -o pipefail
+          if npm run mutants -- --mutate "$MUTATE" 2>&1 | tee "$RUNNER_TEMP/stryker.log"; then exit 0; fi
+          # Stryker stops where no test of a package reaches the code at all: code that only the tests
+          # that start Pi run. That is something to say, and nothing that failed. The summary names a
+          # package there is no report for.
+          if grep -q "No tests were executed" "$RUNNER_TEMP/stryker.log"; then
+            echo "::notice title=Not reached::No test of a package reaches $MUTATE, so nothing in it was put to mutants."
+            exit 0
+          fi
+          exit 1
+        env:
+          MUTATE: ${{ matrix.piece.mutate }}
       - name: Keep what this run found
         if: always() && hashFiles('reports/mutation/incremental.json') != ''
         uses: actions/cache/save@v4

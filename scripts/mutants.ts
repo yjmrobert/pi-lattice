@@ -80,7 +80,7 @@ export function verdict(rows: Row[], floor: number | undefined): string | undefi
 	return undefined;
 }
 
-/** The packages there is no report for: ones with no tests of their own, or whose job failed. */
+/** The packages there is no report for: ones no test of a package reaches, or whose job failed. */
 export const without = (packages: string[], rows: Row[]): string[] => packages.filter((name) => !rows.some((row) => row.name === name)).sort();
 
 function reportsUnder(dir: string): string[] {
@@ -96,7 +96,7 @@ if (process.argv[1]?.endsWith("mutants.ts")) {
 	const rows = byPackage(reportsUnder(dir).map((file) => JSON.parse(readFileSync(file, "utf8")) as Report));
 	const wrong = verdict(rows, floor);
 	const left = without(existsSync("packages") ? readdirSync("packages") : [], rows);
-	const leftOut = rows.length > 0 && left.length > 0 ? `No report for ${left.join(", ")}. A package with no tests of its own is not put to mutants; any other is a job that failed.` : "";
+	const leftOut = rows.length > 0 && left.length > 0 ? `No report for ${left.join(", ")}. Either no test of a package reaches it, so nothing in it was put to mutants, or its job failed.` : "";
 	const text = [rows.length > 0 ? table(rows) : "", leftOut, wrong ?? ""].filter(Boolean).join("\n\n");
 	console.log(text);
 	if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Mutants\n\n${text}\n\nA mutant is a small change to the code. One that survived is a change no test noticed; each is in the report of its package, among the artifacts of this run.\n`);
