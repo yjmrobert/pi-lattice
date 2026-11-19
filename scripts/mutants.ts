@@ -92,7 +92,7 @@ if (process.argv[1]?.endsWith("mutants.ts")) {
 	const args = process.argv.slice(2);
 	const at = args.indexOf("--floor");
 	const floor = at < 0 ? undefined : Number(args[at + 1]);
-	const dir = args.find((arg, i) => !arg.startsWith("--") && i !== at + 1) ?? "reports";
+	const dir = args.find((arg, i) => !arg.startsWith("--") && (at < 0 || i !== at + 1)) ?? "reports";
 	const rows = byPackage(reportsUnder(dir).map((file) => JSON.parse(readFileSync(file, "utf8")) as Report));
 	const wrong = verdict(rows, floor);
 	const left = without(existsSync("packages") ? readdirSync("packages") : [], rows);

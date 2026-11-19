@@ -29,29 +29,48 @@ permissions:
   contents: read
 
 jobs:
-  packages:
+  pieces:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      names: ${{ steps.list.outputs.names }}
+      pieces: ${{ steps.list.outputs.pieces }}
+    env:
+      # Packages that are too much for one job, and are a job for each file: the canopy's tests
+      # draw whole screens, and a whole run of it on one runner is most of a day.
+      BY_FILE: canopy
     steps:
       - uses: actions/checkout@v4
-      # The ones with tests of their own. Stryker stops where no test reaches the code at all, and
-      # the summary names a package that was left out.
-      - name: List the packages that have tests
+      # A piece is a package that has tests of its own, or one file of a package named above.
+      # Stryker stops where no test reaches the code at all, and the summary names a package
+      # that was left out.
+      - name: List the pieces
         id: list
-        run: echo "names=$(ls -d packages/*/test | cut -d/ -f2 | jq --raw-input --null-input --compact-output '[inputs]')" >> "$GITHUB_OUTPUT"
+        run: |
+          for dir in packages/*/test; do
+            package=$(basename "$(dirname "$dir")")
+            if [[ " $BY_FILE " == *" $package "* ]]; then
+              for file in $(cd "packages/$package/src" && find . -name '*.ts' | sed 's|^\./||' | sort); do
+                name=${file%.ts}
+                echo "$package-${name//\//-} packages/$package/src/$file"
+              done
+            else
+              echo "$package packages/$package/src/**/*.ts"
+            fi
+          done | jq --raw-input --null-input --compact-output '[inputs | split(" ") | { name: .[0], mutate: .[1] }]' > pieces.json
+          cat pieces.json
+          echo "pieces=$(cat pieces.json)" >> "$GITHUB_OUTPUT"
 
   mutants:
-    needs: packages
+    name: mutants (${{ matrix.piece.name }})
+    needs: pieces
     runs-on: ubuntu-latest
-    # A whole run of the largest package, with room. A push after it tries only what changed.
+    # The largest piece takes under an hour from nothing. A push after it tries only what changed.
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        # A job for each package: all of them together are some eleven hours of one core.
-        package: ${{ fromJSON(needs.packages.outputs.names) }}
+        # All of them together are a day or more of one core.
+        piece: ${{ fromJSON(needs.pieces.outputs.pieces) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -59,27 +78,27 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      # What the last run found for this package. The newest is taken: this branch's, else main's.
+      # What the last run found for this piece. The newest is taken: this branch's, else main's.
       - name: Take what the last run found
         if: github.event_name != 'schedule' && !inputs.whole
         uses: actions/cache/restore@v4
         with:
           path: reports/mutation/incremental.json
-          key: mutants-${{ matrix.package }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: mutants-${{ matrix.package }}-
-      # Every package's tests are run on this package's mutants: a mutant in the contracts may be noticed by a test of the host.
-      - run: npm run mutants -- --mutate "packages/${{ matrix.package }}/src/**/*.ts"
+          key: mutants-${{ matrix.piece.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mutants-${{ matrix.piece.name }}-
+      # Every package's tests are run on this piece's mutants: a mutant in the contracts may be noticed by a test of the host.
+      - run: npm run mutants -- --mutate "${{ matrix.piece.mutate }}"
       - name: Keep what this run found
         if: always() && hashFiles('reports/mutation/incremental.json') != ''
         uses: actions/cache/save@v4
         with:
           path: reports/mutation/incremental.json
-          key: mutants-${{ matrix.package }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: mutants-${{ matrix.piece.name }}-${{ github.run_id }}-${{ github.run_attempt }}
       # Every mutant, in the code it was made in, with the tests that reach it: open index.html.
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutants-${{ matrix.package }}
+          name: mutants-${{ matrix.piece.name }}
           path: |
             reports/mutation/index.html
             reports/mutation/mutation.json

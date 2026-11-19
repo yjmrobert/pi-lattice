@@ -59,7 +59,9 @@ const acts = (w: World, state: CanopyState, key: CanopyKey): boolean => {
 };
 
 describe("the keys", () => {
-	it("are all in the list that ? shows: nothing the canopy acts on is left out of it", () => {
+	// Every key on every kind of item: half the time of all the canopy's tests, and nearly all of its code. Run on each
+	// mutant, it alone took the canopy past what a job is given, so mutants are not put to it (ADR 0047).
+	it.skipIf(process.env.LATTICE_TEST_MUTANTS !== undefined)("are all in the list that ? shows: nothing the canopy acts on is left out of it", () => {
 		const names = listed();
 		// Escape and q lead out, and are listed with the keys of wherever the canopy is shown.
 		for (const leaving of ["escape", "q"]) names.add(leaving);
