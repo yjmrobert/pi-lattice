@@ -36,9 +36,11 @@ jobs:
       names: ${{ steps.list.outputs.names }}
     steps:
       - uses: actions/checkout@v4
-      - name: List the packages
+      # The ones with tests of their own. Stryker stops where no test reaches the code at all, and
+      # the summary names a package that was left out.
+      - name: List the packages that have tests
         id: list
-        run: echo "names=$(ls packages | jq --raw-input --null-input --compact-output '[inputs]')" >> "$GITHUB_OUTPUT"
+        run: echo "names=$(ls -d packages/*/test | cut -d/ -f2 | jq --raw-input --null-input --compact-output '[inputs]')" >> "$GITHUB_OUTPUT"
 
   mutants:
     needs: packages

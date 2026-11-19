@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { byPackage, type Report, reachedScore, score, table, total, verdict } from "../scripts/mutants.ts";
+import { byPackage, type Report, reachedScore, score, table, total, verdict, without } from "../scripts/mutants.ts";
 
 const file = (...statuses: string[]) => ({ mutants: statuses.map((status) => ({ status })) });
 
@@ -29,6 +29,10 @@ describe("what the mutants came to", () => {
 
 	it("is a table with a line for each package and one for all", () => {
 		expect(table(byPackage(reports)).split("\n").slice(2)).toEqual(["| graph | 2 | 0 | 0 | 2 | – | 0.0% |", "| protocol | 6 | 4 | 1 | 1 | 80.0% | 66.7% |", "| **all** | 8 | 4 | 1 | 3 | **80.0%** | 50.0% |"]);
+	});
+
+	it("names the packages there is no report for", () => {
+		expect(without(["protocol", "pane", "graph", "a2a"], byPackage(reports))).toEqual(["a2a", "pane"]);
 	});
 
 	it("fails under the floor, and where there was nothing to read", () => {
