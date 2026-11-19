@@ -17,6 +17,8 @@ const screen = (w: World, state: CanopyState, cols = W, rows = H): string => ren
 /** The room beside the panel on a screen this wide. */
 const room = (cols: number, rows: number) => ({ width: cols - 40, height: rows - 3 });
 const drawn = (w: World, state: CanopyState, id: string, cols = W, rows = H): boolean => placeOf(planOf(w, state, cols, rows), id) !== undefined;
+/** A test of how long something takes. Not put to mutants (ADR 0047): the code that switches them on is slow, and a slow answer is not a wrong one. */
+const timed = it.skipIf(process.env.LATTICE_TEST_MUTANTS !== undefined);
 
 describe("a tree too wide for its window", () => {
 	it("is drawn whole while it fits, and folded only as far as it takes to fit", () => {
@@ -292,7 +294,7 @@ describe("a large tree", () => {
 		expect(planOf(w, initial(w), 120, 36).width).toBeLessThanOrEqual(100);
 	});
 
-	it("is drawn in the time of a frame, the work read and laid out anew each time", () => {
+	timed("is drawn in the time of a frame, the work read and laid out anew each time", () => {
 		const source = world(large(8, 5, 6, 8));
 		const state = initial(buildWorld([source], LEVELS));
 		// As the extension does it: the world is built from what the host says, then drawn.
@@ -311,7 +313,7 @@ describe("a large tree", () => {
 		expect(median).toBeLessThan(33);
 	});
 
-	it("takes a key in less time than a person notices", () => {
+	timed("takes a key in less time than a person notices", () => {
 		const w = build(8, 5, 6, 8);
 		let state = interpret(w, initial(w), "right", 180, 44).state;
 		const start = performance.now();

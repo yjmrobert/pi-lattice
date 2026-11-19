@@ -7,3 +7,5 @@ coverage/
 .dev/
 brag-output/
 test/e2e/.build/
+reports/
+.stryker-tmp/
