@@ -83,6 +83,7 @@ Each package depends only on `protocol` and works on its own; `app` is the one p
 npm install
 npm run check          # typecheck and tests
 npm run e2e            # a server and two people's machines as containers, with the network changed under them (needs Docker)
+npm run mutants        # change the code a little at a time and see whether a test notices (-- --mutate <file> for one file; all of it is hours)
 npm run dev            # open Pi on this checkout, in a scratch repository under .dev/ (-- --faux for the scripted model)
 npm run eval           # the scenarios with a real model: what sessions did, checked against what their roles say (spends tokens)
 npm run docs           # rewrite docs/settings.md from the settings table, and docs/roles-composed.md from the role fragments
@@ -90,7 +91,7 @@ npm run build          # build the package that is published into dist/pi-lattic
 npm run spike:phase0   # re-run the Phase 0 verification against real Pi processes
 ```
 
-Requires Node 22.19 or newer and git. Tests and spikes run real Pi processes against a scripted model: no network, no tokens, and they do not read your Pi configuration. `npm run e2e` is apart from them: it builds the package, installs it on three containers and runs the tests between them, and a test that fails leaves what every machine said under `test/e2e/.build/logs/`. The canopy is also held to being read: its colours to a contrast on dark and light backgrounds, every line to the width of the terminal, a small project to fitting it, and every key to being listed ([ADR 0042](docs/decisions/0042-the-canopy-is-held-to-being-read.md)). The tests of the pane in Pi's terminal interface need `script` (util-linux) for a pseudo-terminal and are skipped where it is missing.
+Requires Node 22.19 or newer and git. Tests and spikes run real Pi processes against a scripted model: no network, no tokens, and they do not read your Pi configuration. `npm run e2e` is apart from them: it builds the package, installs it on three containers and runs the tests between them, and a test that fails leaves what every machine said under `test/e2e/.build/logs/`. `npm run mutants` asks whether the tests would notice the code being wrong: it makes small changes to a package's code and runs the packages' own tests on each, and the workflow `Mutants` does it for every package on every push, trying only what changed since the last one ([ADR 0047](docs/decisions/0047-tests-are-put-to-mutants.md)). The canopy is also held to being read: its colours to a contrast on dark and light backgrounds, every line to the width of the terminal, a small project to fitting it, and every key to being listed ([ADR 0042](docs/decisions/0042-the-canopy-is-held-to-being-read.md)). The tests of the pane in Pi's terminal interface need `script` (util-linux) for a pseudo-terminal and are skipped where it is missing.
 
 ### Releasing
 
