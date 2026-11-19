@@ -1,0 +1,102 @@
+name: Mutants
+
+# The tests passing says the code does what they ask. This asks the other thing: would a test
+# notice if the code were wrong? Each package's code is changed a little at a time (a mutant),
+# and the packages' own tests are run on it (ADR 0047). A mutant that every test passes with is
+# something no test holds. It runs beside CI and does not hold a release back.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Once a week everything is tried again from nothing: what is carried from push to push does
+  # not see a change outside the code and its tests, such as a newer dependency.
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      whole:
+        description: Try every mutant again, carrying nothing from the last run
+        type: boolean
+        default: false
+
+# A run takes long the first time, and what it found is only kept at its end. So a run on main
+# is never cancelled: pushes that come while one runs wait, and only the newest of them runs.
+concurrency:
+  group: mutants-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      names: ${{ steps.list.outputs.names }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: List the packages
+        id: list
+        run: echo "names=$(ls packages | jq --raw-input --null-input --compact-output '[inputs]')" >> "$GITHUB_OUTPUT"
+
+  mutants:
+    needs: packages
+    runs-on: ubuntu-latest
+    # A whole run of the largest package, with room. A push after it tries only what changed.
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        # A job for each package: all of them together are some eleven hours of one core.
+        package: ${{ fromJSON(needs.packages.outputs.names) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # What the last run found for this package. The newest is taken: this branch's, else main's.
+      - name: Take what the last run found
+        if: github.event_name != 'schedule' && !inputs.whole
+        uses: actions/cache/restore@v4
+        with:
+          path: reports/mutation/incremental.json
+          key: mutants-${{ matrix.package }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mutants-${{ matrix.package }}-
+      # Every package's tests are run on this package's mutants: a mutant in the contracts may be noticed by a test of the host.
+      - run: npm run mutants -- --mutate "packages/${{ matrix.package }}/src/**/*.ts"
+      - name: Keep what this run found
+        if: always() && hashFiles('reports/mutation/incremental.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: reports/mutation/incremental.json
+          key: mutants-${{ matrix.package }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # Every mutant, in the code it was made in, with the tests that reach it: open index.html.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-${{ matrix.package }}
+          path: |
+            reports/mutation/index.html
+            reports/mutation/mutation.json
+          if-no-files-found: ignore
+
+  report:
+    needs: mutants
+    # Also when a package's job failed: what the others found is still said.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mutants-*
+          path: reports
+      # The table by package, on the page of the run.
+      - run: node scripts/mutants.ts reports
