@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createWorktree } from "../src/index.ts";
+import { createWorktree, repoName } from "../src/index.ts";
 
 let repo: string;
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -19,6 +19,29 @@ beforeEach(() => {
 	git(repo, "commit", "-q", "-m", "init");
 });
 afterEach(() => rmSync(repo, { recursive: true, force: true }));
+
+describe("a repository that is a submodule of another", () => {
+	it("keeps its sessions' worktrees in its own checkout, not inside the outer repository's .git", () => {
+		const outer = realpathSync(mkdtempSync(join(tmpdir(), "pi-lattice-ws-outer-")));
+		try {
+			git(outer, "init", "-q", "-b", "main");
+			git(outer, "config", "user.email", "test@example.com");
+			git(outer, "config", "user.name", "Test");
+			git(outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q", repo, "libs/pay");
+			git(outer, "commit", "-q", "-m", "add the submodule");
+			const inside = join(outer, "libs", "pay");
+			expect(repoName(inside)).toBe("pay");
+			const wt = createWorktree(inside, "nd_0000000000abcdefghjk", "x");
+			expect(wt.cwd).toBe(join(inside, ".lattice", "worktrees", "nd_0000000000abcdefghjk"));
+			expect(existsSync(join(outer, ".git", "modules", "libs", ".lattice"))).toBe(false);
+			// A session in that worktree is in the same repository: its own children go beside it.
+			expect(repoName(wt.cwd)).toBe("pay");
+			expect(createWorktree(wt.cwd, "nd_0000000000zzzzzzzzzz", "y").cwd).toBe(join(inside, ".lattice", "worktrees", "nd_0000000000zzzzzzzzzz"));
+		} finally {
+			rmSync(outer, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("createWorktree", () => {
 	it("creates a worktree on a new branch from the parent's commit", () => {

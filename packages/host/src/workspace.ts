@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { mainCheckout } from "@pi-lattice/protocol";
 
 const git = (cwd: string, ...args: string[]): string =>
 	execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -22,6 +23,17 @@ function excludeLatticeDir(commonDir: string): void {
 	if (current.split("\n").some((line) => line.trim() === ".lattice/")) return;
 	mkdirSync(dirname(path), { recursive: true });
 	appendFileSync(path, `${current.endsWith("\n") || current === "" ? "" : "\n"}.lattice/\n`);
+}
+
+/** The repository's main checkout, where `.lattice` is: see `mainCheckout`. */
+function mainRootOf(cwd: string, commonDir: string): string {
+	return mainCheckout(commonDir, () => {
+		try {
+			return git(cwd, "--git-dir", commonDir, "rev-parse", "--show-toplevel");
+		} catch {
+			return undefined;
+		}
+	});
 }
 
 /** Where a worktree for a child of `parentCwd` would come from. Throws, in words for the agent, when there cannot be one. */
@@ -49,7 +61,7 @@ export function worktreeSource(parentCwd: string): { top: string; commonDir: str
  */
 export function createWorktree(parentCwd: string, nodeId: string, name: string): Worktree {
 	const { top, commonDir } = worktreeSource(parentCwd);
-	const mainRoot = dirname(commonDir);
+	const mainRoot = mainRootOf(parentCwd, commonDir);
 	const path = join(mainRoot, ".lattice", "worktrees", nodeId);
 	const branch = `lattice/${slug(name)}-${nodeId.slice(-6)}`;
 	excludeLatticeDir(commonDir);
@@ -69,7 +81,7 @@ export function createWorktree(parentCwd: string, nodeId: string, name: string):
 export function repoName(cwd: string): string {
 	try {
 		const common = git(cwd, "rev-parse", "--git-common-dir");
-		return basename(dirname(isAbsolute(common) ? common : resolve(cwd, common)));
+		return basename(mainRootOf(cwd, isAbsolute(common) ? common : resolve(cwd, common)));
 	} catch {
 		return basename(resolve(cwd));
 	}

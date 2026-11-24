@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { type Envelope, isId, newHandoffId, type NodeMeta, validateEnvelope } from "@pi-lattice/protocol";
+import { type Envelope, isId, mainCheckout, newHandoffId, type NodeMeta, validateEnvelope } from "@pi-lattice/protocol";
 import { type ChannelOptions, MAX_MESSAGE, openChannel, type SecureChannel } from "./channel.ts";
 import { fingerprint, type Identity, type Signed, verifySigned } from "./identity.ts";
 import { appendEvent, type Folded, foldRecord, type KeyLookup, type NodeEvent, type NodeRecord, parseRecord, type SharedMeta, toSharedMeta } from "./ledger.ts";
@@ -1726,7 +1726,9 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			if (typeof transfer.bundle === "string" && typeof transfer.branch === "string" && (await isBranchName(project, transfer.branch))) {
 				writeFileSync(bundlePath, Buffer.from(transfer.bundle, "base64"));
 				const common = await git(project, "rev-parse", "--git-common-dir");
-				const mainRoot = dirname(isAbsolute(common) ? common : resolve(project, common));
+				const commonDir = isAbsolute(common) ? common : resolve(project, common);
+				const recorded = await git(project, "--git-dir", commonDir, "rev-parse", "--show-toplevel").catch(() => undefined);
+				const mainRoot = mainCheckout(commonDir, () => recorded);
 				const path = join(mainRoot, ".lattice", "worktrees", id);
 				// The sender names the branch. It is fetched to a ref nothing else uses, and given their
 				// name only when that takes nothing of this person's: a branch of that name already here,

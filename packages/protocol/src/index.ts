@@ -1,4 +1,5 @@
 export * from "./assignment.ts";
+export * from "./checkout.ts";
 export * from "./envelope.ts";
 export * from "./events.ts";
 export * from "./ids.ts";
