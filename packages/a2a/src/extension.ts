@@ -24,6 +24,7 @@ import {
 	limitsFromEnv,
 	onEvent,
 	PROTOCOL_VERSION,
+	printable,
 	requiresApproval,
 	sameAssignment,
 	transitionInbound,
@@ -479,7 +480,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 			}
 			if (!ctx.hasUI) return;
 			for (const envelope of pending) {
-				const choice = await ctx.ui.select(`${summarize(envelope, 100)}\n\n${envelope.payload.text}`, ["Approve", "Reject", "Decide later"]);
+				const choice = await ctx.ui.select(`${summarize(envelope, 100)}\n\n${printable(envelope.payload.text, true)}`, ["Approve", "Reject", "Decide later"]);
 				if (choice === "Approve") ctx.ui.notify(decide(envelope.id, "approve"), "info");
 				else if (choice === "Reject") ctx.ui.notify(decide(envelope.id, "reject"), "info");
 				else if (choice === undefined) return;

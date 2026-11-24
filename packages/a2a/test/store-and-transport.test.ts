@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEnvelope, type Envelope, newNodeId } from "@pi-lattice/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { claimNode, FileTransport, formatInbound, MailStore, messageCard, nodeDir, releaseNode, resolveIdentity, TransportError } from "../src/index.ts";
+import { claimNode, FileTransport, formatInbound, MailStore, messageCard, nodeDir, releaseNode, resolveIdentity, summarize, TransportError } from "../src/index.ts";
 import { RateLimiter } from "../src/rate.ts";
 
 let home: string;
@@ -234,6 +234,12 @@ describe("messageCard", () => {
 
 	it("leaves out the pi-lattice prefix and anything that would steer the terminal", () => {
 		const card = messageCard(envelope({ text: "[pi-lattice] Your child stopped.\n\u001b[31mred\u001b[2J" }));
-		expect(card.lines).toEqual(["Your child stopped.", "[31mred[2J"]);
+		expect(card.lines).toEqual(["Your child stopped.", " [31mred [2J"]);
+	});
+
+	it("shows nothing a terminal would act on in who a message is from, or in its summary", () => {
+		const hostile = { ...envelope({ text: "pay\u001b]0;title\u0007 now\u009b2J" }), fromName: "ops\u001b[2J" };
+		for (const shown of [summarize(hostile), messageCard(hostile, true).from, ...messageCard(hostile, true).meta]) expect(shown).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+		expect(summarize(hostile)).toContain("ops [2J");
 	});
 });

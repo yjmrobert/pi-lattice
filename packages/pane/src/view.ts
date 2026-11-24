@@ -2,7 +2,7 @@
  * The pane's content: what is waiting on the person, then the sessions of each repository,
  * one line each. Pure: everything drawn comes from a {@link PaneView}. See ADR 0015.
  */
-import { type DialogInfo, type Envelope, isHeld, isPlanned, type NodeMeta, type NodeStatus, treeLines, type UiState, waitingFor } from "@pi-lattice/protocol";
+import { type DialogInfo, type Envelope, isHeld, isPlanned, type NodeMeta, type NodeStatus, printable, treeLines, type UiState, waitingFor } from "@pi-lattice/protocol";
 
 /** How text is styled. The extension supplies Pi's theme; tests supply plain text. */
 export interface Paint {
@@ -146,7 +146,11 @@ export function wrap(text: string, width: number): string[] {
 /** A run of text with one style. Widths are counted on the plain text. */
 export type Seg = readonly [text: string, style?: ((text: string) => string) | undefined];
 export const widthOf = (segs: readonly Seg[]): number => segs.reduce((sum, [text]) => sum + [...text].length, 0);
-export const draw = (segs: readonly Seg[]): string => segs.map(([text, style]) => (style && text !== "" ? style(text) : text)).join("");
+/**
+ * The row as the terminal takes it. Names, titles and messages come from other people's agents:
+ * a control character in one is drawn as a space, so that nothing in it is acted on.
+ */
+export const draw = (segs: readonly Seg[]): string => segs.map(([text, style]) => (style && text !== "" ? style(printable(text)) : printable(text))).join("");
 /** Left and right parts on one row, the right one against the edge. The caller makes sure they fit. */
 export function spread(left: readonly Seg[], right: readonly Seg[], width: number): Seg[] {
 	return [...left, [" ".repeat(Math.max(1, width - widthOf(left) - widthOf(right)))], ...right];
@@ -457,7 +461,7 @@ export function renderCompact(view: PaneView, limit = 8): string[] {
 		treeLines(repo.state.nodes).map(({ node, prefix }) => {
 			const owner = node.owner === repo.state.owner ? "you" : `@${node.owner}`;
 			const mark = statusMark(node, (repo.state.attention[node.id]?.dialogs ?? 0) > 0, gone(node, repo.state), view.frame ?? 0, PLAIN)[0];
-			return `${node.id === view.current ? "▸" : " "} ${prefix}${mark} ${node.name}  ${owner}${node.repo ? ` · ${node.repo}` : ""}`;
+			return printable(`${node.id === view.current ? "▸" : " "} ${prefix}${mark} ${node.name}  ${owner}${node.repo ? ` · ${node.repo}` : ""}`);
 		}),
 	);
 	return rows.length > limit ? [...rows.slice(0, limit - 1), `  … ${rows.length - limit + 1} more (/lattice)`] : rows;
@@ -511,7 +515,7 @@ export function renderStrip(view: PaneView, width: number, paint: Paint = PLAIN)
 	}
 	row.push(...(here ? others : others.length > 0 ? [[" "] as Seg, ...others.slice(0)] : []));
 	for (const repo of view.asleep ?? []) if (widthOf(row) + [...repo.name].length + 12 < width) row.push([`  ◇ ${repo.name} asleep`, paint.dim]);
-	const lines = [widthOf(row) > width ? fit(row.map(([text]) => text).join(""), width) : draw(row)];
+	const lines = [widthOf(row) > width ? printable(fit(row.map(([text]) => text).join(""), width)) : draw(row)];
 	const inbox = paneInbox(view);
 	const first = inbox[0];
 	const hint: Seg[] = [["alt+l", paint.bold], [inbox.length > 1 ? ` ${inbox.length} waiting ` : " to answer ", paint.dim]];

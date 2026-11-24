@@ -5,6 +5,7 @@
  * two for most of East Asia's and for emoji, none for a mark that sits on the one before.
  * No Pi, no terminal.
  */
+import { printable } from "@pi-lattice/protocol";
 import { COLOR, colorDepth } from "./palette.ts";
 
 /**
@@ -14,8 +15,12 @@ import { COLOR, colorDepth } from "./palette.ts";
 const PLAIN = /^[\x20-\x7e\u00a1-\u02ff\u2010-\u2027\u2030-\u205e\u2190-\u2319\u231c-\u23e8\u2400-\u25fc\u2691\u2713\u2717\u2800-\u28ff\u29d7]*$/;
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-/** Text as the characters a person sees: a letter with the marks on it, or an emoji made of several, is one. */
-export const graphemes = (text: string): string[] => (PLAIN.test(text) ? text.split("") : Array.from(segmenter.segment(text), (part) => part.segment));
+/**
+ * Text as the characters a person sees: a letter with the marks on it, or an emoji made of several, is one.
+ * A control character is a space: much of what is drawn was written by someone else's agent, and a
+ * terminal would act on an escape sequence in a title instead of drawing it.
+ */
+export const graphemes = (text: string): string[] => (PLAIN.test(text) ? text.split("") : Array.from(segmenter.segment(printable(text)), (part) => part.segment));
 
 /** Whether a code point is drawn two cells wide: Hangul, kana, CJK, full-width forms, and the planes emoji and ideographs are on. */
 const wide = (code: number): boolean =>
@@ -40,11 +45,11 @@ export function cellWidth(grapheme: string): 0 | 1 | 2 {
 export const cells = (text: string): number => (PLAIN.test(text) ? text.length : graphemes(text).reduce((sum: number, part) => sum + cellWidth(part), 0));
 
 /** Text with spaces after it up to a width in cells. */
-export const pad = (text: string, width: number): string => text + " ".repeat(Math.max(0, width - cells(text)));
+export const pad = (text: string, width: number): string => (PLAIN.test(text) ? text : printable(text)) + " ".repeat(Math.max(0, width - cells(text)));
 
 /** As much of the start of a text as fits a width in cells. */
 export function fit(text: string, width: number): string {
-	if (cells(text) <= width) return text;
+	if (cells(text) <= width) return PLAIN.test(text) ? text : printable(text);
 	let out = "";
 	let used = 0;
 	for (const part of graphemes(text)) {
@@ -58,7 +63,7 @@ export function fit(text: string, width: number): string {
 
 /** The end of a text: as much of it as fits a width in cells. */
 export function tail(text: string, width: number): string {
-	if (cells(text) <= width) return text;
+	if (cells(text) <= width) return PLAIN.test(text) ? text : printable(text);
 	const parts = graphemes(text);
 	let from = parts.length;
 	let used = 0;

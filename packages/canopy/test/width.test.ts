@@ -31,6 +31,22 @@ describe("the width of what is written", () => {
 		for (const mark of "◆●○◉⧗⚑✓✗▸◂⏎←↑↓→▏╭╮╰╯│─█░▲▼◀▶›·…⠋⣿+") expect([mark, cellWidth(mark)]).toEqual([mark, visibleWidth(mark)]);
 	});
 
+	it("draws a control character as a space: a title from someone else's agent cannot steer the terminal", () => {
+		const title = "fix\u001b]0;pwned\u0007\u001b[2J\r\nlogin\u009b31m";
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this is about
+		const control = /[\u0000-\u001a\u001c-\u001f\u007f-\u009f]|\u001b(?!\[[0-9;]*m)/;
+		expect(cells(title)).toBe(title.length); // a cell each
+		expect(fit(title, 80)).not.toMatch(control);
+		expect(tail(title, 80)).not.toMatch(control);
+		const grid = new Grid(40, 1);
+		grid.text(0, 0, title, { fg: "#ffffff" });
+		expect(grid.plain()[0]).toBe("fix ]0;pwned  [2J  login 31m");
+		// The colour the canopy writes is the only escape sequence in what goes to the terminal.
+		expect(grid.lines().join("\n")).not.toMatch(control);
+		const hostile = buildWorld([world([[title, "epic", "coordinator run", [["a\u001b[2Jb", "task", "worker run"]]]], "yan")], LEVELS);
+		for (const [width, height] of SIZES) for (const line of render(hostile, initial(hostile), width, height, 0)) expect(line).not.toMatch(control);
+	});
+
 	it("counts a letter with its marks, and an emoji made of several, as one character", () => {
 		expect(graphemes("é👨‍👩‍👧🇨🇦")).toHaveLength(3);
 		expect([cells("é"), cells("👨‍👩‍👧"), cells("🇨🇦"), cells("结账")]).toEqual([1, 2, 2, 4]);

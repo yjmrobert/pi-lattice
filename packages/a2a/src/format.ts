@@ -1,4 +1,4 @@
-import type { Envelope } from "@pi-lattice/protocol";
+import { type Envelope, printable } from "@pi-lattice/protocol";
 
 const attr = (value: string): string => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -32,8 +32,9 @@ export function formatInbound(envelope: Envelope): string {
 
 /** One-line summary for lists and notifications. */
 export function summarize(envelope: Envelope, width = 80): string {
-	const who = envelope.fromName ? `${envelope.fromName} (${envelope.from})` : envelope.from;
-	const text = envelope.payload.text.replace(/\s+/g, " ").trim();
+	// What another agent wrote is shown to a person here: nothing in it may be acted on by the terminal.
+	const who = printable(envelope.fromName ? `${envelope.fromName} (${envelope.from})` : envelope.from);
+	const text = printable(envelope.payload.text).replace(/\s+/g, " ").trim();
 	return `${envelope.intent} from ${who}: ${text.length > width ? `${text.slice(0, width - 1)}…` : text}`;
 }
 
@@ -59,8 +60,8 @@ const CARD_LINES = 4;
  */
 export function messageCard(envelope: Envelope, expanded = false): MessageCard {
 	// A note written by pi-lattice says so in its text, for the model. The card's header already says who it concerns.
-	// Control characters are dropped: text from another agent must not be able to move the cursor or recolour the screen.
-	const text = envelope.payload.text.replace(/[\u0000-\u0008\u000b-\u001f\u007f\u009b]/g, "").replace(/^\[pi-lattice\]\s*/, "").trim();
+	// Control characters become spaces: text from another agent must not be able to move the cursor or recolour the screen.
+	const text = printable(envelope.payload.text, true).replace(/^\[pi-lattice\]\s*/, "").trim();
 	const all = text.split("\n").map((line) => line.trimEnd());
 	const lines = expanded ? all : all.slice(0, CARD_LINES);
 	const meta: string[] = [];
@@ -69,5 +70,5 @@ export function messageCard(envelope: Envelope, expanded = false): MessageCard {
 		if (envelope.payload.data !== undefined) meta.push(`data   ${JSON.stringify(envelope.payload.data)}`);
 		meta.push(`${envelope.id} · from ${envelope.from} · owner ${envelope.fromOwner}${envelope.via ? ` · handed on by ${envelope.via}` : ""}`);
 	}
-	return { icon: envelope.causationId ? "↩" : "✉", from: envelope.fromName ?? envelope.from, intent: envelope.intent, lines, hidden: all.length - lines.length, meta };
+	return { icon: envelope.causationId ? "↩" : "✉", from: printable(envelope.fromName ?? envelope.from), intent: printable(envelope.intent), lines, hidden: all.length - lines.length, meta: meta.map((line) => printable(line)) };
 }

@@ -18,6 +18,17 @@ const view = (over: Partial<PaneView> = {}, s: UiState = state()): PaneView => (
 /** Marks what would be styled, so tests can see it. */
 const MARKED: Paint = { ...PLAIN, select: (text) => `[${text}]`, warn: (text) => `!${text}!` };
 
+describe("what a teammate's agent wrote", () => {
+	it("is drawn with nothing in it a terminal would act on", () => {
+		const s = state({ nodes: [node("r", null, { name: "checkout\u001b]0;pwned\u0007" }), node("b", "r", { name: "impl\u001b[2J\r\n", owner: "sam" })] });
+		const paint: Paint = { ...PLAIN, select: (text) => `\u001b[7m${text}\u001b[0m` };
+		const shown = [...renderPane(view({ focused: true, cursor: nodeKey("b") }, s), 34, paint), ...renderCompact(view({}, s)), ...renderStrip(view({}, s), 60), ...renderStrip(view({}, s), 12)];
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this is about
+		for (const line of shown) expect(line).not.toMatch(/[\u0000-\u001a\u001c-\u001f\u007f-\u009f]|\u001b(?!\[[0-9;]*m)/);
+		expect(shown.join("\n")).toContain("impl [2J");
+	});
+});
+
 describe("renderPane", () => {
 	it("lists a repository's sessions one line each: tree, status, name, and the kind on the right", () => {
 		expect(renderPane(view(), 34)).toEqual([
