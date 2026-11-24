@@ -16,10 +16,17 @@ export interface Genesis {
 	at: string;
 }
 
+/**
+ * An ownership event as it is signed: the lease event and the node it is about. Without the
+ * node in what is signed, an event from one node's log would verify in any other's, and an
+ * accept given for one session would hand over another.
+ */
+export type NodeEvent = LeaseEvent & { node: string };
+
 export interface NodeRecord {
 	genesis: Signed<Genesis>;
 	meta: Signed<SharedMeta>;
-	events: Array<Signed<LeaseEvent>>;
+	events: Array<Signed<NodeEvent>>;
 }
 
 /** Returns the public key of a person the reader trusts, or undefined. */
@@ -46,7 +53,9 @@ export function foldRecord(record: NodeRecord, keys: KeyLookup, now: number): Fo
 	const creator = record.genesis.body.owner;
 	const unverified: string[] = [];
 	const creatorKey = keys(creator);
-	if (record.genesis.by !== creator || !creatorKey || !verifySigned(record.genesis, creatorKey)) {
+	const nodeId = record.genesis.body.nodeId;
+	// The record is about one node: the one its creator signed for, which its metadata must name too.
+	if (record.genesis.by !== creator || record.meta.body.id !== nodeId || !creatorKey || !verifySigned(record.genesis, creatorKey)) {
 		if (!creatorKey) unverified.push(creator);
 		return { valid: false, ownership: initialOwnership(creator), applied: 0, unverified, metaTrusted: false };
 	}
@@ -55,7 +64,7 @@ export function foldRecord(record: NodeRecord, keys: KeyLookup, now: number): Fo
 	let applied = 0;
 	for (const signed of record.events) {
 		const signer = signerOf(signed.body);
-		if (!signer || signed.by !== signer) break;
+		if (!signer || signed.by !== signer || signed.body.node !== nodeId) break;
 		const key = keys(signer);
 		if (!key) {
 			unverified.push(signer);
@@ -81,7 +90,8 @@ export type AppendResult = { ok: true; record: NodeRecord; changed: boolean; own
  * Append an ownership event if the state machine accepts it on top of the verified log.
  * Any unverifiable tail is dropped, so a forged event can never be built upon.
  */
-export function appendEvent(record: NodeRecord, signed: Signed<LeaseEvent>, keys: KeyLookup, now: number): AppendResult {
+export function appendEvent(record: NodeRecord, signed: Signed<NodeEvent>, keys: KeyLookup, now: number): AppendResult {
+	if (signed.body.node !== record.genesis.body.nodeId) return { ok: false, error: "That event is about another session." };
 	const folded = foldRecord(record, keys, now);
 	if (!folded.valid) return { ok: false, error: `The creator of this node (${record.genesis.body.owner}) is not someone you trust yet.` };
 	if (folded.unverified.length > 0) return { ok: false, error: `Ownership of this node depends on ${folded.unverified.join(", ")}, whom you do not trust yet.` };

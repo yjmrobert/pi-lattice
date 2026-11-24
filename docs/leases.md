@@ -62,7 +62,7 @@ If the connection drops during the release, the release still stands. The packag
 
 - **Stale writes.** An offer carries the version it was made against. If ownership has moved since, it is refused.
 - **One writer.** Only a node's current owner appends to its ownership log. Everyone else asks the owner, so two hosts never write the same log at once.
-- **Forged ownership.** Ownership is recomputed from a log of signed events. An event not signed by the person it names, or one the state machine would not allow, is ignored along with everything after it.
+- **Forged ownership.** Ownership is recomputed from a log of signed events. An event not signed by the person it names, or one the state machine would not allow, is ignored along with everything after it. Each event is signed together with the session it is about, so the steps of one session's handoff prove nothing about another.
 - **Contradicting histories.** A host accepts a log only if it extends the one it already holds. A log that disagrees is refused and reported.
 - **Strangers.** Only someone who holds the team's secret can connect at all, and they have to prove it on every connection. The server gives the secret to those who joined it.
 - **Words put in someone's mouth.** Asking for a session, withdrawing that and declining go through the server, signed by whoever says them. The server cannot say them for anyone, and cannot play back a request that was withdrawn.

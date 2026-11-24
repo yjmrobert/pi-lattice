@@ -126,7 +126,7 @@ A teammate's nodes are fetched from them while they are online and shown as last
 
 Every node has an owner and a version. Ownership changes in two steps from either side: the owner offers and the other person accepts, or a teammate asks and the owner approves. The owner's host then releases the node by itself; only that release moves ownership and increments the version. Offers and requests expire, either side can take theirs back before the release, and every step is idempotent.
 
-Ownership is a log of signed events replayed through the lease state machine, not a field. Only the current owner appends to a node's log; a peer accepts a log only when its signatures verify and it extends the one already held.
+Ownership is a log of signed events replayed through the lease state machine, not a field. Each event is signed with the id of the node it is about. Only the current owner appends to a node's log; a peer accepts a log only when its signatures verify and it extends the one already held.
 
 Mail from another owner's agents is delivered directly, checked against the ownership logs, and then waits in the recipient's inbox for the human, per message by default.
 

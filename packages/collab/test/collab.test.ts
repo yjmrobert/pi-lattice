@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEnvelope, type Envelope, type NodeMeta, newNodeId } from "@pi-lattice/protocol";
@@ -384,6 +384,57 @@ describe("handoff", () => {
 		// Even if the local view is rolled back to "mine", the signed log disagrees and wins.
 		yan.host.set({ ...(yan.host.node(kid.id) as NodeMeta), owner: "yan", version: 1 });
 		await until(() => yan.host.node(kid.id)?.owner === "sam", "the stale view to be corrected");
+	});
+});
+
+/** A host that says what it likes to a peer: the requests a host makes, with anything in them. */
+const say = (from: Seat, to: string, op: string, params: unknown): Promise<unknown> =>
+	(from.collab as unknown as { request(peer: string, op: string, params: unknown): Promise<unknown> }).request(to, op, params);
+const ledgerOf = (seat: Seat, nodeId: string) => JSON.parse(readFileSync(join(seat.dir, "collab", "ledger", `${nodeId}.json`), "utf8"));
+
+describe("a teammate's host that is not to be believed", () => {
+	it("cannot move a session with the signed steps of another session's handoff", async () => {
+		const { yan, sam, top, kid } = await pair();
+		await handOver(yan, sam, kid.id);
+		// Every step of that handoff is genuine. Put under the root's record, they say the root is sam's.
+		const forged = { ...ledgerOf(yan, top.id), events: ledgerOf(yan, kid.id).events };
+		await say(sam, "yan", "offered", { record: forged });
+		await yan.collab.refresh();
+		expect(yan.host.node(top.id)?.owner).toBe("yan");
+		expect(ledgerOf(yan, top.id).events).toEqual([]);
+	});
+
+	it("cannot hand over a session nobody accepted, with an acceptance given for another", async () => {
+		const { yan, sam, kid } = await pair();
+		await handOver(yan, sam, kid.id);
+		// yan makes another session, and says sam took it: the acceptance is sam's, for the first one.
+		const other = yan.host.add("never offered");
+		await until(() => existsSync(join(yan.dir, "collab", "ledger", `${other.id}.json`)), "the new session to be recorded");
+		const forged = { ...ledgerOf(yan, other.id), events: ledgerOf(yan, kid.id).events };
+		await expect(say(yan, "sam", "transfer", { nodeId: other.id, to: "sam", record: forged, branch: null, session: null, bundle: null })).rejects.toThrow(/does not make you the owner/);
+		expect(sam.host.node(other.id)?.owner).not.toBe("sam");
+	});
+
+	it("cannot write outside the ledger with a transfer whose record names a path", async () => {
+		const { yan, sam, kid } = await pair();
+		await handOver(yan, sam, kid.id);
+		writeFileSync(join(sam.dir, "precious.jsonl"), "not part of any transfer\n");
+		const record = ledgerOf(yan, kid.id);
+		const evil = { ...record, meta: { ...record.meta, body: { ...record.meta.body, id: "../../precious" } } };
+		const transfer = { nodeId: kid.id, to: "sam", record: evil, branch: null, session: Buffer.from("anything").toString("base64"), bundle: null };
+		await expect(say(yan, "sam", "transfer", transfer)).rejects.toThrow(/Malformed transfer/);
+		expect(existsSync(join(sam.dir, "precious.json"))).toBe(false);
+		expect(existsSync(join(sam.dir, "precious.jsonl"))).toBe(true);
+	});
+
+	it("cannot bring a session back with the package of a release from before it went on", async () => {
+		const { yan, sam, kid } = await pair();
+		await handOver(yan, sam, kid.id);
+		const first = ledgerOf(yan, kid.id);
+		await handOver(sam, yan, kid.id);
+		// The session is yan's again. yan's host sends the first release once more.
+		await expect(say(yan, "sam", "transfer", { nodeId: kid.id, to: "sam", record: first, branch: null, session: null, bundle: null })).rejects.toThrow(/older than the ownership history/);
+		expect(sam.host.node(kid.id)?.owner).toBe("yan");
 	});
 });
 

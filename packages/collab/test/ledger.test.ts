@@ -1,10 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LeaseEvent, NodeMeta } from "@pi-lattice/protocol";
+import type { NodeMeta } from "@pi-lattice/protocol";
 import { afterAll, describe, expect, it } from "vitest";
 import { Identity } from "../src/identity.ts";
-import { appendEvent, foldRecord, type KeyLookup, type NodeRecord, parseRecord, toSharedMeta } from "../src/ledger.ts";
+import { appendEvent, foldRecord, type KeyLookup, type NodeEvent, type NodeRecord, parseRecord, toSharedMeta } from "../src/ledger.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pi-lattice-ledger-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -20,11 +20,11 @@ const node: NodeMeta = {
 	status: "idle", sessionId: "s", sessionFile: "/secret/path.jsonl", cwd: "/home/yan/secret", workspace: "shared", branch: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "x",
 };
 const fresh = (): NodeRecord => ({ genesis: yan.sign({ nodeId: node.id, owner: "yan", at: "2026-01-01T00:00:00.000Z" }), meta: yan.sign(toSharedMeta(node)), events: [] });
-const offer: LeaseEvent = { type: "offer", id: "ho_1", by: "yan", to: "sam", expectedVersion: 1, expiresAt: T0 + 1000, now: T0 };
-const accept: LeaseEvent = { type: "accept", id: "ho_1", by: "sam", now: T0 + 1 };
-const confirm: LeaseEvent = { type: "confirm", id: "ho_1", by: "yan", now: T0 + 2 };
+const offer: NodeEvent = { node: node.id, type: "offer", id: "ho_1", by: "yan", to: "sam", expectedVersion: 1, expiresAt: T0 + 1000, now: T0 };
+const accept: NodeEvent = { node: node.id, type: "accept", id: "ho_1", by: "sam", now: T0 + 1 };
+const confirm: NodeEvent = { node: node.id, type: "confirm", id: "ho_1", by: "yan", now: T0 + 2 };
 /** Append, failing the test if refused. */
-const add = (record: NodeRecord, who: Identity, event: LeaseEvent, keys = everyone): NodeRecord => {
+const add = (record: NodeRecord, who: Identity, event: NodeEvent, keys = everyone): NodeRecord => {
 	const result = appendEvent(record, who.sign(event), keys, T0 + 5);
 	if (!result.ok) throw new Error(result.error);
 	return result.record;
@@ -83,9 +83,28 @@ describe("foldRecord", () => {
 	});
 
 	it("ignores a takeover attempt by someone who is not the owner", () => {
-		const steal: LeaseEvent = { type: "offer", id: "ho_x", by: "mallory", to: "mallory", expectedVersion: 1, expiresAt: T0 + 1000, now: T0 };
+		const steal: NodeEvent = { node: node.id, type: "offer", id: "ho_x", by: "mallory", to: "mallory", expectedVersion: 1, expiresAt: T0 + 1000, now: T0 };
 		const forged = { ...fresh(), events: [mallory.sign(steal)] };
 		expect(foldRecord(forged, everyone, T0 + 5)).toMatchObject({ ownership: { owner: "yan", version: 1 }, applied: 0 });
+	});
+
+	it("does not believe events signed for another node, so one session's handoff cannot move another", () => {
+		const other = "nd_0000000000bbbbbbbbbb";
+		const elsewhere = [yan.sign({ ...offer, node: other }), sam.sign({ ...accept, node: other }), yan.sign({ ...confirm, node: other })];
+		// The three events are genuine and were signed by the right people, about a different session.
+		expect(foldRecord({ ...fresh(), events: elsewhere }, everyone, T0 + 5)).toMatchObject({ ownership: { owner: "yan", version: 1 }, applied: 0 });
+		// An offer for this session and an acceptance given for another one do not add up either.
+		const mixed = { ...add(fresh(), yan, offer), events: [yan.sign(offer), sam.sign({ ...accept, node: other })] };
+		expect(foldRecord(mixed, everyone, T0 + 5)).toMatchObject({ ownership: { owner: "yan", handoff: { state: "offered" } }, applied: 1 });
+		// Events from before the node was part of what is signed name no node, and are not believed.
+		const { node: _node, ...unbound } = offer;
+		expect(foldRecord({ ...fresh(), events: [yan.sign(unbound) as never] }, everyone, T0 + 5).applied).toBe(0);
+		expect(appendEvent(fresh(), yan.sign({ ...offer, node: other }), everyone, T0 + 5)).toMatchObject({ ok: false });
+	});
+
+	it("does not believe a record whose metadata names another node than its creator signed for", () => {
+		const record = { ...fresh(), meta: yan.sign({ ...toSharedMeta(node), id: "nd_0000000000bbbbbbbbbb" }) };
+		expect(foldRecord(record, everyone, T0).valid).toBe(false);
 	});
 
 	it("voids an offer that expired without being confirmed", () => {

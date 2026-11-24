@@ -19,10 +19,10 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { type Envelope, isId, type LeaseEvent, newHandoffId, type NodeMeta, validateEnvelope } from "@pi-lattice/protocol";
+import { type Envelope, isId, newHandoffId, type NodeMeta, validateEnvelope } from "@pi-lattice/protocol";
 import { type ChannelOptions, openChannel, type SecureChannel } from "./channel.ts";
 import { fingerprint, type Identity, type Signed, verifySigned } from "./identity.ts";
-import { appendEvent, type Folded, foldRecord, type KeyLookup, type NodeRecord, parseRecord, type SharedMeta, toSharedMeta } from "./ledger.ts";
+import { appendEvent, type Folded, foldRecord, type KeyLookup, type NodeEvent, type NodeRecord, parseRecord, type SharedMeta, toSharedMeta } from "./ledger.ts";
 import { type Network, networkKey } from "./network.ts";
 import type { PeerBook } from "./peers.ts";
 import { type PeerTransport, splitAddress } from "./transport.ts";
@@ -799,7 +799,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 				return this.receiveMail(peer, p.envelope, p.recipient);
 			case "accept":
 			case "cancel": {
-				const answer = await this.exclusive(async () => this.appendFromPeer(peer, p.nodeId, p.event as Signed<LeaseEvent>, op));
+				const answer = await this.exclusive(async () => this.appendFromPeer(peer, p.nodeId, p.event as Signed<NodeEvent>, op));
 				// Offering was the owner's yes. Once the other person says yes too, the session goes.
 				if (op === "accept") this.debounce("settle", () => this.settle(), 0);
 				return answer;
@@ -1315,7 +1315,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	}
 
 	/** Append an event to a log this host owns. */
-	private appendOwn(nodeId: string, event: Signed<LeaseEvent>): NodeRecord {
+	private appendOwn(nodeId: string, event: Signed<NodeEvent>): NodeRecord {
 		const record = this.record(nodeId);
 		if (!record) throw new Error("That session has not been shared yet.");
 		if (this.fold(record).ownership.owner !== this.identity.name) throw new Error("That session is not owned here.");
@@ -1329,7 +1329,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	}
 
 	/** A peer asks the owner (this host) to record their side of a handoff. */
-	private appendFromPeer(peer: string, nodeId: unknown, event: Signed<LeaseEvent>, op: "accept" | "cancel"): { record: NodeRecord } {
+	private appendFromPeer(peer: string, nodeId: unknown, event: Signed<NodeEvent>, op: "accept" | "cancel"): { record: NodeRecord } {
 		if (typeof nodeId !== "string" || event?.by !== peer || event.body?.type !== op) throw new Error("That request does not match who sent it.");
 		return { record: this.appendOwn(nodeId, event) };
 	}
@@ -1348,7 +1348,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			if (node.owner !== this.identity.name) throw new Error(`"${node.name}" is owned by ${node.owner}; only its owner can offer it.`);
 			if (!this.book.get(to)) throw new Error(`Nobody called "${to}" is in ${this.options.network.name}.`);
 			const now = this.now();
-			this.appendOwn(nodeId, this.identity.sign<LeaseEvent>({
+			this.appendOwn(nodeId, this.identity.sign<NodeEvent>({ node: nodeId,
 				type: "offer", id: newHandoffId(now), by: this.identity.name, to, expectedVersion: node.version, expiresAt: now + (this.options.offerTtlMs ?? 24 * 3600_000), now,
 			}));
 			this.debounce("settle", () => this.settle(), 0);
@@ -1368,7 +1368,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			const handoff = this.openHandoff(nodeId);
 			if (handoff.role !== "recipient") throw new Error("Only the person it was offered to can accept.");
 			if (!this.there(handoff.from)) throw new Error(`${handoff.from} is offline. A handoff needs both of you online.`);
-			const event = this.identity.sign<LeaseEvent>({ type: "accept", id: handoff.handoffId, by: this.identity.name, now: this.now() });
+			const event = this.identity.sign<NodeEvent>({ node: nodeId, type: "accept", id: handoff.handoffId, by: this.identity.name, now: this.now() });
 			const { record } = await this.request<{ record: NodeRecord }>(handoff.from, "accept", { nodeId, event });
 			this.consider(record);
 			this.emit("changed");
@@ -1379,7 +1379,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	cancel(nodeId: string): Promise<void> {
 		return this.exclusive(async () => {
 			const handoff = this.openHandoff(nodeId);
-			const event = this.identity.sign<LeaseEvent>({ type: "cancel", id: handoff.handoffId, by: this.identity.name, now: this.now() });
+			const event = this.identity.sign<NodeEvent>({ node: nodeId, type: "cancel", id: handoff.handoffId, by: this.identity.name, now: this.now() });
 			if (handoff.role === "owner") {
 				const record = this.appendOwn(nodeId, event);
 				// Without a connection the recipient would go on seeing an offer that is no longer open.
@@ -1413,7 +1413,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			const session = node.sessionFile && existsSync(node.sessionFile) ? readFileSync(node.sessionFile).toString("base64") : null;
 			const bundle = await this.bundleBranch(node);
 			const mail = (this.host.takeMail?.(nodeId) ?? []).slice(0, CARRIED_MAIL);
-			const record = this.appendOwn(nodeId, this.identity.sign<LeaseEvent>({ type: "confirm", id: handoff.handoffId, by: this.identity.name, now: this.now() }));
+			const record = this.appendOwn(nodeId, this.identity.sign<NodeEvent>({ node: nodeId, type: "confirm", id: handoff.handoffId, by: this.identity.name, now: this.now() }));
 			const transfer: Transfer = { nodeId, to: handoff.to, record, branch: bundle ? node.branch : null, session, bundle, ...(mail.length > 0 ? { mail } : {}) };
 			writeFileSync(join(this.options.dir, "transfers", `${nodeId}.json`), JSON.stringify(transfer));
 			await this.host.releaseNode(nodeId, handoff.to, node.version + 1);
@@ -1637,12 +1637,19 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		const record = parseRecord(JSON.stringify(transfer?.record));
 		if (!record) throw new Error("Malformed transfer.");
 		const id = record.meta.body.id;
+		// The id names files here (the record, the session, the bundle, a worktree): it has to be an id.
+		if (!isId(id)) throw new Error("Malformed transfer.");
 		const folded = this.fold(record);
 		if (!folded.valid || folded.ownership.owner !== me) throw new Error("That transfer does not make you the owner.");
 		const receipt = { receipt: this.identity.sign({ nodeId: id, received: true as const }) };
 		if (this.host.node(id)?.owner === me) return receipt; // sent again after a dropped connection
 		const held = this.record(id);
-		if (held && !sameLog(held, record, Math.min(this.fold(held).applied, folded.applied))) throw new Error("That transfer contradicts the ownership history known here.");
+		if (held) {
+			const heldFold = this.fold(held);
+			if (!sameLog(held, record, Math.min(heldFold.applied, folded.applied))) throw new Error("That transfer contradicts the ownership history known here.");
+			// A release from before the session went on to someone else: an old package sent again.
+			if (folded.applied < heldFold.applied) throw new Error("That transfer is older than the ownership history known here.");
+		}
 		const signers = new Set(record.events.map((event) => event.by));
 		if (!signers.has(peer) && record.genesis.by !== peer) throw new Error("That transfer is not yours to send.");
 
