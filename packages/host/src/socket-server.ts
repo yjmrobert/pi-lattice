@@ -1,7 +1,7 @@
 /** The host's local socket: authenticates lattice extensions and turns frames into calls. */
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { type Channel, type ClientFrame, type Envelope, encodeFrame, FrameDecoder, type HostFrame, type InboundState, type RequestOp } from "@pi-lattice/protocol";
+import { type Channel, type ClientFrame, type Envelope, encodeFrame, FrameDecoder, type HostFrame, INBOUND_STATES, type InboundState, type RequestOp, validateEnvelope } from "@pi-lattice/protocol";
 
 export interface Connection {
 	/** Unique per connection. */
@@ -25,6 +25,16 @@ export interface SocketHandlers {
 }
 
 const HELLO_TIMEOUT_MS = 5000;
+const CHANNELS: readonly string[] = ["a2a", "graph", "collab", "ui"] satisfies Channel[];
+const optionalString = (value: unknown): boolean => value === undefined || typeof value === "string";
+
+/** Whether a first frame is a hello in every part the host goes on to use. */
+function isHello(frame: unknown): frame is Hello {
+	if (frame === null || typeof frame !== "object") return false;
+	const hello = frame as Partial<Record<keyof Hello, unknown>>;
+	return hello.t === "hello" && typeof hello.token === "string" && typeof hello.nodeId === "string" && typeof hello.channel === "string" && CHANNELS.includes(hello.channel) &&
+		optionalString(hello.sessionId) && optionalString(hello.sessionFile);
+}
 
 export class SocketServer {
 	private readonly path: string;
@@ -64,10 +74,9 @@ export class SocketServer {
 				socket.destroy();
 				return;
 			}
-			for (const raw of frames) {
-				const frame = raw as ClientFrame;
+			for (const frame of frames) {
 				if (!connection) {
-					if (frame?.t !== "hello" || typeof frame.token !== "string" || typeof frame.nodeId !== "string" || !this.handlers.authenticate(frame)) {
+					if (!isHello(frame) || !this.handlers.authenticate(frame)) {
 						socket.destroy();
 						return;
 					}
@@ -86,7 +95,18 @@ export class SocketServer {
 					this.handlers.onHello(established, frame);
 					continue;
 				}
-				this.dispatch(connection, frame);
+				// A frame is whatever the other end wrote. One that is not a frame, or that the host
+				// cannot take, ends that connection: it must never end the host and every session with it.
+				let taken = false;
+				try {
+					taken = this.dispatch(connection, frame);
+				} catch {
+					taken = false;
+				}
+				if (!taken) {
+					socket.destroy();
+					return;
+				}
 			}
 		});
 		socket.on("error", () => {});
@@ -97,18 +117,33 @@ export class SocketServer {
 		});
 	}
 
-	private dispatch(connection: Connection, frame: ClientFrame): void {
+	/** Hand a frame to the host. False when it is not one: the shape of each is checked here, once, for everything behind it. */
+	private dispatch(connection: Connection, raw: unknown): boolean {
+		if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+		const frame = raw as { t?: unknown; rid?: unknown; op?: unknown; params?: unknown; envelopeId?: unknown; envelope?: unknown; state?: unknown };
 		if (frame.t === "req") {
-			const rid = frame.rid;
-			this.handlers.onRequest(connection, frame.op, frame.params).then(
-				(result) => connection.send({ t: "res", rid, ok: true, result }),
-				(error: unknown) => connection.send({ t: "res", rid, ok: false, error: error instanceof Error ? error.message : String(error) }),
-			);
+			const { rid, op } = frame;
+			if (typeof rid !== "string" || typeof op !== "string") return false;
+			const refuse = (error: unknown): void => connection.send({ t: "res", rid, ok: false, error: error instanceof Error ? error.message : String(error) });
+			let asked: Promise<unknown>;
+			try {
+				asked = this.handlers.onRequest(connection, op as RequestOp, frame.params);
+			} catch (error) {
+				refuse(error);
+				return true;
+			}
+			asked.then((result) => connection.send({ t: "res", rid, ok: true, result })).catch(refuse);
 		} else if (frame.t === "ack") {
+			if (typeof frame.envelopeId !== "string") return false;
 			this.handlers.onAck(connection, frame.envelopeId);
 		} else if (frame.t === "mail") {
-			this.handlers.onMail(connection, frame.envelope, frame.state);
+			// Its shape is what is checked. How large a message may be was decided when it was taken.
+			const checked = validateEnvelope(frame.envelope, { maxPayloadBytes: Number.POSITIVE_INFINITY, maxHops: Number.POSITIVE_INFINITY });
+			if (!checked.ok || typeof frame.state !== "string" || !(INBOUND_STATES as readonly string[]).includes(frame.state)) return false;
+			this.handlers.onMail(connection, checked.envelope, frame.state as InboundState);
 		}
+		// A kind of frame not known here is from a newer session: it is left alone.
+		return true;
 	}
 
 	async close(): Promise<void> {
