@@ -34,8 +34,6 @@ const MAX_HELLO = 4096;
 export const MAX_MESSAGE = MAX_FRAME - 16;
 /** Before the other side has proved who it is, all it has to send is its proof, which is small. */
 const MAX_PROOF = 4096;
-/** A frame is written in pieces of this size, so that each one taken says the other end is there. */
-const PIECE = 256 * 1024;
 
 interface Hello {
 	v: number;
@@ -82,8 +80,6 @@ export interface ChannelEvents {
 	message: [value: unknown];
 	/** Something arrived from the other end, whole or not: they are there. */
 	heard: [];
-	/** Their machine took a piece of what is being sent: they are there, though they say nothing while it comes. */
-	taken: [];
 	close: [];
 }
 
@@ -175,8 +171,16 @@ export class SecureChannel extends EventEmitter<ChannelEvents> {
 		if (plain.length > this.maxMessage) throw new Error(TOO_LARGE);
 		const frame = sealFrame(plain, this.sendKey, this.sendCounter);
 		this.sendCounter++;
-		const taken = (): void => void (this.closed || this.emit("taken"));
-		for (let at = 0; at < frame.length; at += PIECE) this.stream.write(frame.subarray(at, at + PIECE), taken);
+		this.stream.write(frame);
+	}
+
+	/**
+	 * Whether part of something has arrived and the rest is still coming. Whoever sends something
+	 * large says nothing else until it is all sent, and hears nothing from this end unless this end
+	 * speaks: see `checkLinks`.
+	 */
+	get receiving(): boolean {
+		return !this.closed && this.buffer.length + this.piecesSize > 0;
 	}
 
 	get isClosed(): boolean {

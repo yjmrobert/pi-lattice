@@ -269,8 +269,17 @@ describe("a team", () => {
 		yan.collab.checkLinks();
 		expect(yan.collab.isOnline("sam")).toBe(true);
 		await until(() => heard.get("sam") === clock, "sam's host to answer again");
-		// A machine that left the network closes nothing and answers nothing. After long enough, sam is away.
-		clock += 15_000;
+		// A machine that left the network closes nothing and answers nothing. yan's host goes on asking, and
+		// what it asks is taken by the network as if it had arrived: asking is not hearing. After long enough, sam is away.
+		const samLink = (sam.collab as unknown as { channels: Map<string, { channel: { removeAllListeners(event: string): void } }> }).channels.get("yan");
+		samLink?.channel.removeAllListeners("message"); // sam's host no longer answers anything
+		for (let asked = 0; asked < 2; asked++) {
+			clock += 6000;
+			yan.collab.checkLinks();
+			await new Promise((resolve) => setTimeout(resolve, 30)); // the question is sent
+			expect(yan.collab.isOnline("sam")).toBe(true);
+		}
+		clock += 6000;
 		yan.collab.checkLinks();
 		expect(yan.collab.isOnline("sam")).toBe(false);
 		expect(yan.collab.people().find((p) => p.name === "sam")).toMatchObject({ online: false });

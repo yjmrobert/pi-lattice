@@ -97,18 +97,21 @@ describe("secure channel", () => {
 		close();
 	});
 
-	it("says, while something large is being sent, that the other end is taking it", async () => {
+	it("says while part of something has arrived and the rest is still coming", async () => {
 		const { client, server, close } = await tcpPair();
 		const [a, b] = await Promise.all([
 			openChannel(client, { identity: yan, initiator: true, keyOf: book(sam) }),
 			openChannel(server, { identity: sam, initiator: false, keyOf: book(yan) }),
 		]);
-		let taken = 0;
-		a.on("taken", () => taken++);
+		expect(b.receiving).toBe(false);
+		let during = false;
+		b.on("heard", () => void (during ||= b.receiving));
 		const got = next(b);
 		a.send("x".repeat(2_000_000));
 		expect(((await got) as string).length).toBe(2_000_000);
-		expect(taken).toBeGreaterThan(4); // once for each piece, not once for the lot
+		// It came in many packets: between the first and the last, part of it was here.
+		expect(during).toBe(true);
+		expect(b.receiving).toBe(false);
 		close();
 	});
 

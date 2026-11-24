@@ -669,12 +669,9 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	/** Note when anything comes over a connection, a part of something large included: that is what says they are there. */
 	private listenTo(link: string, channel: SecureChannel): void {
 		this.lastHeard.set(link, this.now());
-		const there = (): void => {
+		channel.on("heard", () => {
 			if ((this.channels.get(link) ?? this.guests.get(link))?.channel === channel) this.lastHeard.set(link, this.now());
-		};
-		channel.on("heard", there);
-		// While something large is on its way to them they say nothing, and their machine taking it is what there is to go by.
-		channel.on("taken", there);
+		});
 	}
 
 	/**
@@ -691,7 +688,9 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			const silent = this.now() - (this.lastHeard.get(link) ?? this.now());
 			if (silent >= goneMs) channel.close();
 			// Any answer will do: a host too old to know the question answers that it does not.
-			else if (silent >= quietMs) channel.send({ t: "req", id: ++this.requestId, op: "ping", p: {} } satisfies Frame);
+			// While something large is arriving from them, they hear nothing from here unless something is said: a session
+			// and its branch can take longer to send than a connection may be silent, and they would take this host for gone.
+			else if (silent >= quietMs || channel.receiving) channel.send({ t: "req", id: ++this.requestId, op: "ping", p: {} } satisfies Frame);
 		}
 	}
 
