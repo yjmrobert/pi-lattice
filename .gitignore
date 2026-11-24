@@ -5,7 +5,7 @@ dist/
 spikes/**/out/
 coverage/
 .dev/
-brag-output/
+brag-output*/
 test/e2e/.build/
 reports/
 .stryker-tmp/
