@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -75,6 +76,53 @@ describe("secure channel", () => {
 		expect(received.slice(0, 50)).toEqual(Array.from({ length: 50 }, (_, i) => i));
 		expect((received[50] as string).length).toBe(3_000_000);
 		expect(received[51]).toBe("end");
+		close();
+	});
+
+	it("refuses to send what is too large for one frame, and goes on working after", async () => {
+		const { client, server, close } = await tcpPair();
+		const [a, b] = await Promise.all([
+			openChannel(client, { identity: yan, initiator: true, keyOf: book(sam), maxMessage: 1000 }),
+			openChannel(server, { identity: sam, initiator: false, keyOf: book(yan) }),
+		]);
+		const received: unknown[] = [];
+		const done = new Promise<void>((resolve) => b.on("message", (m) => { received.push(m); if (received.length === 2) resolve(); }));
+		a.send("before");
+		expect(() => a.send("x".repeat(2000))).toThrow(/too large to send/);
+		// A frame that was not sent must not use up a counter: the next one would not authenticate.
+		a.send("after");
+		await done;
+		expect(received).toEqual(["before", "after"]);
+		expect(b.isClosed).toBe(false);
+		close();
+	});
+
+	it("says, while something large is being sent, that the other end is taking it", async () => {
+		const { client, server, close } = await tcpPair();
+		const [a, b] = await Promise.all([
+			openChannel(client, { identity: yan, initiator: true, keyOf: book(sam) }),
+			openChannel(server, { identity: sam, initiator: false, keyOf: book(yan) }),
+		]);
+		let taken = 0;
+		a.on("taken", () => taken++);
+		const got = next(b);
+		a.send("x".repeat(2_000_000));
+		expect(((await got) as string).length).toBe(2_000_000);
+		expect(taken).toBeGreaterThan(4); // once for each piece, not once for the lot
+		close();
+	});
+
+	it("does not wait for a large frame from someone who has not proved who they are", async () => {
+		const { client, server, close } = await tcpPair();
+		const opening = openChannel(server, { identity: sam, initiator: false, keyOf: book(yan), timeoutMs: 5000 });
+		// Anyone can send a greeting in yan's name. What comes next should be their proof, which is small.
+		const e = generateKeyPairSync("x25519").publicKey.export({ type: "spki", format: "der" }).toString("base64");
+		client.write(`${JSON.stringify({ v: 1, name: "yan", key: yan.publicKey, e, n: "bm9uY2U=" })}\n`);
+		await new Promise((resolve) => client.once("data", resolve));
+		const header = Buffer.alloc(4);
+		header.writeUInt32BE(100 * 1024 * 1024);
+		client.write(header);
+		await expect(opening).rejects.toThrow(/did not verify/);
 		close();
 	});
 

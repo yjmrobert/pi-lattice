@@ -30,6 +30,12 @@ const VERSION = 1;
 const CONTEXT = "pi-lattice-peer-v1";
 const MAX_FRAME = 128 * 1024 * 1024;
 const MAX_HELLO = 4096;
+/** The most one message may be, as the bytes of its JSON: a frame less its authentication tag. */
+export const MAX_MESSAGE = MAX_FRAME - 16;
+/** Before the other side has proved who it is, all it has to send is its proof, which is small. */
+const MAX_PROOF = 4096;
+/** A frame is written in pieces of this size, so that each one taken says the other end is there. */
+const PIECE = 256 * 1024;
 
 interface Hello {
 	v: number;
@@ -64,6 +70,8 @@ export interface ChannelOptions {
 	/** Told when someone uses a known name with a key other than the pinned one. */
 	onChangedKey?(name: string, publicKey: string): void;
 	timeoutMs?: number;
+	/** The most one message sent may be, in bytes of JSON, when less than a frame holds. */
+	maxMessage?: number;
 }
 
 export class HandshakeError extends Error {
@@ -74,6 +82,8 @@ export interface ChannelEvents {
 	message: [value: unknown];
 	/** Something arrived from the other end, whole or not: they are there. */
 	heard: [];
+	/** Their machine took a piece of what is being sent: they are there, though they say nothing while it comes. */
+	taken: [];
 	close: [];
 }
 
@@ -89,11 +99,16 @@ export class SecureChannel extends EventEmitter<ChannelEvents> {
 	private sendCounter = 0n;
 	private receiveCounter = 0n;
 	private buffer: Buffer;
+	/** What has arrived since, kept apart until it completes a frame: joining it on every packet copies a large frame over and over. */
+	private pieces: Buffer[] = [];
+	private piecesSize = 0;
 	private closed = false;
+	private readonly maxMessage: number;
 
 	/** @internal Use {@link openChannel}. */
-	constructor(stream: Duplex, peer: string, sendKey: Buffer, receiveKey: Buffer, leftover: Buffer, sendCounter: bigint, receiveCounter: bigint, scope?: string) {
+	constructor(stream: Duplex, peer: string, sendKey: Buffer, receiveKey: Buffer, leftover: Buffer, sendCounter: bigint, receiveCounter: bigint, scope?: string, maxMessage = MAX_MESSAGE) {
 		super();
+		this.maxMessage = Math.min(maxMessage, MAX_MESSAGE);
 		this.stream = stream;
 		this.peer = peer;
 		this.scope = scope;
@@ -103,7 +118,8 @@ export class SecureChannel extends EventEmitter<ChannelEvents> {
 		this.sendCounter = sendCounter;
 		this.receiveCounter = receiveCounter;
 		stream.on("data", (chunk: Buffer) => {
-			this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
+			this.pieces.push(chunk);
+			this.piecesSize += chunk.length;
 			this.emit("heard");
 			this.drain();
 		});
@@ -116,10 +132,29 @@ export class SecureChannel extends EventEmitter<ChannelEvents> {
 		});
 	}
 
+	/** Whether enough has arrived for the next frame (or for seeing that it is not one), joined into the buffer if so. */
+	private gathered(): boolean {
+		const have = this.buffer.length + this.piecesSize;
+		if (have < 4) return false;
+		if (this.buffer.length < 4) this.join();
+		const length = this.buffer.readUInt32BE(0);
+		if (length >= 16 && length <= MAX_FRAME && have < 4 + length) return false;
+		this.join();
+		return true;
+	}
+
+	private join(): void {
+		if (this.pieces.length === 0) return;
+		this.buffer = Buffer.concat([this.buffer, ...this.pieces]);
+		this.pieces = [];
+		this.piecesSize = 0;
+	}
+
 	private drain(): void {
 		try {
 			for (;;) {
 				if (this.listenerCount("message") === 0) return;
+				if (!this.gathered()) return;
 				const result = readFrame(this.buffer, this.receiveKey, this.receiveCounter);
 				if (!result) return;
 				this.buffer = result.rest;
@@ -131,9 +166,17 @@ export class SecureChannel extends EventEmitter<ChannelEvents> {
 		}
 	}
 
+	/** Send a JSON value. Throws, with nothing sent and the channel as it was, when it is too large for one frame. */
 	send(value: unknown): void {
 		if (this.closed) return;
-		this.stream.write(sealFrame(Buffer.from(JSON.stringify(value), "utf8"), this.sendKey, this.sendCounter++));
+		// The counter is used only by a frame that is sent: one that is not must leave it alone, or
+		// every frame after it would fail to authenticate at the other end.
+		const plain = Buffer.from(JSON.stringify(value), "utf8");
+		if (plain.length > this.maxMessage) throw new Error(TOO_LARGE);
+		const frame = sealFrame(plain, this.sendKey, this.sendCounter);
+		this.sendCounter++;
+		const taken = (): void => void (this.closed || this.emit("taken"));
+		for (let at = 0; at < frame.length; at += PIECE) this.stream.write(frame.subarray(at, at + PIECE), taken);
 	}
 
 	get isClosed(): boolean {
@@ -153,6 +196,8 @@ export class SecureChannel extends EventEmitter<ChannelEvents> {
 	}
 }
 
+const TOO_LARGE = "That is too large to send in one piece.";
+
 function nonceFor(counter: bigint): Buffer {
 	const nonce = Buffer.alloc(12);
 	nonce.writeBigUInt64BE(counter, 4);
@@ -160,19 +205,19 @@ function nonceFor(counter: bigint): Buffer {
 }
 
 function sealFrame(plain: Buffer, key: Buffer, counter: bigint): Buffer {
+	if (plain.length > MAX_MESSAGE) throw new Error(TOO_LARGE);
 	const cipher = createCipheriv("chacha20-poly1305", key, nonceFor(counter), { authTagLength: 16 });
 	const body = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
-	if (body.length > MAX_FRAME) throw new Error("That is too large to send in one piece.");
 	const header = Buffer.alloc(4);
 	header.writeUInt32BE(body.length);
 	return Buffer.concat([header, body]);
 }
 
 /** Read one frame if the buffer holds a whole one. Throws when it does not authenticate. */
-function readFrame(buffer: Buffer, key: Buffer, counter: bigint): { plain: Buffer; rest: Buffer } | undefined {
+function readFrame(buffer: Buffer, key: Buffer, counter: bigint, most = MAX_FRAME): { plain: Buffer; rest: Buffer } | undefined {
 	if (buffer.length < 4) return undefined;
 	const length = buffer.readUInt32BE(0);
-	if (length < 16 || length > MAX_FRAME) throw new Error("bad frame length");
+	if (length < 16 || length > most) throw new Error("bad frame length");
 	if (buffer.length < 4 + length) return undefined;
 	const body = buffer.subarray(4, 4 + length);
 	const decipher = createDecipheriv("chacha20-poly1305", key, nonceFor(counter), { authTagLength: 16 });
@@ -282,7 +327,7 @@ export function openChannel(stream: Duplex, options: ChannelOptions): Promise<Se
 			settled = true;
 			cleanup();
 			if (newcomer) options.onMember?.(theirs.name, theirs.key);
-			resolve(new SecureChannel(stream, theirs.name, keys.send, keys.receive, buffer, sendCounter, receiveCounter, theirs.scope));
+			resolve(new SecureChannel(stream, theirs.name, keys.send, keys.receive, buffer, sendCounter, receiveCounter, theirs.scope, options.maxMessage));
 		};
 
 		const takeLine = (): string | undefined => {
@@ -324,7 +369,8 @@ export function openChannel(stream: Duplex, options: ChannelOptions): Promise<Se
 					stream.write(`${JSON.stringify({ ...mine, sig: options.identity.signBytes(ours), ...proofOf(ours) })}\n`);
 					onData(Buffer.alloc(0));
 				} else {
-					const frame = readFrame(buffer, (keys as { receive: Buffer }).receive, 0n);
+					// Nobody has proved anything yet: a frame that claims to be large is not waited for.
+					const frame = readFrame(buffer, (keys as { receive: Buffer }).receive, 0n, MAX_PROOF);
 					if (!frame) return;
 					buffer = frame.rest;
 					const proof = JSON.parse(frame.plain.toString("utf8")) as { sig?: unknown; mac?: unknown };
