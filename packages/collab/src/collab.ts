@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { networkInterfaces } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { type Envelope, isId, newHandoffId, type NodeMeta, validateEnvelope } from "@pi-lattice/protocol";
-import { type ChannelOptions, openChannel, type SecureChannel } from "./channel.ts";
+import { type ChannelOptions, MAX_MESSAGE, openChannel, type SecureChannel } from "./channel.ts";
 import { fingerprint, type Identity, type Signed, verifySigned } from "./identity.ts";
 import { appendEvent, type Folded, foldRecord, type KeyLookup, type NodeEvent, type NodeRecord, parseRecord, type SharedMeta, toSharedMeta } from "./ledger.ts";
 import { type Network, networkKey } from "./network.ts";
@@ -94,6 +94,8 @@ export interface CollabOptions {
 	redialMs?: number;
 	/** How long a connected teammate may be silent before the connection is taken to be gone, in milliseconds. Default 15 seconds. */
 	silenceMs?: number;
+	/** The most a released session may come to, conversation and branch together, in bytes. By default what one frame holds. */
+	maxTransferBytes?: number;
 	/** How long an offer stays open, in milliseconds. */
 	offerTtlMs?: number;
 	requestTimeoutMs?: number;
@@ -309,6 +311,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		this.options.relay?.listen((from, frame) => this.onRelayed(from, frame as Frame));
 		this.host.setRemoteRouter((envelope, recipient) => this.queueOutbound(envelope, recipient));
 		this.host.on("node", this.onNode);
+		this.finishReleases();
 		await this.publishOwn();
 		const redialMs = this.options.redialMs ?? 5000;
 		if (redialMs > 0) {
@@ -666,9 +669,12 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	/** Note when anything comes over a connection, a part of something large included: that is what says they are there. */
 	private listenTo(link: string, channel: SecureChannel): void {
 		this.lastHeard.set(link, this.now());
-		channel.on("heard", () => {
+		const there = (): void => {
 			if ((this.channels.get(link) ?? this.guests.get(link))?.channel === channel) this.lastHeard.set(link, this.now());
-		});
+		};
+		channel.on("heard", there);
+		// While something large is on its way to them they say nothing, and their machine taking it is what there is to go by.
+		channel.on("taken", there);
 	}
 
 	/**
@@ -770,10 +776,11 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			else if (frame.kind === "directory") this.debounce(`directory:${peer}`, () => this.fetchDirectory(peer));
 			else if (frame.kind === "session") this.heardSession(peer, frame.nodeId, frame.from, frame.messages);
 		} else if (frame?.t === "req") {
-			this.serve(peer, frame.op, frame.p).then(
-				(r) => channel.send({ t: "res", id: frame.id, ok: true, r } satisfies Frame),
-				(error: unknown) => channel.send({ t: "res", id: frame.id, ok: false, e: error instanceof Error ? error.message : String(error) } satisfies Frame),
-			);
+			const refuse = (error: unknown): void => channel.send({ t: "res", id: frame.id, ok: false, e: error instanceof Error ? error.message : String(error) } satisfies Frame);
+			this.serve(peer, frame.op, frame.p)
+				// An answer too large to send is an answer that says so, not a question left hanging.
+				.then((r) => channel.send({ t: "res", id: frame.id, ok: true, r } satisfies Frame))
+				.catch(refuse);
 		}
 	}
 
@@ -1158,8 +1165,13 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 					if (messages.length === watcher.sent) continue;
 					// Fewer than before means the conversation was rewound: send it whole.
 					const from = messages.length > watcher.sent ? watcher.sent : 0;
-					this.link(link)?.send({ t: "note", kind: "session", nodeId, from, messages: messages.slice(from) } satisfies Frame);
-					watcher.sent = messages.length;
+					try {
+						this.link(link)?.send({ t: "note", kind: "session", nodeId, from, messages: messages.slice(from) } satisfies Frame);
+						watcher.sent = messages.length;
+					} catch {
+						// What is new is too large to send: they ask again when they next look, and are told so.
+						watchers.delete(link);
+					}
 				}
 			}
 			if (this.followers.size === 0 && this.followTimer) {
@@ -1314,13 +1326,19 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 		return handoff;
 	}
 
-	/** Append an event to a log this host owns. */
-	private appendOwn(nodeId: string, event: Signed<NodeEvent>): NodeRecord {
+	/** A log this host owns with an event added, not yet kept. */
+	private withOwn(nodeId: string, event: Signed<NodeEvent>): { record: NodeRecord; changed: boolean } {
 		const record = this.record(nodeId);
 		if (!record) throw new Error("That session has not been shared yet.");
 		if (this.fold(record).ownership.owner !== this.identity.name) throw new Error("That session is not owned here.");
 		const result = appendEvent(record, event, this.keys(), this.now());
 		if (!result.ok) throw new Error(result.error);
+		return result;
+	}
+
+	/** Append an event to a log this host owns. */
+	private appendOwn(nodeId: string, event: Signed<NodeEvent>): NodeRecord {
+		const result = this.withOwn(nodeId, event);
 		if (result.changed) {
 			this.save(result.record);
 			this.broadcastChanged();
@@ -1413,9 +1431,26 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 			const session = node.sessionFile && existsSync(node.sessionFile) ? readFileSync(node.sessionFile).toString("base64") : null;
 			const bundle = await this.bundleBranch(node);
 			const mail = (this.host.takeMail?.(nodeId) ?? []).slice(0, CARRIED_MAIL);
-			const record = this.appendOwn(nodeId, this.identity.sign<NodeEvent>({ node: nodeId, type: "confirm", id: handoff.handoffId, by: this.identity.name, now: this.now() }));
+			const { record } = this.withOwn(nodeId, this.identity.sign<NodeEvent>({ node: nodeId, type: "confirm", id: handoff.handoffId, by: this.identity.name, now: this.now() }));
 			const transfer: Transfer = { nodeId, to: handoff.to, record, branch: bundle ? node.branch : null, session, bundle, ...(mail.length > 0 ? { mail } : {}) };
-			writeFileSync(join(this.options.dir, "transfers", `${nodeId}.json`), JSON.stringify(transfer));
+			const packed = JSON.stringify(transfer);
+			const most = this.options.maxTransferBytes ?? MAX_MESSAGE - 4096;
+			if (Buffer.byteLength(packed) > most) {
+				// Nothing is recorded yet, so the session is still here. Recording the release first
+				// would leave it with nobody: released by the log, and unable to reach its new owner.
+				const withdrawn = this.appendOwn(nodeId, this.identity.sign<NodeEvent>({ node: nodeId, type: "cancel", id: handoff.handoffId, by: this.identity.name, now: this.now() }));
+				if (this.options.relay && this.there(handoff.to)) void this.request(handoff.to, "offered", { record: withdrawn }).catch(() => {});
+				const mb = (bytes: number): string => `${Math.ceil(bytes / (1024 * 1024))} MB`;
+				throw new Error(`Its conversation and branch come to ${mb(Buffer.byteLength(packed))}, and the most that can be sent is ${mb(most)}. The offer to ${handoff.to} is withdrawn.`);
+			}
+			// The package is kept before the release is recorded, and the release is recorded from it
+			// if the host stops in between (see `finishReleases`): a release on record with no package
+			// to send would be a session nobody has.
+			const path = join(this.options.dir, "transfers", `${nodeId}.json`);
+			writeFileSync(`${path}.tmp`, packed);
+			renameSync(`${path}.tmp`, path);
+			this.save(record);
+			this.broadcastChanged();
 			await this.host.releaseNode(nodeId, handoff.to, node.version + 1);
 			this.emit("changed");
 			await this.sendTransfers(handoff.to);
@@ -1595,10 +1630,35 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 
 	// --- release -----------------------------------------------------------------
 
+	/**
+	 * A release whose package was kept and whose record was not, because the host stopped between
+	 * the two: record it now. Sending the package without it would hand the session over while
+	 * the log here still says it is waiting to be released, and the next release would contradict
+	 * the one the new owner holds.
+	 */
+	private finishReleases(): void {
+		const dir = join(this.options.dir, "transfers");
+		for (const file of readdirSync(dir)) {
+			if (!file.endsWith(".json")) continue;
+			try {
+				const transfer = JSON.parse(readFileSync(join(dir, file), "utf8")) as Transfer;
+				const record = parseRecord(JSON.stringify(transfer.record));
+				const held = record && isId(record.meta.body.id) ? this.record(record.meta.body.id) : undefined;
+				if (!record || !held) continue;
+				const [mine, theirs] = [this.fold(held), this.fold(record)];
+				if (!theirs.valid || theirs.applied <= mine.applied || !sameLog(held, record, mine.applied)) continue;
+				this.save({ ...record, events: record.events.slice(0, theirs.applied) });
+			} catch {
+				// Unreadable: nothing to finish.
+			}
+		}
+	}
+
 	/** Sessions released to someone who has not yet confirmed receiving them. */
 	pendingTransfers(): Array<{ nodeId: string; to: string }> {
 		const out: Array<{ nodeId: string; to: string }> = [];
 		for (const file of readdirSync(join(this.options.dir, "transfers"))) {
+			if (!file.endsWith(".json")) continue;
 			try {
 				const transfer = JSON.parse(readFileSync(join(this.options.dir, "transfers", file), "utf8")) as Transfer;
 				out.push({ nodeId: transfer.nodeId, to: transfer.to });
@@ -1612,6 +1672,7 @@ export class CollabSession extends EventEmitter<CollabEvents> {
 	private async sendTransfers(peer: string): Promise<void> {
 		const dir = join(this.options.dir, "transfers");
 		for (const file of readdirSync(dir)) {
+			if (!file.endsWith(".json")) continue;
 			let transfer: Transfer;
 			try {
 				transfer = JSON.parse(readFileSync(join(dir, file), "utf8")) as Transfer;

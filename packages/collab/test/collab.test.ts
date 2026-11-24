@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEnvelope, type Envelope, type NodeMeta, newNodeId } from "@pi-lattice/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CollabSession, type HostPort, Identity, type Network, PeerBook, type Relay, TcpTransport } from "../src/index.ts";
+import { type CollabOptions, CollabSession, type HostPort, Identity, type Network, PeerBook, type Relay, TcpTransport } from "../src/index.ts";
 
 /** An in-memory stand-in for a lattice host. */
 class FakeHost extends EventEmitter implements HostPort {
@@ -119,14 +119,14 @@ const enrol = (collab: CollabSession, name: string, scope: string, where?: strin
 };
 
 /** A person's host. `code` is where a teammate's host is; without it nobody has told them of anyone. */
-const seat = (name: string, code?: string, keyDir?: string, network = TEAM, relay?: Relay): Seat => {
+const seat = (name: string, code?: string, keyDir?: string, network = TEAM, relay?: Relay, over: Partial<CollabOptions> = {}): Seat => {
 	const host = new FakeHost(name);
 	const dir = join(root, keyDir ?? name);
 	mkdirSync(join(dir, "project"), { recursive: true });
 	const collab = new CollabSession({
 		host, identity: Identity.loadOrCreate(join(dir, "keys"), name), peers: new PeerBook(join(dir, "people.json")), network,
 		transport: new TcpTransport({ host: "127.0.0.1", port: 0 }), dir: join(dir, "collab"), projectDir: join(dir, "project"),
-		advertise: "127.0.0.1", redialMs: 0, offerTtlMs: 60_000, requestTimeoutMs: 5000, now: () => clock, ...(relay ? { relay } : {}),
+		advertise: "127.0.0.1", redialMs: 0, offerTtlMs: 60_000, requestTimeoutMs: 5000, now: () => clock, ...(relay ? { relay } : {}), ...over,
 	});
 	enrol(collab, name, "", code);
 	sessions.push(collab);
@@ -366,6 +366,48 @@ describe("handoff", () => {
 		await yan.collab.refresh(); // any later contact retries
 		await until(() => sam.host.node(kid.id)?.owner === "sam", "the retry to land");
 		expect(yan.collab.pendingTransfers()).toEqual([]);
+	});
+
+	it("withdraws the offer of a session too large to send, and leaves it with its owner", async () => {
+		const yan = seat("yan", undefined, undefined, TEAM, undefined, { maxTransferBytes: 2000 });
+		const big = yan.host.add("big", null, { brief: "b".repeat(4000) });
+		await yan.collab.start();
+		const sam = seat("sam", whereIs(yan.collab));
+		await sam.collab.start();
+		await until(() => sam.host.node(big.id), "sam to see yan's session");
+		await yan.collab.offer(big.id, "sam");
+		await until(() => sam.collab.handoffs().length === 1, "sam to see the offer");
+		await sam.collab.accept(big.id);
+		await until(() => yan.logs.some((line) => line.includes("the most that can be sent")), "yan to be told why");
+		await until(() => sam.collab.handoffs().length === 0, "sam to see the offer withdrawn");
+		expect(yan.host.node(big.id)).toMatchObject({ owner: "yan", version: 1 });
+		expect(yan.collab.pendingTransfers()).toEqual([]);
+		expect(yan.collab.handoffs()).toEqual([]);
+		// The connection is as it was: something else can still be handed over.
+		const small = yan.host.add("small");
+		await until(() => sam.host.node(small.id), "sam to see the other session");
+		await handOver(yan, sam, small.id);
+	});
+
+	it("records a release whose package was kept when the host stopped before recording it", async () => {
+		const { yan, sam, kid } = await pair();
+		await yan.collab.offer(kid.id, "sam");
+		await until(() => sam.collab.handoffs().length === 1);
+		sam.host.failNextAdoption = true; // the package stays with yan
+		await sam.collab.accept(kid.id);
+		await until(() => yan.collab.pendingTransfers().length === 1, "the package to be kept");
+		await until(() => yan.logs.join("\n").includes("has not reached them yet"), "the failed delivery to be noticed");
+		await yan.collab.stop();
+		// As it would be had the host stopped after keeping the package and before recording the release.
+		const path = join(yan.dir, "collab", "ledger", `${kid.id}.json`);
+		const released = ledgerOf(yan, kid.id);
+		writeFileSync(path, JSON.stringify({ ...released, events: released.events.slice(0, 2) }));
+
+		const again = seat("yan");
+		again.host.set({ ...(yan.host.node(kid.id) as NodeMeta), owner: "yan", version: 1 });
+		await again.collab.start();
+		expect(ledgerOf(again, kid.id).events).toEqual(released.events);
+		expect(again.host.node(kid.id)).toMatchObject({ owner: "sam", version: 2 });
 	});
 
 	it("can hand a node back", async () => {
