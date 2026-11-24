@@ -253,6 +253,43 @@ describe("the tree inside Pi", () => {
 		}
 	}, 120_000);
 
+	it("takes its session again when its host stops and is started again, and the session's tools go on working", async () => {
+		const { runDaemon } = await import("../../packages/app/src/index.ts");
+		const startDaemon = () =>
+			runDaemon({
+				stateDir, cwd: sandbox.work, owner: "tester", idleExitMs: 0, home: sandbox.home,
+				hostOptions: {
+					piCommand: [process.execPath, piCli], piArgs: fauxArgs, extensionPaths: [extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph],
+					socketDir: join(sandbox.root, "sock"),
+					env: { PI_CODING_AGENT_DIR: sandbox.agentDir, PI_OFFLINE: "1", PI_TELEMETRY: "0", LATTICE_FAUX_SCRIPT: directorScript },
+				},
+			});
+		let daemon = await startDaemon();
+		try {
+			// No launcher: nothing in this terminal starts a host, so the one that comes back is the one started here.
+			const pi = await terminal([], [extensionPaths.pane, extensionPaths.a2a, extensionPaths.roles, extensionPaths.graph]);
+			await pi.prompt("hello");
+			await pi.command("/lattice");
+			const root = await until((s) => s.nodes[0]?.status === "idle" && s.foreground.includes(s.nodes[0].id) && s.nodes[0], "the root, open in the terminal");
+
+			observer?.close();
+			observer = undefined;
+			await daemon.stop();
+			daemon = await startDaemon();
+			// The new host has never heard of this terminal. The terminal finds it and says the session is open here:
+			// left alone, the host would start the session in the background beside it at the first message.
+			await until((s) => s.foreground.includes(root.id), "the terminal to take its session again");
+			// The session's messaging and tree tools speak to the new host.
+			await pi.prompt(spawnTool({ name: "kid", brief: "wait" }));
+			await until((s) => s.nodes.length === 2, "the session open here to be able to spawn");
+			await pi.stop();
+		} finally {
+			observer?.close();
+			observer = undefined;
+			await daemon.stop();
+		}
+	}, 120_000);
+
 	it("rejoins the tree when Pi is started again on a session that belongs to it", async () => {
 		const first = await terminal();
 		await first.prompt("hello");

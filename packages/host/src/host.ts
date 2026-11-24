@@ -433,6 +433,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				this.emit("mail", connection.nodeId, envelope, state);
 			},
 			onClose: (connection) => {
+				// Stopping closes every connection, and the store with them: there is nothing left to give back to.
+				if (this.stopped) return;
 				if (connection.channel === "ui") {
 					this.uiClients.delete(connection.id);
 					this.watchers.delete(connection.id);
@@ -1228,6 +1230,16 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		this.runtimes.delete(id);
 		for (const connection of runtime.channels.values()) connection.close();
 		if (this.store.getNode(id)) this.update(id, { status: "dormant" });
+		// What its terminal had not typed into it yet is said to it in the background instead: nothing else would ever say it.
+		const untold = this.toTell.get(id) ?? [];
+		this.toTell.delete(id);
+		if (this.store.getNode(id) && !this.stopped) {
+			for (const line of untold) {
+				this.prompt(id, line).catch((error: unknown) => {
+					this.emit("log", "warn", `"${this.store.getNode(id)?.name ?? id}" could not be told what was said to it: ${error instanceof Error ? error.message : String(error)}`);
+				});
+			}
+		}
 		if (resume && this.store.getNode(id) && !this.stopped) {
 			this.prompt(id, this.template("handover"))
 				.catch((error: unknown) => {
@@ -1704,7 +1716,12 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 				return {};
 			}
 			case "told": {
-				const { nodeId } = call("told");
+				const { nodeId, back } = call("told");
+				if (Array.isArray(back)) {
+					// Taken by a terminal that could not type them after all: said again, wherever the session is now.
+					for (const line of back) if (typeof line === "string" && this.store.getNode(nodeId)) await this.tell(nodeId, line, "followUp");
+					return { messages: [] };
+				}
 				const lines = this.runtimes.get(nodeId)?.foreground === connection.id ? (this.toTell.get(nodeId) ?? []) : [];
 				if (lines.length > 0) this.toTell.delete(nodeId);
 				return { messages: lines };

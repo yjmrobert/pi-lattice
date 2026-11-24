@@ -3,18 +3,45 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
-import { decodeTree, emitEvent, type EventBus, HostClient, type KnownTree, latticeHome, TREES_DIR } from "@pi-lattice/protocol";
+import { isAbsolute, join, resolve } from "node:path";
+import { decodeTree, emitEvent, type EventBus, HostClient, type KnownTree, latticeHome, mainCheckout, TREES_DIR } from "@pi-lattice/protocol";
 
 /** The directory that owns the tree for a working directory: the main checkout of its repository, else itself. */
 export function projectRoot(cwd: string): string {
+	const git = (...args: string[]): string => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 	try {
-		const common = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-		return dirname(isAbsolute(common) ? common : resolve(cwd, common));
+		const common = git("rev-parse", "--git-common-dir");
+		const commonDir = isAbsolute(common) ? common : resolve(cwd, common);
+		return mainCheckout(commonDir, () => {
+			try {
+				return git("--git-dir", commonDir, "rev-parse", "--show-toplevel");
+			} catch {
+				return undefined; // a bare repository: it has no checkout of its own
+			}
+		});
 	} catch {
 		return resolve(cwd);
 	}
 }
+
+/**
+ * What is asked for every frame that is drawn: the answer of the last moment, by what was asked.
+ * Each of these runs git, which is far more than a frame should cost.
+ */
+const lately = new Map<string, { at: number; value: unknown }>();
+function recent<T>(key: string, ask: () => T): T {
+	const now = Date.now();
+	const held = lately.get(key);
+	if (held && now - held.at < 1000) return held.value as T;
+	const value = ask();
+	if (lately.size > 64) lately.clear();
+	lately.set(key, { at: now, value });
+	return value;
+}
+/** {@link projectRoot}, asked at most once a second for a directory: for drawing. */
+export const projectRootLately = (cwd: string): string => recent(`root\n${cwd}`, () => projectRoot(cwd));
+/** {@link inRepository}, asked at most once a second for a directory: for drawing. */
+export const inRepositoryLately = (cwd: string): boolean => recent(`in\n${cwd}`, () => inRepository(cwd));
 
 /** Whether a directory is inside a git repository. */
 export function inRepository(cwd: string): boolean {

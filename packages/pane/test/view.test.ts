@@ -1,6 +1,6 @@
 import type { NodeMeta, UiState } from "@pi-lattice/protocol";
 import { describe, expect, it } from "vitest";
-import { ago, ALL_KEYS, type ChildForm, cursorKeys, waitChoices, stopKey, usageText, formKey, newChildForm, renderForm, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, teamLine, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane } from "../src/index.ts";
+import { ago, ALL_KEYS, type ChildForm, cursorKeys, waitChoices, stopKey, usageText, formKey, newChildForm, pastedText, renderForm, renderInspector, renderStrip, repoKey, inboxItems, interpretKey, itemKey, teamLine, nodeKey, type Paint, type PaneRepo, type PaneView, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane } from "../src/index.ts";
 
 const node = (id: string, parentId: string | null, over: Partial<NodeMeta> = {}): NodeMeta => ({
 	id, parentId, rootId: "r", kind: "task", name: id, brief: "", fragments: [], owner: "yan", version: 1, status: "idle",
@@ -579,6 +579,21 @@ describe("the strip for narrow terminals", () => {
 
 	it("shows nothing when there is no tree anywhere", () => {
 		expect(renderStrip({ repos: [], current: undefined, cursor: undefined, focused: false }, 72)).toEqual([]);
+	});
+});
+
+describe("what is typed or pasted into a form", () => {
+	it("is taken as text, with the markers of a paste left out and its line ends as one kind", () => {
+		expect(pastedText("a")).toBe("a");
+		expect(pastedText("\u001b[200~two words\r\nand a line\u001b[201~")).toBe("two words\nand a line");
+	});
+
+	it("keeps a paste with a tab in it, as spaces, instead of dropping it whole", () => {
+		expect(pastedText("\u001b[200~name\tvalue\n\tindented\u001b[201~")).toBe("name  value\n  indented");
+	});
+
+	it("is not text when it is a key the form has no use for", () => {
+		for (const key of ["", "\u001b[A", "\u001bOP", "\u0003", "\u007f", "a\u0000b"]) expect(pastedText(key), JSON.stringify(key)).toBeUndefined();
 	});
 });
 

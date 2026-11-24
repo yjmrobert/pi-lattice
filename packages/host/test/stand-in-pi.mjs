@@ -33,7 +33,7 @@ process.stdin.on("data", (chunk) => {
 		if (line === "") continue;
 		const command = JSON.parse(line);
 		if (command.type === "prompt") {
-			log(`prompted: ${String(command.message).replace(/\s+/g, " ").slice(0, 80)}`);
+			log(`prompted: ${String(command.message).replace(/\s+/g, " ").slice(0, 600)}`);
 			say({ type: "response", id: command.id, success: true, data: { disposition: "started" } }, { type: "agent_start" });
 		} else if (command.type === "settle") say({ type: "response", id: command.id, success: true, data: {} }, { type: "agent_settled" });
 		else say({ type: "response", id: command.id, success: true, data: {} });

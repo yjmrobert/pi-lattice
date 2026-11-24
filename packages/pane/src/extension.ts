@@ -13,10 +13,10 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, HStack, isKeyRelease, matchesKey, type StackEntry, truncateToWidth, type TUI, visibleWidth, VStack } from "@earendil-works/pi-tui";
 import { describeScheme, emitEvent, issueLine, type Scheme, schemeProblems, formatSetting, type HostAssignment, isHeld, isTemplateName, renderTemplate, TEMPLATE_NAMES, TEMPLATES, type HostClient, type KnownTree, type NodeMeta, numberSetting, onEvent, parseSettingInput, SETTINGS, type SettingScope, settingAccepts, settingOf, type SharingTree, tallyLine, textSetting, toggleSetting, type UiState, type LatticeEvents } from "@pi-lattice/protocol";
-import { type ChildForm, type FormKey, formKey, newChildForm, renderForm, waitChoices } from "./form.ts";
+import { type ChildForm, type FormKey, formKey, newChildForm, pastedText, renderForm, waitChoices } from "./form.ts";
 import { renderInspector } from "./inspect.ts";
 import { cursorItem, cursorKeys, cursorNode, interpretKey, type PaneAction } from "./keys.ts";
-import { connectHost, hasTree, inRepository, knownTrees, launchHost, projectRoot, stateDirFor } from "./locate.ts";
+import { connectHost, hasTree, inRepository, inRepositoryLately, knownTrees, launchHost, projectRoot, projectRootLately, stateDirFor } from "./locate.ts";
 import { newSettingsScreen, renderSettings, type SettingsData, type SettingsLink, type SettingsScreen, settingsKey } from "./settings.ts";
 import { readSettings, readTemplate, type SettingsRead, templatePath, writeSetting, writeTemplate } from "./settings-io.ts";
 import { type InboxDetails, inboxItems, itemKey, teamLine, nodeKey, type Paint, type PaneView, paneInbox, paneOrder, PLAIN, remoteRepos, renderCompact, renderPane, renderStrip } from "./view.ts";
@@ -114,8 +114,10 @@ interface Shared {
 	homeChosen: { value: boolean; at: number } | undefined;
 	/** The roles the host has for the session open here, as last seen: what it gains later is applied to the session. */
 	roles?: { nodeId: string; fragments: string[] };
-	/** The roles applied in the session open here, as the roles extension last said. */
-	applied?: string[];
+	/** The roles applied in the session open here, as the roles extension last said. Not known until it has. */
+	applied?: string[] | undefined;
+	/** What the roles extension said a session has applied before this one knew of that session, by the session's Pi. */
+	appliedEarly?: WeakMap<object, string[]>;
 }
 const KEY = Symbol.for("pi-lattice.pane.6");
 const globals = globalThis as { [KEY]?: Shared };
@@ -165,7 +167,7 @@ function view(): PaneView {
 		current: shared.current,
 		cursor: shared.cursor,
 		focused: shared.focused,
-		hint: homeLink() || autoStarts() ? "No sessions yet. Your next\nmessage starts one here." : "No sessions in this\nproject yet.\n\n/lattice starts a tree\nfrom this session.",
+		hint: homeLink() || autoStarts(true) ? "No sessions yet. Your next\nmessage starts one here." : "No sessions in this\nproject yet.\n\n/lattice starts a tree\nfrom this session.",
 		frame: Math.floor(Date.now() / SPINNER_MS),
 		height: shared.tui?.terminal.rows,
 		inspector: inspecting(),
@@ -191,12 +193,15 @@ function settings(): SettingsRead {
 	return readSettings(treeDir());
 }
 
-/** Whether a first message here starts a tree by itself: in a git repository, unless switched off. */
-function autoStarts(): boolean {
+/**
+ * Whether a first message here starts a tree by itself: in a git repository, unless switched off.
+ * `drawing` is for what is asked on every frame: it takes git's answer of the last moment.
+ */
+function autoStarts(drawing = false): boolean {
 	const { settings: current } = settings();
 	if (!toggleSetting(current, "pane.autoJoin") || !toggleSetting(current, "pane.autoStart")) return false;
 	try {
-		return shared.ctx !== undefined && inRepository(shared.ctx.cwd);
+		return shared.ctx !== undefined && (drawing ? inRepositoryLately(shared.ctx.cwd) : inRepository(shared.ctx.cwd));
 	} catch {
 		return false;
 	}
@@ -315,14 +320,14 @@ function startsHere(): { repo: string; starting: boolean } | undefined {
 		const ctx = shared.ctx;
 		if (!ctx?.hasUI || shared.current) return undefined;
 		const link = homeLink();
-		const repo = basename(projectRoot(ctx.cwd));
+		const repo = basename(projectRootLately(ctx.cwd));
 		// Until the session that started it is in the tree, the tree is starting: its host may answer before it has anything to draw.
 		if (shared.starting) return { repo, starting: true };
 		// A tree that is here, or not yet read: what it has is drawn, not a first message.
 		if (link && (!link.state || link.state.nodes.some((node) => !node.archived))) return undefined;
 		if (link) return toggleSetting(settings().settings, "pane.autoJoin") ? { repo, starting: false } : undefined;
 		// The same conditions as the first message itself: see before_agent_start.
-		return autoStarts() && !process.env.LATTICE_STATE_DIR ? { repo, starting: false } : undefined;
+		return autoStarts(true) && !process.env.LATTICE_STATE_DIR ? { repo, starting: false } : undefined;
 	} catch {
 		return undefined; // the session that context belonged to has ended
 	}
@@ -572,9 +577,16 @@ async function typeWhatIsTold(link: Link): Promise<void> {
 	shared.telling = true;
 	try {
 		const { messages } = await link.client.ui("told", { nodeId });
+		const pi = shared.pi;
+		// Taken from the host, they are nowhere else. If the session they are for is no longer the
+		// one open here, they go back: typed now, they would be said to another session, or to none.
+		if (shared.current !== nodeId || !pi) {
+			if (messages.length > 0) await link.client.ui("told", { nodeId, back: messages });
+			return;
+		}
 		for (const message of messages) {
-			if (shared.ctx?.isIdle()) shared.pi?.sendUserMessage(message);
-			else shared.pi?.sendUserMessage(message, { deliverAs: "steer" });
+			if (shared.ctx?.isIdle()) pi.sendUserMessage(message);
+			else pi.sendUserMessage(message, { deliverAs: "steer" });
 		}
 	} catch {
 		// The session ended, or the host went away: what was not taken is still there to take.
@@ -631,12 +643,38 @@ function addLink(client: HostClient, stateDir: string): Link {
 	shared.links.set(stateDir, link);
 	shared.asleep = shared.asleep.filter((tree) => tree.stateDir !== stateDir);
 	void client.ui("presence", { here: stateDir === shared.home }).catch(() => {});
+	// A connection made again to the host of the session open here: the host no longer has this terminal down for it.
+	void reattach(link);
 	client.onFrame((frame) => {
 		if (frame.t !== "event") return;
 		if (frame.kind === "changed") void refreshLink(link);
 		else if (frame.kind === "log" && frame.message) tell(stateDir === shared.home || !link.state ? frame.message : `${repoLabel(link.state, stateDir)}: ${frame.message}`);
 	});
 	return link;
+}
+
+/**
+ * The host of the session open here was lost and is connected to again. A host gives back what
+ * a terminal had open when its connection goes, and one that was started again never had it:
+ * either way it no longer knows this terminal has the session, and could start it in the
+ * background beside the one here. Take it again, and tell the messaging, roles and tree
+ * extensions the connection it now has.
+ */
+async function reattach(link: Link): Promise<void> {
+	const nodeId = shared.current;
+	if (!nodeId || shared.currentDir !== link.stateDir) return;
+	try {
+		const result = await link.client.ui("attach", { nodeId });
+		if (shared.current !== nodeId) return; // another session was opened meanwhile
+		shared.assignment = result.assignment;
+	} catch {
+		// It is not this terminal's to have any more: open somewhere else, handed on, or gone.
+		if (shared.current !== nodeId) return;
+		shared.current = undefined;
+		shared.currentDir = undefined;
+		shared.assignment = undefined;
+	}
+	if (shared.pi) emitEvent(shared.pi.events, "lattice:host:assigned", { assignment: shared.current ? (shared.assignment ?? null) : null });
 }
 
 /**
@@ -812,10 +850,8 @@ function formKeyOf(data: string): FormKey | undefined {
 	if (named) return named;
 	if (matchesKey(data, "shift+tab")) return "back-tab";
 	if (matchesKey(data, "ctrl+s")) return "submit";
-	// Pasted text arrives between markers; other escape sequences are keys the form has no use for.
-	const text = data.replace(/\x1b\[20[01]~/g, "").replace(/\r\n?/g, "\n");
-	if (text === "" || text.includes("\x1b") || /[\x00-\x09\x0b-\x1f\x7f]/.test(text)) return undefined;
-	return { text };
+	const text = pastedText(data);
+	return text === undefined ? undefined : { text };
 }
 
 /** Keys while the new-session form is open. */
@@ -1000,6 +1036,16 @@ export default function paneExtension(pi: ExtensionAPI): void {
 		return { sessionFile: result.sessionFile, wasWorking: result.wasWorking };
 	};
 
+	/**
+	 * Go back to the session that was open here after another could not be opened. Giving it up
+	 * and taking it again made it a new connection to its host, with a new token: the messaging,
+	 * roles and tree extensions are told, or they would go on speaking with the one that is gone.
+	 */
+	const back = async (previous: string | undefined): Promise<void> => {
+		await attach(previous).catch(() => {});
+		emitEvent(pi.events, "lattice:host:assigned", { assignment: shared.current ? (shared.assignment ?? null) : null });
+	};
+
 	// The canopy shows what a session waits on and answers it with the pane's own keys, so the two cannot differ.
 	const waitingAt = (id: string): PaneView => ({ ...view(), cursor: itemKey(id), focused: true, help: false });
 	const keyNamed = (key: string): string => (key === "⏎" ? "enter" : key);
@@ -1081,6 +1127,8 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	// What the session open here has applied, so that a role its host gave it while it was closed can be told from one it has.
 	onEvent(pi.events, "lattice:roles:changed", ({ fragments }) => {
 		if (shared.pi === pi || shared.pi === undefined) shared.applied = [...fragments];
+		// Said before this session is the one open here: kept for when it is.
+		else (shared.appliedEarly ??= new WeakMap()).set(pi, [...fragments]);
 	});
 
 	// The other extensions ask what the settings are; the files are ours to read.
@@ -1089,6 +1137,13 @@ export default function paneExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		// What the session that was open here had applied says nothing about this one. Until the
+		// roles extension has spoken for it, what it has is not known: a role its host gave it while
+		// it was closed must not be taken to be applied because the last session had it.
+		if (shared.pi !== pi) {
+			shared.applied = shared.appliedEarly?.get(pi);
+			shared.appliedEarly?.delete(pi);
+		}
 		shared.pi = pi;
 		shared.ctx = ctx;
 		const stateDir = stateDirFor(ctx.cwd);
@@ -1351,10 +1406,10 @@ export default function paneExtension(pi: ExtensionAPI): void {
 					if (result.wasWorking) await next.sendUserMessage(renderTemplate(readTemplate("handover", shared.currentDir).text, {}));
 				},
 			});
-			if (switched.cancelled) await attach(previous);
+			if (switched.cancelled) await back(previous);
 			else if (previous) shared.previous = previous;
 		} catch (error) {
-			await attach(previous).catch(() => {});
+			await back(previous);
 			fail(ctx, error);
 		}
 	};

@@ -87,6 +87,19 @@ function edit(form: ChildForm, field: TextField, change: { insert: string } | { 
 	return { ...form, [field]: [...text.slice(0, at), ...text.slice(at + 1)].join("") };
 }
 
+/**
+ * What was typed or pasted, as text for a field: nothing when it is a key the form has no use for.
+ * Pasted text arrives between markers. A tab in it is two spaces, as in the first message: a
+ * paste with one in it (a table, indented code) is otherwise dropped whole, with nothing said.
+ */
+export function pastedText(data: string): string | undefined {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences and control characters are what this tells from text
+	const text = data.replace(/\x1b\[20[01]~/g, "").replace(/\r\n?/g, "\n").replace(/\t/g, "  ");
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: as above
+	if (text === "" || text.includes("\x1b") || /[\x00-\x09\x0b-\x1f\x7f]/.test(text)) return undefined;
+	return text;
+}
+
 export function formKey(form: ChildForm, key: FormKey): FormResult {
 	const { error: _error, ...clean } = form;
 	const field = form.field;

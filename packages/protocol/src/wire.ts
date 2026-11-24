@@ -246,8 +246,12 @@ export interface UiApi {
 	steer: { params: { number?: number; nodeId?: string; text: string }; result: { steer: Steer } };
 	/** What a session open in a terminal last said: the host cannot hear those turns itself. */
 	said: { params: { nodeId: string; text: string }; result: Record<string, never> };
-	/** Take what the host has for a session open in this terminal to be told. Whoever takes it types it there. */
-	told: { params: { nodeId: string }; result: { messages: string[] } };
+	/**
+	 * Take what the host has for a session open in this terminal to be told. Whoever takes it types
+	 * it there. With `back`, lines taken that could not be typed after all are given back instead:
+	 * the session is no longer open where they were taken.
+	 */
+	told: { params: { nodeId: string; back?: string[] }; result: { messages: string[] } };
 	/** The team's server: `join <address> [name]`, `leave`, `status`. Returns text to show. */
 	server: { params: { action: string; args: string[] }; result: { text: string } };
 	shutdown: { params: Record<string, never>; result: Record<string, never> };

@@ -142,6 +142,20 @@ describe("a session a person opens in their terminal", () => {
 	});
 });
 
+describe("what a person said to a session open in a terminal", () => {
+	it("is said to it in the background when the terminal leaves before typing it", async () => {
+		const host = await start();
+		const root = await host.createRoot({ name: "root", cwd: dir });
+		await host.attachForeground(root.id, "terminal");
+		await host.steer({ nodeId: root.id, text: "use the blue one" });
+		// Only the terminal can type into a session open there: the host keeps the line for it.
+		expect(host.uiState().told).toEqual({ [root.id]: 1 });
+		host.detachForeground(root.id, "terminal");
+		await until(() => life().some((line) => line.startsWith("root prompted:") && line.includes("use the blue one")), "the line to be said in the background");
+		expect(host.uiState().told).toBeUndefined();
+	});
+});
+
 describe("the lock on a tree's state", () => {
 	const lock = (text: string): void => {
 		mkdirSync(join(dir, "state"), { recursive: true });
