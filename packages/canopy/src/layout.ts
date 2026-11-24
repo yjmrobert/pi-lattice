@@ -22,11 +22,29 @@ export interface Place {
 	leaf: boolean;
 }
 
+/** A branch that bends: where it leaves, the column it arrives in, and the row it arrives under, in dots. */
+export interface Curve {
+	ax: number;
+	ay: number;
+	bx: number;
+	top: number;
+	/** How far down all of it is moved once the tree is turned the right way up. */
+	lift: number;
+}
+
 export interface Branch {
 	/** The item the branch leads to; it is drawn in that item's colours. */
 	to: Item;
-	points: Array<[x: number, y: number]>;
+	/**
+	 * Every dot of it, from where it leaves to where it arrives. For a branch that bends they are
+	 * worked out when first asked for: a row of many items has a branch to each, as long as the row is
+	 * wide, and working out every dot of every one costs the square of their number. Drawing asks for
+	 * the dots in its window only: see `dotsIn`.
+	 */
+	readonly points: Array<[x: number, y: number]>;
 	kind: "branch" | "stem" | "twig";
+	/** The curve it follows, when its dots come from one. */
+	curve?: Curve;
 }
 
 export interface Layout {
@@ -191,20 +209,82 @@ function hash(text: string): number {
 	return h >>> 0;
 }
 
-/** A branch that leaves upward and arrives from straight below, bending in between. */
-function bend(ax: number, ay: number, bx: number, top: number): Array<[number, number]> {
-	// The last stretch is upright, so a branch never runs along the line under a label.
-	const by = Math.min(ay - 1, top + ARRIVE);
-	const k = (ay - by) * 0.55;
-	const steps = Math.max(2, Math.ceil(Math.hypot(bx - ax, by - ay) * 2.2));
-	const out: Array<[number, number]> = [];
-	for (let i = 0; i <= steps; i++) {
-		const t = i / steps;
-		const u = 1 - t;
-		out.push([u * u * u * ax + 3 * u * u * t * ax + 3 * u * t * t * bx + t * t * t * bx, u * u * u * ay + 3 * u * u * t * (ay - k) + 3 * u * t * t * (by + k) + t * t * t * by]);
+/**
+ * A branch that leaves upward and arrives from straight below, bending in between: how it is
+ * stepped through. The last stretch is upright, so a branch never runs along the line under a label.
+ */
+function stepsOf(curve: Curve): { by: number; k: number; steps: number; upright: number } {
+	const by = Math.min(curve.ay - 1, curve.top + ARRIVE);
+	const k = (curve.ay - by) * 0.55;
+	const steps = Math.max(2, Math.ceil(Math.hypot(curve.bx - curve.ax, by - curve.ay) * 2.2));
+	let upright = 0;
+	for (let y = by - 0.5; y >= curve.top; y -= 0.5) upright++;
+	return { by, k, steps, upright };
+}
+
+/** The dot of a curve at a step: along the bend, then up the last stretch. */
+function dotAt(curve: Curve, shape: { by: number; k: number; steps: number }, index: number): [number, number] {
+	const { ax, ay, bx, lift } = curve;
+	const { by, k, steps } = shape;
+	if (index > steps) return [bx, by - 0.5 * (index - steps) + lift];
+	const t = index / steps;
+	const u = 1 - t;
+	return [u * u * u * ax + 3 * u * u * t * ax + 3 * u * t * t * bx + t * t * t * bx, u * u * u * ay + 3 * u * u * t * (ay - k) + 3 * u * t * t * (by + k) + t * t * t * by + lift];
+}
+
+/** A branch along a curve. Its dots are worked out when they are first asked for. */
+function curved(to: Item, ax: number, ay: number, bx: number, top: number): Branch {
+	const curve: Curve = { ax, ay, bx, top, lift: 0 };
+	let points: Array<[number, number]> | undefined;
+	return {
+		to, kind: "branch", curve,
+		get points(): Array<[number, number]> {
+			if (!points) {
+				const shape = stepsOf(curve);
+				points = Array.from({ length: shape.steps + 1 + shape.upright }, (_unused, index) => dotAt(curve, shape, index));
+			}
+			return points;
+		},
+	};
+}
+
+/** How many dots a branch has, without working them out. */
+export function dotCount(branch: Branch): number {
+	if (!branch.curve) return branch.points.length;
+	const shape = stepsOf(branch.curve);
+	return shape.steps + 1 + shape.upright;
+}
+
+/**
+ * The dots of a branch between two columns of dots, each with its place along the whole branch.
+ * Without columns, all of them. Along its bend a curve only ever goes one way across, so the part
+ * of it between two columns is one run of steps, found without going through the others.
+ */
+export function dotsIn(branch: Branch, visit: (x: number, y: number, index: number) => void, from?: number, to?: number): void {
+	const curve = branch.curve;
+	if (!curve || from === undefined || to === undefined) {
+		branch.points.forEach(([x, y], index) => visit(x, y, index));
+		return;
 	}
-	for (let y = by - 0.5; y >= top; y -= 0.5) out.push([bx, y]);
-	return out;
+	const shape = stepsOf(curve);
+	const rising = curve.bx >= curve.ax;
+	// The first step at or past a column, going the way the curve goes.
+	const firstPast = (column: number): number => {
+		let [low, high] = [0, shape.steps + 1];
+		while (low < high) {
+			const middle = (low + high) >> 1;
+			const x = dotAt(curve, shape, middle)[0];
+			if (rising ? x >= column : x <= column) high = middle;
+			else low = middle + 1;
+		}
+		return low;
+	};
+	const [start, end] = rising ? [firstPast(from), firstPast(to + 1)] : [firstPast(to), firstPast(from - 1)];
+	for (let index = Math.max(0, start - 1); index <= Math.min(shape.steps, end); index++) {
+		const [x, y] = dotAt(curve, shape, index);
+		visit(x, y, index);
+	}
+	if (curve.bx >= from && curve.bx <= to) for (let index = shape.steps + 1; index <= shape.steps + shape.upright; index++) visit(curve.bx, dotAt(curve, shape, index)[1], index);
 }
 
 const NONE: ReadonlySet<string> = new Set();
@@ -483,7 +563,7 @@ function arrange(world: World, options: LayoutOptions, density: Density, folded:
 			const more = Math.max(0, rowAt(limb, density, shape) - raised - needs);
 			put(limb, col - spanOf(limb).stem, raised + more);
 			const place = places.get(limb.id) as Place;
-			branches.push({ to: limb, kind: "branch", points: bend(col * 2 + 1, fromY, place.col * 2 + 1, place.row * 4 + 4) });
+			branches.push(curved(limb, col * 2 + 1, fromY, place.col * 2 + 1, place.row * 4 + 4));
 			frond(item, col, bottom);
 			trunks.add(item.id);
 			return;
@@ -497,14 +577,14 @@ function arrange(world: World, options: LayoutOptions, density: Density, folded:
 		}
 		for (const limb of limbs) {
 			const place = places.get(limb.id) as Place;
-			branches.push({ to: limb, kind: "branch", points: bend(col * 2 + 1, fromY, place.col * 2 + 1, place.row * 4 + 4) });
+			branches.push(curved(limb, col * 2 + 1, fromY, place.col * 2 + 1, place.row * 4 + 4));
 		}
 		if (frondWidth(item) > 0) {
 			// A frond beside the limbs is a column like theirs: its first line is level with them, and the branch to it bends as theirs do.
 			// Lower, the branches to the limbs would cross what is written on it.
 			const bottom = -(base + (item.level + 1) * band) - raised;
 			const leaves = leavesOf(item);
-			branches.push({ to: leaves.find((leaf) => !leaf.done) ?? (leaves[0] as Item), kind: "branch", points: bend(col * 2 + 1, fromY, frondCol * 2 + 1, bottom * 4 + 5) });
+			branches.push(curved(leaves.find((leaf) => !leaf.done) ?? (leaves[0] as Item), col * 2 + 1, fromY, frondCol * 2 + 1, bottom * 4 + 5));
 			stem(item, frondCol, bottom * 4 + 5, bottom);
 			frond(item, frondCol, bottom);
 		}
@@ -514,7 +594,10 @@ function arrange(world: World, options: LayoutOptions, density: Density, folded:
 	// Turn it the right way up: headroom above the highest thing, the root near the bottom.
 	const shift = headroom - top;
 	for (const place of places.values()) place.row += shift;
-	for (const branch of branches) for (const point of branch.points) point[1] += shift * 4;
+	for (const branch of branches) {
+		if (branch.curve) branch.curve.lift += shift * 4;
+		else for (const point of branch.points) point[1] += shift * 4;
+	}
 	const rootPlace = places.get(world.root.id) as Place;
 	// Left out is what would have been drawn: under something open. What is under a folded line is in the line.
 	const hidden = new Set<string>();

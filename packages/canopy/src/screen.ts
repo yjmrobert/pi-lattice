@@ -258,10 +258,15 @@ export function shownAs(plan: Layout, item: Item | undefined): string | undefine
  * by a narrower window or by the work changing: then the line it is in is selected instead.
  */
 function settled(world: World, plan: Layout, state: CanopyState): CanopyState {
-	if (state.selected === undefined || placeOf(plan, state.selected)) return state;
-	const seen = shownAs(plan, world.items.get(state.selected));
+	if (state.selected === undefined || (state.selected !== ROOT_ID && placeOf(plan, state.selected))) return state;
+	// Nothing may stand for it either: it is finished and left out, with nothing above it. Then the
+	// first thing that is drawn is where one is, or every key would be for something that is not there.
+	const seen = shownAs(plan, world.items.get(state.selected)) ?? firstDrawn(world, plan);
 	return seen === undefined ? state : { ...state, selected: seen };
 }
+
+/** The first thing drawn, in the order the tree is read. The root is where the tree starts, not something in it. */
+const firstDrawn = (world: World, plan: Layout): string | undefined => walk(world.root).find((item) => item !== world.root && plan.places.has(item.id))?.id;
 
 /** Whether something here needs a person: an item that asks, or a folded one with something in it that does. */
 const needsSomeone = (plan: Layout, item: Item): boolean => (plan.folded.has(item.id) ? rollup(item).asks > 0 : item.asks > 0 || item.agent?.state === "asking");
@@ -433,10 +438,9 @@ function act(world: World, given: CanopyState, key: CanopyKey, width: number, he
 		const next = world.changes.find((event) => !state.walked.has(changeKey(event)));
 		const { viewing: _viewing, ...rest } = state;
 		if (!next) return keep({ ...rest, walked: new Set() }, world.changes.length > 0 ? [{ do: "seen" }, { do: "say", text: "That is everything agents changed since you looked." }] : [{ do: "say", text: "No agent has changed anything since you looked." }]);
-		// What it is on may be folded away: then the nearest thing above it that is drawn.
-		let at = world.items.get(`#${next.issue}`);
-		while (at && !plan.places.has(at.id) && at.parent) at = at.parent;
-		return keep(frame({ ...rest, selected: at?.id ?? state.selected, walked: new Set(state.walked).add(changeKey(next)), viewing: changeKey(next) }, plan, width, height));
+		// What it is on may be folded away: then the nearest thing above it that is drawn. Left out altogether, one stays where one is.
+		const at = shownAs(plan, world.items.get(`#${next.issue}`));
+		return keep(frame({ ...rest, selected: at ?? state.selected, walked: new Set(state.walked).add(changeKey(next)), viewing: changeKey(next) }, plan, width, height));
 	}
 	// Say something about what is selected, to whatever tends it. It is the one way a person changes the work.
 	if (key === " ") {
@@ -451,7 +455,7 @@ function act(world: World, given: CanopyState, key: CanopyKey, width: number, he
 	}
 	const arrow = ARROWS[key];
 	if (arrow) {
-		if (!here) return go(world.root.children[0]?.id);
+		if (!here) return go(firstDrawn(world, plan));
 		const to = step(plan, state, here, arrow);
 		if (to === undefined) return keep(state);
 		// Leaving downward is remembered on what one arrives at, so that up from there comes back.
@@ -469,7 +473,8 @@ function act(world: World, given: CanopyState, key: CanopyKey, width: number, he
 	if (key === "tab") {
 		// The next thing that needs someone, in the order the tree is read: what is this person's first.
 		// A folded item stands for what in it needs someone; opening it is how one goes on in.
-		const drawn = walk(world.root).filter((other) => plan.places.has(other.id) && other.level >= 0 && needsSomeone(plan, other));
+		// A session that helps on an item is on a line under it, and asks like any other.
+		const drawn = walk(world.root).filter((other) => other.level >= 0 && needsSomeone(plan, other) && placeOf(plan, other.id));
 		const mine = (other: Item): boolean => (other.agent?.owner ?? other.owner) === world.me;
 		const asking = [...drawn.filter(mine), ...drawn.filter((other) => !mine(other))];
 		const at = asking.findIndex((other) => other.id === state.selected);
@@ -1035,6 +1040,21 @@ export interface Moving {
 	morph?: { from: Layout; camera: { col: number; row: number }; t: number };
 }
 
+/**
+ * The state after the work changed under it. What is selected may have moved: taken, finished,
+ * put before something else. If it was in the window and no longer is, the window goes with
+ * it. A window the person moved away from what is selected stays where they put it.
+ */
+export function followed(before: World, after: World, state: CanopyState, width: number, height: number): CanopyState {
+	if (before === after || !state.framed || state.selected === undefined || width < FLOOR.cols || height < FLOOR.rows) return state;
+	const plan = planOf(after, state, width, height);
+	const [was, now] = [placeOf(planOf(before, state, width, height), state.selected), placeOf(plan, state.selected)];
+	if (!was || !now || (was.col === now.col && was.row === now.row)) return state;
+	const win = windowOf(state, width, height);
+	const within = (place: Spot): boolean => place.col >= state.camera.col && place.col < state.camera.col + win.width && place.row >= state.camera.row && place.row < state.camera.row + win.height;
+	return within(was) && !within(now) ? frame(state, plan, width, height) : state;
+}
+
 /** The state with its window placed on the tree, as it is drawn. */
 export const placed = (world: World, state: CanopyState, width: number, height: number): CanopyState => (state.framed || width < FLOOR.cols || height < FLOOR.rows ? state : frame(state, planOf(world, state, width, height), width, height, true));
 
@@ -1076,7 +1096,8 @@ function compose(world: World, state: CanopyState, width: number, height: number
 	const morph = moving?.morph;
 	const drawn = morph ? blend(morph.from, plan, morph.t) : plan;
 	const camera = morph ? { col: Math.round(morph.camera.col + (view.camera.col - morph.camera.col) * ease(morph.t)), row: Math.round(morph.camera.row + (view.camera.row - morph.camera.row) * ease(morph.t)) } : view.camera;
-	const tree = paint(world, drawn, { frame: tick, letters: view.letters, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(moving?.away ? { away: true } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
+	// Only what the window shows is drawn: the tree may be many times its width.
+	const tree = paint(world, drawn, { frame: tick, letters: view.letters, window: { col: camera.col, row: camera.row, width: win.width, height: win.height + FOOTER }, ...(moving ? { animations: moving.animations, now: moving.now } : {}), ...(view.selected ? { selected: view.selected } : {}), ...(moving?.away ? { away: true } : {}), ...(view.spotlight ? { spotlight: view.spotlight } : {}) });
 	const blink = tick === 0 || tick % BEAT < BEAT / 2;
 	for (const edge of morph ? [] : edges(plan, view, win)) tree.text(view.camera.col + edge.col, view.camera.row + edge.row, edge.text, { fg: COLOR.attention, bold: true, level: blink ? 1 : 0.45 });
 	const under = bandOf(world, view, win, moving, tick);

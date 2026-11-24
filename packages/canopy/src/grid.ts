@@ -144,19 +144,35 @@ export const styled = (text: string, style: Style): string => {
 	return code === "" ? text : `${code}${text}\x1b[0m`;
 };
 
+/** A part of a grid, in cells. */
+export interface Window {
+	col: number;
+	row: number;
+	width: number;
+	height: number;
+}
+
 export class Grid {
 	readonly width: number;
 	readonly height: number;
 	private readonly cells: Cell[];
+	/** The part of the grid that is kept. What is written outside it is dropped, as what is written outside the grid is. */
+	private readonly kept: Window;
 
-	constructor(width: number, height: number) {
+	/** With `only`, a grid that keeps nothing but that part of itself: for drawing a window on something far larger than the window. */
+	constructor(width: number, height: number, only?: Window) {
 		this.width = Math.max(1, Math.ceil(width));
 		this.height = Math.max(1, Math.ceil(height));
-		this.cells = Array.from({ length: this.width * this.height }, () => ({ text: undefined, style: {}, dots: 0, dotStyle: {}, weight: -1 }));
+		const [col, row] = only ? [Math.max(0, Math.floor(only.col)), Math.max(0, Math.floor(only.row))] : [0, 0];
+		this.kept = only
+			? { col, row, width: Math.max(0, Math.min(this.width, Math.ceil(only.col + only.width)) - col), height: Math.max(0, Math.min(this.height, Math.ceil(only.row + only.height)) - row) }
+			: { col: 0, row: 0, width: this.width, height: this.height };
+		this.cells = Array.from({ length: this.kept.width * this.kept.height }, () => ({ text: undefined, style: {}, dots: 0, dotStyle: {}, weight: -1 }));
 	}
 
 	private at(col: number, row: number): Cell | undefined {
-		return col >= 0 && row >= 0 && col < this.width && row < this.height ? this.cells[row * this.width + col] : undefined;
+		const [c, r] = [col - this.kept.col, row - this.kept.row];
+		return c >= 0 && r >= 0 && c < this.kept.width && r < this.kept.height ? this.cells[r * this.kept.width + c] : undefined;
 	}
 
 	/** Before a cell is written over: a character two cells wide that loses one of them is gone from the other too. */
@@ -245,14 +261,18 @@ export class Grid {
 		return Array.from({ length: height }, (_unused, r) => {
 			let line = "";
 			let open = "";
+			/** Whether the colour that is open draws a background: in 24-bit colour or in one of the 256. */
+			let ground = false;
 			for (let c = 0; c < width; c++) {
 				const cell = this.at(col + c, row + r);
 				const text = this.shown(col + c, row + r, c === 0, c === width - 1);
-				// A blank carries on whatever colour is open, unless it has a background of its own to draw or to end.
-				const code = cell?.text !== undefined ? sgr(cell.style, fade) : cell && cell.dots > 0 ? sgr(cell.dotStyle, fade) : open.includes("48;2") ? "" : open;
+				const style = cell?.text !== undefined ? cell.style : cell && cell.dots > 0 ? cell.dotStyle : undefined;
+				// A blank carries on whatever colour is open, unless that has a background, which ends where what it is behind does.
+				const code = style ? sgr(style, fade) : ground ? "" : open;
 				if (code !== open) {
 					line += open === "" ? code : `\x1b[0m${code}`;
 					open = code;
+					ground = style?.bg !== undefined;
 				}
 				line += text;
 			}

@@ -3,7 +3,7 @@
  * says so and takes that message itself, typed or pasted, instead of Pi opening on the chat.
  * Everything here is a function of what is typed and the size: no Pi.
  */
-import { cells, Grid, type Style } from "./grid.ts";
+import { cellWidth, cells, Grid, graphemes, type Style } from "./grid.ts";
 import { spin } from "./paint.ts";
 import { COLOR } from "./palette.ts";
 
@@ -57,15 +57,19 @@ function run(grid: Grid, col: number, row: number, parts: Array<[text: string, s
 export function wrapMessage(text: string, width: number): string[] {
 	const rows: string[] = [];
 	for (const line of text.split("\n")) {
-		let rest = [...line];
+		let rest = graphemes(line);
 		if (rest.length === 0) rows.push("");
 		while (rest.length > 0) {
-			if (rest.length <= width) {
+			// As many characters as the row has cells for: one of East Asia's takes two, so a row of them holds half as many.
+			let fits = 0;
+			for (let used = 0; fits < rest.length && used + cellWidth(rest[fits] as string) <= width; fits++) used += cellWidth(rest[fits] as string);
+			if (fits === rest.length) {
 				rows.push(rest.join(""));
 				break;
 			}
-			const space = rest.slice(0, width + 1).lastIndexOf(" ");
-			const cut = space > 0 ? space : width;
+			fits = Math.max(1, fits); // a character wider than the row is still written
+			const space = rest.slice(0, fits + 1).lastIndexOf(" ");
+			const cut = space > 0 ? space : fits;
 			rows.push(rest.slice(0, cut).join(""));
 			rest = rest.slice(space > 0 ? cut + 1 : cut);
 		}

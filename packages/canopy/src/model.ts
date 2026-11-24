@@ -227,6 +227,9 @@ function finish(root: Item, items: Map<string, Item>, names: string[], online: R
 		}
 	};
 	count(root);
+	// Only the first helpers on an item are written under it: one that asks a person is among them, ahead of those that do not.
+	const asks = (helper: Item): number => (helper.asks > 0 || helper.agent?.state === "asking" ? 0 : 1);
+	for (const item of items.values()) if (item.buds.length > 1) item.buds.sort((a, b) => asks(a) - asks(b));
 	const people: Person[] = names.map((name, index) => ({ name, me: name === me, online: name === me || online.get(name) !== false, index, working: 0, asking: 0, owned: 0 }));
 	const byName = new Map(people.map((person) => [person.name, person]));
 	for (const item of items.values()) {

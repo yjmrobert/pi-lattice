@@ -16,7 +16,7 @@ import { BEAT } from "./paint.ts";
 import { type Appearance, COLOR, useColorDepth, usePalette } from "./palette.ts";
 import type { Layout } from "./layout.ts";
 import { reordered } from "./order.ts";
-import { anchorOf, type Asking, type CanopyAction, type CanopyKey, type CanopyMouse, type CanopyState, initial, interpret, interpretMouse, placed, planOf, render, sessionFrame } from "./screen.ts";
+import { anchorOf, type Asking, type CanopyAction, type CanopyKey, type CanopyMouse, type CanopyState, followed, initial, interpret, interpretMouse, placed, planOf, render, sessionFrame } from "./screen.ts";
 
 /**
  * How often the canopy is drawn while something moves. A frame costs about a millisecond to make,
@@ -282,6 +282,8 @@ export default function (pi: ExtensionAPI) {
 				// Something changed place among its siblings: the tree moves there, as it does when an item is folded.
 				// So it does when the work changes what is folded to fit: a session started somewhere opens the way to it.
 				if (motion !== "off" && !morph && (reordered(before, world, state.order) || !sameFolds(planOf(before, state, width, place.height()), planOf(world, state, width, place.height())))) morph = { from: planOf(before, state, width, place.height()), camera: state.camera, start: now };
+				// What is selected may have been moved by the work, out of the window: the window goes with it.
+				state = followed(before, world, state, width, place.height());
 				// What was selected may be gone: archived, or handed to someone whose tree is not shown.
 				// Nothing may be selected yet either: the canopy was put in the layout before there was a tree.
 				if (!state.selected || !world.items.has(state.selected)) {

@@ -4,8 +4,8 @@
  * and amber blinks. No Pi, no terminal.
  */
 import { type Animation, centre, progress, trail } from "./animate.ts";
-import { cells, Grid, type Style } from "./grid.ts";
-import { chipOf, cut, type Layout, type Place, rollup } from "./layout.ts";
+import { cells, Grid, type Style, type Window } from "./grid.ts";
+import { chipOf, cut, dotCount, dotsIn, type Layout, type Place, rollup } from "./layout.ts";
 import type { Agent, Item, World } from "./model.ts";
 import { COLOR, colorOf, letterOf } from "./palette.ts";
 
@@ -35,6 +35,11 @@ export interface PaintOptions {
 	now?: number;
 	/** Put each owner's letter beside their items, for reading without colour. */
 	letters?: boolean;
+	/**
+	 * The part of the tree that will be shown, in cells. Only that part is drawn: a tree can be
+	 * many times wider than its window, and drawing all of it for every frame is what makes a wide one slow.
+	 */
+	window?: Window;
 }
 
 const agentGlyph = (agent: Agent, frame: number): string =>
@@ -44,7 +49,9 @@ const agentGlyph = (agent: Agent, frame: number): string =>
 const alive = (item: Item): boolean => item.agent?.state === "working" || item.children.some(alive) || item.buds.some(alive);
 
 export function paint(world: World, plan: Layout, options: PaintOptions = {}): Grid {
-	const grid = new Grid(plan.width, plan.height);
+	const grid = new Grid(plan.width, plan.height, options.window);
+	// In dots, with room for a thick branch and for a dot that rounds into the window from beside it.
+	const [fromDot, toDot] = options.window ? [options.window.col * 2 - 3, (options.window.col + options.window.width) * 2 + 3] : [undefined, undefined];
 	const frame = options.frame ?? 0;
 	const blink = frame % BEAT < BEAT / 2;
 	const lit = (item: Item): boolean => !options.spotlight || item.owner === options.spotlight;
@@ -76,14 +83,14 @@ export function paint(world: World, plan: Layout, options: PaintOptions = {}): G
 		const grown = branch.kind === "stem" ? 1 : (growing.get(item.id) ?? 1);
 		const sweep = branch.kind === "stem" ? undefined : sweeping.get(item.id);
 		const old: Style | undefined = sweep ? { fg: lit(item) ? colorOf(world, sweep.from) : COLOR.faint, level: style.level ?? 1 } : undefined;
-		const count = branch.points.length;
-		branch.points.forEach(([x, y], index) => {
+		const count = dotCount(branch);
+		dotsIn(branch, (x, y, index) => {
 			if (index > grown * count) return;
 			// The new colour spreads from the item back toward its parent.
 			const paintAs = old && index < (1 - (sweep?.t ?? 1)) * count ? old : style;
 			grid.plot(x, y, paintAs, weight);
 			if (thick) grid.plot(x + 1, y, paintAs, weight);
-		});
+		}, fromDot, toDot);
 	}
 
 	// What waits on what: a dashed arc between the two, in no person's colour. In order, two that are

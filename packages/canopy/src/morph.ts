@@ -74,9 +74,11 @@ export function blend(from: Layout, to: Layout, progress: number): Layout {
 		const out = was ? undefined : home(branch.to, from.places);
 		const source: ReadonlyArray<Point> = was?.points ?? (out ? [centre(out)] : branch.points);
 		const count = Math.max(source.length, branch.points.length);
-		branches.push({ ...branch, points: Array.from({ length: count }, (_unused, index) => {
+		// Between two shapes a branch is its dots, part of the way from one to the other: no curve of its own.
+		const target = branch.points;
+		branches.push({ to: branch.to, kind: branch.kind, points: Array.from({ length: count }, (_unused, index) => {
 			const a = along(source, count, index);
-			const b = along(branch.points, count, index);
+			const b = along(target, count, index);
 			return [mix(a[0], b[0]), mix(a[1], b[1])] as Point;
 		}) });
 	}
@@ -85,7 +87,7 @@ export function blend(from: Layout, to: Layout, progress: number): Layout {
 		const into = home(branch.to, to.places);
 		if (!into) continue;
 		const [x, y] = centre(into);
-		branches.push({ ...branch, points: branch.points.map((point) => [mix(point[0], x), mix(point[1], y)] as Point) });
+		branches.push({ to: branch.to, kind: branch.kind, points: branch.points.map((point) => [mix(point[0], x), mix(point[1], y)] as Point) });
 	}
 
 	const follows = new Map([...to.follows].filter(([id, on]) => places.has(id) && places.has(on.id)));
