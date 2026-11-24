@@ -5,7 +5,7 @@
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -28,6 +28,7 @@ import {
 	latticeHome,
 	type Limits,
 	limitsOf,
+	printable,
 	listSetting,
 	newNodeId,
 	nodeFacts,
@@ -250,6 +251,80 @@ export function tailOf(messages: RpcRecord[], limit: number): string[] {
 const resultKey = (issue: Issue): string => `${issue.number}:${issue.result?.at ?? 0}`;
 const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
 
+/**
+ * When a process started, as the kernel counts it, where that can be read (Linux). A pid is
+ * given to another process once its own has ended: with this, the host that took a lock is
+ * told from whatever got its number later.
+ */
+function startedAt(pid: number): string | undefined {
+	try {
+		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+		return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+	} catch {
+		return undefined;
+	}
+}
+
+/** Whether the host that wrote a lock is still running. */
+function lockHeld(text: string): number | undefined {
+	const [first = "", started = ""] = text.split("\n");
+	const pid = Number(first.trim());
+	if (pid === process.pid || !Number.isInteger(pid) || pid <= 0 || !isProcessAlive(pid)) return undefined;
+	const now = startedAt(pid);
+	return started.trim() === "" || now === undefined || now === started.trim() ? pid : undefined;
+}
+
+/**
+ * Take the lock on a state directory, or throw when a live host has it. The lock is made with
+ * a create that fails if it is there, so of two hosts started at once only one has it. A lock
+ * left by a host that is gone is cleared away by one host at a time, and only if it is still
+ * the lock that was read: a lock a live host has just made is never the one removed.
+ */
+function takeLock(lockPath: string, stateDir: string): void {
+	const mine = `${process.pid}\n${startedAt(process.pid) ?? ""}`;
+	const clearing = `${lockPath}.clearing`;
+	for (let attempt = 0; attempt < 200; attempt++) {
+		try {
+			writeFileSync(lockPath, mine, { flag: "wx" });
+			return;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
+		let text: string;
+		try {
+			text = readFileSync(lockPath, "utf8");
+		} catch {
+			continue; // gone since: try again
+		}
+		if (Number(text.split("\n")[0]?.trim()) === process.pid) {
+			writeFileSync(lockPath, mine);
+			return;
+		}
+		const holder = lockHeld(text);
+		if (holder !== undefined) throw new Error(`Another lattice host (pid ${holder}) is already running for ${stateDir}.`);
+		try {
+			writeFileSync(clearing, String(process.pid), { flag: "wx" });
+		} catch {
+			// Another host is clearing it away. One that stopped while doing so is not waited for long.
+			try {
+				if (Date.now() - statSync(clearing).mtimeMs > 5000) rmSync(clearing, { force: true });
+			} catch {
+				// Gone since.
+			}
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+			continue;
+		}
+		try {
+			if (readFileSync(lockPath, "utf8") === text) rmSync(lockPath, { force: true });
+		} catch {
+			// Gone since.
+		} finally {
+			rmSync(clearing, { force: true });
+		}
+	}
+	throw new Error(`Could not take the lock on ${stateDir}: other hosts keep taking and leaving it.`);
+}
+
 function isProcessAlive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -270,6 +345,12 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private readonly server: SocketServer;
 	private readonly runtimes = new Map<string, Runtime>();
 	private readonly starting = new Map<string, Promise<void>>();
+	/** Sessions are let in one at a time: counting what runs and joining it must be one step, or several starting at once all find room. */
+	private admitting: Promise<unknown> = Promise.resolve();
+	/** Sessions being given something to do, by how many are giving it: not idle, though nothing shows it yet. */
+	private readonly prompting = new Map<string, number>();
+	/** Sessions a person's terminal is taking: nothing else starts them meanwhile. */
+	private readonly attaching = new Set<string>();
 	private readonly pinned = new Set<string>();
 	private remoteRouter: ((envelope: Envelope, recipient: NodeMeta) => void) | undefined;
 	private readonly uiToken = randomBytes(24).toString("hex");
@@ -369,13 +450,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	static async start(options: HostOptions): Promise<LatticeHost> {
 		const lockPath = join(resolve(options.stateDir), "host.lock");
 		mkdirSync(dirname(lockPath), { recursive: true });
-		if (existsSync(lockPath)) {
-			const pid = Number(readFileSync(lockPath, "utf8").trim());
-			if (pid !== process.pid && Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) {
-				throw new Error(`Another lattice host (pid ${pid}) is already running for ${resolve(options.stateDir)}.`);
-			}
-		}
-		writeFileSync(lockPath, String(process.pid));
+		takeLock(lockPath, resolve(options.stateDir));
 		// The state directory usually sits inside a checkout; keep it out of `git status` there.
 		const ignore = join(resolve(options.stateDir), ".gitignore");
 		if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
@@ -502,8 +577,8 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			id, parentId: null, rootId: id, kind: spec.kind ?? "feature", name: clean(spec.name, id), brief: spec.brief ?? "",
 			fragments: rolesFor(this.settings(), "root", spec.fragments), cwd: resolve(spec.cwd), workspace: "shared", branch: null,
 		});
-		await this.ensureRunning(node.id);
 		if (node.brief.trim() !== "") await this.prompt(node.id, node.brief);
+		else await this.ensureRunning(node.id);
 		return this.must(node.id);
 	}
 
@@ -525,11 +600,12 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		if (depthOf(all, parentId) + 1 > this.limits.maxDepth) {
 			throw new Error(`Not spawned: the tree is limited to ${this.limits.maxDepth} levels below the root. Do this work in the current session, or ask the user to raise the limit.`);
 		}
-		if (childrenOf(all, parentId).length >= this.limits.maxChildren) {
+		// What is archived is put away: it is not counted, or archiving would make no room.
+		if (childrenOf(all, parentId).filter((node) => !node.archived).length >= this.limits.maxChildren) {
 			throw new Error(`Not spawned: this session already has ${this.limits.maxChildren} children, the limit. Reuse an existing child or ask the user to raise the limit.`);
 		}
 		// Planned work has no session, so it does not count against the number of sessions. It is still bounded.
-		const tree = treeOf(all, parent.rootId);
+		const tree = treeOf(all, parent.rootId).filter((node) => !node.archived);
 		if (planned && tree.filter(isPlanned).length >= this.limits.maxNodes * PLANNED_PER_SESSION) {
 			throw new Error(`Not planned: the tree already has ${this.limits.maxNodes * PLANNED_PER_SESSION} planned items, the limit. Start or archive some first.`);
 		}
@@ -544,7 +620,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		const typed = spec.issue !== undefined && work ? rolesOfType(work.scheme, work.issues.find((entry) => entry.number === spec.issue)?.type ?? "") : [];
 		// Every child is told how to talk to the tree and how to answer its parent, whatever else it was given.
 		const fragments = rolesFor(this.settings(), "child", chosen, typed);
-		const model = typeof spec.model === "string" && spec.model.trim() !== "" ? spec.model.trim() : undefined;
+		const model = typeof spec.model === "string" && spec.model.trim() !== "" ? clean(spec.model, "") || undefined : undefined;
 		const waitsOn = this.resolveWaitsOn(all, parent, spec.waitsOn);
 		const held = planned || waitsOn.some((other) => !other.done);
 
@@ -563,7 +639,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			}
 		}
 		const node = this.insert({
-			id, parentId, rootId: parent.rootId, kind: (spec.kind ?? "task").trim() || "task", name, brief: spec.brief, fragments, cwd, workspace, branch,
+			id, parentId, rootId: parent.rootId, kind: clean(String(spec.kind ?? "task"), "task"), name, brief: spec.brief, fragments, cwd, workspace, branch,
 			...(model ? { model } : {}),
 			...(waitsOn.some((other) => !other.done) ? { waitsOn: waitsOn.map((other) => other.id) } : {}),
 			...(planned ? { planned: true } : {}),
@@ -592,10 +668,15 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		// It owes its parent an answer from the moment it has the brief.
 		this.owing.set(node.id, { reminded: false });
 		void this.noteWork(node.issue, "start");
-		await this.ensureRunning(node.id);
-		await this.prompt(node.id, this.template("brief", {
-			"parent.name": parent?.name ?? "", "parent.id": parent?.id ?? "", name: node.name, kind: node.kind, branch: node.branch, waited: waited.map((name) => `"${name}"`).join(", "), brief: node.brief,
-		}));
+		try {
+			await this.prompt(node.id, this.template("brief", {
+				"parent.name": parent?.name ?? "", "parent.id": parent?.id ?? "", name: node.name, kind: node.kind, branch: node.branch, waited: waited.map((name) => `"${name}"`).join(", "), brief: node.brief,
+			}));
+		} catch (error) {
+			// It never had the brief, so it owes nothing: left as owing, its parent would be taken to be waiting on it for ever.
+			this.owing.delete(node.id);
+			throw error;
+		}
 	}
 
 	/**
@@ -671,7 +752,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			const all = this.store.listNodes();
 			const waited = early && waitingFor(all, node).length > 0 ? [] : (node.waitsOn ?? []).flatMap((other) => all.find((candidate) => candidate.id === other)?.name ?? []);
 			try {
-				if (isPlanned(node) && treeOf(all, node.rootId).filter((other) => !isPlanned(other)).length >= this.limits.maxNodes) {
+				if (isPlanned(node) && treeOf(all, node.rootId).filter((other) => !isPlanned(other) && !other.archived).length >= this.limits.maxNodes) {
 					throw new Error(`the tree already has ${this.limits.maxNodes} sessions, the limit`);
 				}
 				if (node.workspace === "worktree" && !node.branch) {
@@ -747,11 +828,13 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	}
 
 	/** Make sure a node's session process is running and connected. Starts or resumes it if needed. */
-	ensureRunning(id: string): Promise<void> {
+	ensureRunning(id: string, forTerminal = false): Promise<void> {
 		const runtime = this.runtimes.get(id);
 		if (runtime) return runtime.connected;
 		const inFlight = this.starting.get(id);
 		if (inFlight) return inFlight;
+		// One session file is driven by one process: while a terminal is taking it, nothing else starts it.
+		if (this.attaching.has(id) && !forTerminal) return Promise.reject(new Error(`"${this.store.getNode(id)?.name ?? id}" is being opened in a terminal.`));
 		const started = this.startNode(id).finally(() => this.starting.delete(id));
 		this.starting.set(id, started);
 		return started;
@@ -759,49 +842,62 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 
 	private async startNode(id: string): Promise<void> {
 		if (this.stopped) throw new Error("The lattice host is shutting down.");
-		const node = this.must(id);
-		if (node.owner !== this.owner) {
-			throw new Error(`"${node.name}" is owned by ${node.owner} and runs on their machine. You can see it here, but not run it.`);
+		const owner = this.must(id);
+		if (owner.owner !== this.owner) {
+			throw new Error(`"${owner.name}" is owned by ${owner.owner} and runs on their machine. You can see it here, but not run it.`);
 		}
-		await this.makeRoom(id);
+		const { proc, connected, failConnect } = await this.admit(async () => {
+			await this.makeRoom(id);
+			if (this.stopped) throw new Error("The lattice host is shutting down.");
+			// From here to the session being counted among those running, nothing waits: the next one let in counts it.
+			const node = this.must(id);
+			const token = randomBytes(24).toString("hex");
+			const sessionDir = join(this.stateDir, "sessions", id);
+			mkdirSync(sessionDir, { recursive: true });
+			const launch = sessionLaunch(node, this.settings());
+			const args = [
+				...(this.options.piArgs ?? []),
+				...launch.args,
+				...(this.options.extensionPaths ?? []).flatMap((path) => ["-e", path]),
+				"--session-dir", sessionDir,
+			];
+			if (node.sessionFile && existsSync(node.sessionFile)) args.push("--session", node.sessionFile);
+			else if (existsSync(this.adoptPath(id))) args.push("--fork", this.adoptPath(id), "--name", node.name);
+			else args.push("--name", node.name);
 
-		const token = randomBytes(24).toString("hex");
-		const sessionDir = join(this.stateDir, "sessions", id);
-		mkdirSync(sessionDir, { recursive: true });
-		const launch = sessionLaunch(node, this.settings());
-		const args = [
-			...(this.options.piArgs ?? []),
-			...launch.args,
-			...(this.options.extensionPaths ?? []).flatMap((path) => ["-e", path]),
-			"--session-dir", sessionDir,
-		];
-		if (node.sessionFile && existsSync(node.sessionFile)) args.push("--session", node.sessionFile);
-		else if (existsSync(this.adoptPath(id))) args.push("--fork", this.adoptPath(id), "--name", node.name);
-		else args.push("--name", node.name);
+			const proc = new PiProcess({
+				command: this.options.piCommand ?? (process.env.LATTICE_PI_BIN ? [process.env.LATTICE_PI_BIN] : ["pi"]),
+				args,
+				cwd: existsSync(node.cwd) ? node.cwd : process.cwd(),
+				// LATTICE_HEADLESS tells the pane extension it is inside a host-run session and must stay out of the way.
+				env: { ...process.env, ...this.options.env, ...launch.env, ...assignmentToEnv(this.assignment(node, token)), LATTICE_HEADLESS: "1" },
+			});
+			let markConnected!: () => void;
+			let failConnect!: (error: Error) => void;
+			const connected = new Promise<void>((resolveConnected, rejectConnected) => {
+				markConnected = resolveConnected;
+				failConnect = rejectConnected;
+			});
+			connected.catch(() => {});
+			const runtime: Runtime = {
+				proc, token, channels: new Map(), dialogs: new Map(), streaming: false, inflight: new Set(), lastActive: Date.now(), recent: [], recentAt: 0, connected, markConnected, failConnect,
+			};
+			this.runtimes.set(id, runtime);
+			this.update(id, { status: "starting" });
 
-		const proc = new PiProcess({
-			command: this.options.piCommand ?? (process.env.LATTICE_PI_BIN ? [process.env.LATTICE_PI_BIN] : ["pi"]),
-			args,
-			cwd: existsSync(node.cwd) ? node.cwd : process.cwd(),
-			// LATTICE_HEADLESS tells the pane extension it is inside a host-run session and must stay out of the way.
-			env: { ...process.env, ...this.options.env, ...launch.env, ...assignmentToEnv(this.assignment(node, token)), LATTICE_HEADLESS: "1" },
+			proc.on("event", (event: RpcRecord, seq: number) => this.onSessionEvent(id, runtime, event, seq));
+			proc.on("exit", (info: ExitInfo) => this.onExit(id, runtime, info));
+			try {
+				proc.start();
+			} catch (error) {
+				// There is no process, so nothing will ever say it ended: left among those running it
+				// would hold a place for good, and making room for the next one would never finish.
+				if (this.runtimes.get(id) === runtime) this.runtimes.delete(id);
+				this.update(id, { status: "failed" });
+				throw new Error(`Pi could not be started: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			return { proc, connected, failConnect };
 		});
-		let markConnected!: () => void;
-		let failConnect!: (error: Error) => void;
-		const connected = new Promise<void>((resolveConnected, rejectConnected) => {
-			markConnected = resolveConnected;
-			failConnect = rejectConnected;
-		});
-		connected.catch(() => {});
-		const runtime: Runtime = {
-			proc, token, channels: new Map(), dialogs: new Map(), streaming: false, inflight: new Set(), lastActive: Date.now(), recent: [], recentAt: 0, connected, markConnected, failConnect,
-		};
-		this.runtimes.set(id, runtime);
-		this.update(id, { status: "starting" });
-
-		proc.on("event", (event: RpcRecord, seq: number) => this.onSessionEvent(id, runtime, event, seq));
-		proc.on("exit", (info: ExitInfo) => this.onExit(id, runtime, info));
-		proc.start();
 
 		const timeout = setTimeout(
 			() => failConnect(new Error(`session did not connect within ${this.options.startTimeoutMs ?? 30_000} ms. ${proc.stderrTail.trim().slice(-400)}`)),
@@ -817,6 +913,13 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		}
 	}
 
+	/** Run one admission at a time, in the order asked. */
+	private admit<T>(work: () => Promise<T>): Promise<T> {
+		const run = this.admitting.then(work, work);
+		this.admitting = run.catch(() => {});
+		return run;
+	}
+
 	/** What a session needs to speak as a node, whether the host starts it or a person opens it. */
 	private assignment(node: NodeMeta, token: string): HostAssignment {
 		return {
@@ -825,17 +928,31 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		};
 	}
 
-	/** Enforce the cap on running sessions by putting the least recently active idle one to sleep. */
+	/**
+	 * Enforce the cap on running sessions by putting the least recently active idle one to sleep.
+	 * A session that is still starting is neither idle nor busy yet: it was started to be given
+	 * something, so it is waited for, never stopped to make room for the next.
+	 */
 	private async makeRoom(forId: string): Promise<void> {
-		const headless = (): number => [...this.runtimes.values()].filter((runtime) => runtime.proc).length;
-		while (headless() >= this.limits.maxRunning) {
-			const idle = [...this.runtimes.entries()]
-				.filter(([id, runtime]) => runtime.proc && id !== forId && !this.pinned.has(id) && !runtime.streaming && runtime.dialogs.size === 0 && this.store.unacked(id).length === 0)
+		const headless = (): Array<[string, Runtime]> => [...this.runtimes.entries()].filter(([, runtime]) => runtime.proc);
+		while (headless().length >= this.limits.maxRunning) {
+			const others = headless().filter(([id]) => id !== forId);
+			const idle = others
+				.filter(([id, runtime]) => runtime.channels.has("a2a") && !this.pinned.has(id) && !this.prompting.has(id) && !runtime.streaming && runtime.dialogs.size === 0 && this.store.unacked(id).length === 0)
 				.sort(([, a], [, b]) => a.lastActive - b.lastActive)[0];
-			if (!idle) {
+			if (idle) {
+				await this.sleep(idle[0]);
+				// Its process ending is what takes it off the list. One with no process to end is taken off here.
+				if (this.runtimes.get(idle[0]) === idle[1]) this.runtimes.delete(idle[0]);
+				continue;
+			}
+			const starting = others.filter(([, runtime]) => !runtime.channels.has("a2a") && !runtime.proc?.exited);
+			if (starting.length === 0) {
 				throw new Error(`${this.limits.maxRunning} sessions are already running and none is idle. Wait for one to finish, or raise the limit.`);
 			}
-			await this.sleep(idle[0]);
+			await Promise.race(starting.map(([, runtime]) => runtime.connected.then(() => {}, () => {})));
+			// It connected and is about to be given what it was started for: let that begin before looking again.
+			await new Promise<void>((resolveSoon) => setImmediate(resolveSoon));
 		}
 	}
 
@@ -1020,7 +1137,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	private wakeQueued(): void {
 		if (this.stopped) return;
 		for (const id of this.store.recipientsWithUnacked()) {
-			if (this.runtimes.has(id) || this.starting.has(id)) continue;
+			if (this.runtimes.has(id) || this.starting.has(id) || this.attaching.has(id)) continue;
 			const node = this.store.getNode(id);
 			if (!node || node.status === "failed") continue;
 			this.wake(id).catch(() => {
@@ -1059,31 +1176,45 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 			const names = waitingFor(this.store.listNodes(), node).map((other) => `"${other.name}"`).join(", ");
 			throw new Error(`"${node.name}" has not started: it waits on ${names || "sessions that have finished, and starts in a moment"}. To start it now, press s on it in the pane or run /lattice start.`);
 		}
-		await this.starting.get(id)?.catch(() => {});
-		let runtime = this.runtimes.get(id);
-		if (runtime?.foreground && runtime.foreground !== clientId) throw new Error(`"${node.name}" is already open in another terminal.`);
-		let wasWorking = false;
-		if (runtime?.proc) {
-			wasWorking = runtime.streaming;
-			runtime.interrupted = true;
-			await runtime.proc.request({ type: "abort" }).catch(() => {});
-			await runtime.proc.stop();
-			runtime = undefined;
-		}
-		node = this.must(id);
-		if (!node.sessionFile || !existsSync(node.sessionFile)) {
-			// The node has never run here (new, or just taken over from a peer): run it once so its session exists.
-			await this.ensureRunning(id);
-			await this.sleep(id);
+		if (this.attaching.has(id)) throw new Error(`"${node.name}" is being opened in another terminal.`);
+		// Mail that comes while its background copy is stopping must not start another one: the
+		// terminal's session would then share the session file with it. Nothing else starts it until this is done.
+		this.attaching.add(id);
+		try {
+			await this.starting.get(id)?.catch(() => {});
+			let runtime = this.runtimes.get(id);
+			if (runtime?.foreground && runtime.foreground !== clientId) throw new Error(`"${node.name}" is already open in another terminal.`);
+			let wasWorking = false;
+			if (runtime?.proc) {
+				wasWorking = runtime.streaming;
+				runtime.interrupted = true;
+				await runtime.proc.request({ type: "abort" }).catch(() => {});
+				await runtime.proc.stop();
+				runtime = undefined;
+			}
 			node = this.must(id);
-			if (!node.sessionFile) throw new Error(`"${node.name}" has no session to open yet.`);
+			if (!node.sessionFile || !existsSync(node.sessionFile)) {
+				// The node has never run here (new, or just taken over from a peer): run it once so its session exists.
+				await this.ensureRunning(id, true);
+				await this.sleep(id);
+				node = this.must(id);
+				if (!node.sessionFile) throw new Error(`"${node.name}" has no session to open yet.`);
+			}
+			const left = this.runtimes.get(id);
+			if (left?.proc) {
+				// Still listed after its process was stopped: there is nothing left to end it.
+				await left.proc.stop();
+				if (this.runtimes.get(id) === left) this.runtimes.delete(id);
+			}
+			if (!runtime) {
+				runtime = this.foregroundRuntime(clientId);
+				this.runtimes.set(id, runtime);
+				this.update(id, { status: "starting" });
+			}
+			return { node: this.must(id), sessionFile: node.sessionFile, assignment: this.assignment(node, runtime.token), wasWorking };
+		} finally {
+			this.attaching.delete(id);
 		}
-		if (!runtime) {
-			runtime = this.foregroundRuntime(clientId);
-			this.runtimes.set(id, runtime);
-			this.update(id, { status: "starting" });
-		}
-		return { node: this.must(id), sessionFile: node.sessionFile, assignment: this.assignment(node, runtime.token), wasWorking };
 	}
 
 	/**
@@ -1098,8 +1229,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 		for (const connection of runtime.channels.values()) connection.close();
 		if (this.store.getNode(id)) this.update(id, { status: "dormant" });
 		if (resume && this.store.getNode(id) && !this.stopped) {
-			this.ensureRunning(id)
-				.then(() => this.prompt(id, this.template("handover")))
+			this.prompt(id, this.template("handover"))
 				.catch((error: unknown) => {
 					this.emit("log", "warn", `"${this.store.getNode(id)?.name ?? id}" could not carry on in the background: ${error instanceof Error ? error.message : String(error)}`);
 				});
@@ -1629,14 +1759,23 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	 * input is queued: `steer` delivers it at the next step, `followUp` after it finishes.
 	 */
 	async prompt(id: string, message: string, whenBusy: "steer" | "followUp" = "followUp"): Promise<void> {
-		await this.ensureRunning(id);
-		const proc = this.headless(id);
-		const runtime = this.runtimes.get(id);
-		const result = await proc.request<{ disposition?: string } | undefined>({ type: "prompt", message, streamingBehavior: whenBusy });
-		// A run has been accepted; reflect it now instead of waiting for the agent_start event.
-		if (result?.disposition === "started" && runtime && this.runtimes.get(id) === runtime) {
-			runtime.streaming = true;
-			this.refresh(id, runtime);
+		// From now until the session has taken this it is not idle, though it is not working yet:
+		// stopped to make room in that moment, it would never get what it was started for.
+		this.prompting.set(id, (this.prompting.get(id) ?? 0) + 1);
+		try {
+			await this.ensureRunning(id);
+			const proc = this.headless(id);
+			const runtime = this.runtimes.get(id);
+			const result = await proc.request<{ disposition?: string } | undefined>({ type: "prompt", message, streamingBehavior: whenBusy });
+			// A run has been accepted; reflect it now instead of waiting for the agent_start event.
+			if (result?.disposition === "started" && runtime && this.runtimes.get(id) === runtime) {
+				runtime.streaming = true;
+				this.refresh(id, runtime);
+			}
+		} finally {
+			const left = (this.prompting.get(id) ?? 1) - 1;
+			if (left > 0) this.prompting.set(id, left);
+			else this.prompting.delete(id);
 		}
 	}
 
@@ -2086,6 +2225,7 @@ export class LatticeHost extends EventEmitter<HostEvents> {
 	}
 }
 
+/** A name as one short line. A control character is a space: it is shown in terminals, and is an argument of the session's process, which cannot be started with a NUL in one. */
 function clean(name: string, fallback: string): string {
-	return name.replace(/\s+/g, " ").trim().slice(0, 60) || fallback;
+	return printable(name).replace(/\s+/g, " ").trim().slice(0, 60) || fallback;
 }
