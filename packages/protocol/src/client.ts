@@ -3,7 +3,7 @@
  * stream instead of opening one, so this package stays free of I/O and Pi dependencies.
  */
 import { PROTOCOL_VERSION } from "./envelope.ts";
-import { type Channel, type ClientFrame, encodeFrame, FrameDecoder, type HostFrame, type RequestMap, type RequestOp, type UiApi, type UiMethod } from "./wire.ts";
+import { type Channel, type ClientFrame, encodeFrame, FrameDecoder, type HostFrame, MAX_HOST_FRAME, type RequestMap, type RequestOp, type UiApi, type UiMethod } from "./wire.ts";
 
 /** The part of a socket the client needs. `node:net` sockets satisfy it. */
 export interface DuplexLike {
@@ -29,7 +29,7 @@ type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => vo
 
 export class HostClient {
 	private readonly stream: DuplexLike;
-	private readonly decoder = new FrameDecoder();
+	private readonly decoder = new FrameDecoder(MAX_HOST_FRAME);
 	private readonly pending = new Map<string, Pending>();
 	private readonly listeners: Array<(frame: HostFrame) => void> = [];
 	private readonly timeoutMs: number;
@@ -57,6 +57,7 @@ export class HostClient {
 				return;
 			}
 			for (const raw of frames) {
+				if (raw === null || typeof raw !== "object") continue;
 				const frame = raw as HostFrame;
 				if (frame.t === "welcome") welcome();
 				else if (frame.t === "res") this.settle(frame);

@@ -1,7 +1,7 @@
 /** The host's local socket: authenticates lattice extensions and turns frames into calls. */
 import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { type Channel, type ClientFrame, type Envelope, encodeFrame, FrameDecoder, type HostFrame, INBOUND_STATES, type InboundState, type RequestOp, validateEnvelope } from "@pi-lattice/protocol";
+import { type Channel, type ClientFrame, type Envelope, encodeFrame, FrameDecoder, type HostFrame, INBOUND_STATES, MAX_HOST_FRAME, type InboundState, type RequestOp, validateEnvelope } from "@pi-lattice/protocol";
 
 export interface Connection {
 	/** Unique per connection. */
@@ -62,7 +62,7 @@ export class SocketServer {
 	private accept(socket: Socket): void {
 		this.sockets.add(socket);
 		socket.setEncoding("utf8");
-		const decoder = new FrameDecoder();
+		const decoder = new FrameDecoder(MAX_HOST_FRAME);
 		let connection: Connection | undefined;
 		const helloTimer = setTimeout(() => socket.destroy(), HELLO_TIMEOUT_MS);
 

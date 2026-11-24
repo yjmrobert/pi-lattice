@@ -301,11 +301,21 @@ export function encodeFrame(frame: ClientFrame | HostFrame): string {
 }
 
 /**
+ * The most one frame on the host socket may be. A person's pane is sent the tree and the whole
+ * team's work in one frame, and a session's conversation when it is read: in a team that has
+ * been at it a while that is many megabytes, and a smaller limit closed the connection on it.
+ * Both ends are processes of one person on one machine, so the limit is only against a runaway.
+ */
+export const MAX_HOST_FRAME = 64 * 1024 * 1024;
+
+/**
  * Incremental decoder for LF-delimited JSON. Splits on LF only: JSON strings may contain
  * U+2028 and U+2029, which generic line readers treat as line breaks.
  */
 export class FrameDecoder {
-	private buffer = "";
+	/** The start of a frame whose end has not arrived, as the pieces it came in. */
+	private parts: string[] = [];
+	private held = 0;
 	private readonly maxFrameBytes: number;
 
 	constructor(maxFrameBytes = 1024 * 1024) {
@@ -314,13 +324,16 @@ export class FrameDecoder {
 
 	/** Feed a chunk; returns the complete frames it finished. Malformed lines are skipped. */
 	push(chunk: string): unknown[] {
-		this.buffer += chunk;
 		const out: unknown[] = [];
-		let newline = this.buffer.indexOf("\n");
-		while (newline >= 0) {
-			const line = this.buffer.slice(0, newline).replace(/\r$/, "");
-			this.buffer = this.buffer.slice(newline + 1);
-			newline = this.buffer.indexOf("\n");
+		// Only the new chunk is searched for the end of a frame, and what is held is joined once,
+		// when its end arrives: a large frame comes in many chunks, and is not gone over for each.
+		let start = 0;
+		for (let newline = chunk.indexOf("\n"); newline >= 0; newline = chunk.indexOf("\n", start)) {
+			this.parts.push(chunk.slice(start, newline));
+			const line = this.parts.join("").replace(/\r$/, "");
+			this.parts = [];
+			this.held = 0;
+			start = newline + 1;
 			if (line === "") continue;
 			try {
 				out.push(JSON.parse(line));
@@ -328,8 +341,13 @@ export class FrameDecoder {
 				// Not a frame; ignore.
 			}
 		}
-		if (this.buffer.length > this.maxFrameBytes) {
-			this.buffer = "";
+		if (start < chunk.length) {
+			this.parts.push(start === 0 ? chunk : chunk.slice(start));
+			this.held += chunk.length - start;
+		}
+		if (this.held > this.maxFrameBytes) {
+			this.parts = [];
+			this.held = 0;
 			throw new Error("frame exceeds maximum size");
 		}
 		return out;

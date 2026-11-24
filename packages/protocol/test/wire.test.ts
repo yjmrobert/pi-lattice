@@ -21,6 +21,26 @@ describe("FrameDecoder", () => {
 
 	it("refuses an unbounded frame", () => {
 		expect(() => new FrameDecoder(16).push("x".repeat(64))).toThrow(/maximum size/);
+		const decoder = new FrameDecoder(16);
+		expect(() => {
+			for (let i = 0; i < 4; i++) decoder.push("xxxxxx"); // in pieces, none of them too long alone
+		}).toThrow(/maximum size/);
+		// What it held is gone: the next frame is read as one.
+		expect(decoder.push('{"ok":1}\n')).toEqual([{ ok: 1 }]);
+		// A frame is measured, not everything that came with it.
+		expect(new FrameDecoder(16).push('{"a":1}\n{"b":2}\n{"c":3}\n{"d"')).toHaveLength(3);
+	});
+
+	it("takes a frame of many megabytes that arrives in small pieces, without going over it for each", () => {
+		const frame = { t: "res", text: "é漢 ".repeat(1_500_000) };
+		const wire = `${JSON.stringify(frame)}\n{"after":1}\n`;
+		const decoder = new FrameDecoder(64 * 1024 * 1024);
+		const out: unknown[] = [];
+		const started = performance.now();
+		for (let at = 0; at < wire.length; at += 1024) out.push(...decoder.push(wire.slice(at, at + 1024)));
+		expect(out).toEqual([frame, { after: 1 }]);
+		// Searching all that is held on every piece took tens of seconds here.
+		expect(performance.now() - started).toBeLessThan(5000);
 	});
 });
 
@@ -39,6 +59,28 @@ function fakeStream() {
 const options = { token: "tok", nodeId: "nd_1", channel: "a2a" as const, pid: 1 };
 
 describe("HostClient", () => {
+	it("takes an answer far larger than a megabyte: a person's pane is sent the whole team's work at once", async () => {
+		const { stream, emitter, written } = fakeStream();
+		const client = new HostClient({ ...options, stream });
+		const asked = client.request("list", {});
+		const rid = (written[1] as { rid: string }).rid;
+		const nodes = Array.from({ length: 400 }, (_unused, index) => ({ id: `nd_${index}`, brief: "b".repeat(8000) }));
+		const wire = encodeFrame({ t: "res", rid, ok: true, result: { self: "nd_1", nodes } });
+		expect(wire.length).toBeGreaterThan(3 * 1024 * 1024);
+		for (let at = 0; at < wire.length; at += 65536) emitter.emit("data", wire.slice(at, at + 65536));
+		expect((await asked).nodes).toHaveLength(400);
+		expect(client.isClosed).toBe(false);
+	});
+
+	it("passes over what is not a frame", () => {
+		const { stream, emitter } = fakeStream();
+		const client = new HostClient({ ...options, stream });
+		const seen: unknown[] = [];
+		client.onFrame((frame) => seen.push(frame));
+		emitter.emit("data", 'null\n7\n"text"\n{"t":"welcome","nodeId":"nd_1"}\n');
+		expect(seen).toEqual([{ t: "welcome", nodeId: "nd_1" }]);
+	});
+
 	it("says hello first, with its token and channel", () => {
 		const { stream, written } = fakeStream();
 		new HostClient({ ...options, stream, sessionId: "s1" });
