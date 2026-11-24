@@ -56,6 +56,8 @@ const MIGRATIONS: string[] = [
 	ALTER TABLE members ADD COLUMN seen INTEGER NOT NULL DEFAULT 0;
 	CREATE TABLE said (id INTEGER PRIMARY KEY AUTOINCREMENT, issue INTEGER NOT NULL, who TEXT NOT NULL, text TEXT NOT NULL, at INTEGER NOT NULL, stands INTEGER NOT NULL DEFAULT 0);
 	CREATE INDEX said_issue ON said (issue);`,
+	// When an issue was handed out as someone's next, until it is given back, reported on, or moved by hand.
+	`ALTER TABLE issues ADD COLUMN taken INTEGER;`,
 ];
 
 const TITLE_MAX = 200;
@@ -114,8 +116,17 @@ export class Tracker {
 		this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 		const version = (this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
 		for (let at = version; at < MIGRATIONS.length; at++) {
-			this.db.exec(MIGRATIONS[at] as string);
-			this.db.exec(`PRAGMA user_version = ${at + 1}`);
+			// A step and the note that it was taken are one change: a step cut short half way is
+			// undone whole, and not taken again from its start on top of what it had already done.
+			this.db.exec("BEGIN IMMEDIATE");
+			try {
+				this.db.exec(MIGRATIONS[at] as string);
+				this.db.exec(`PRAGMA user_version = ${at + 1}`);
+				this.db.exec("COMMIT");
+			} catch (error) {
+				this.db.exec("ROLLBACK");
+				throw error;
+			}
 		}
 		if (this.meta("code") === undefined) this.setMeta("code", randomBytes(16).toString("hex"));
 	}
@@ -518,6 +529,8 @@ export class Tracker {
 				.prepare("UPDATE issues SET title = ?, body = ?, type = ?, state = ?, parent = ?, assignee = ?, labels = ?, fields = ?, human = ?, waits = ?, repo = ?, rank = ?, updated_at = ?, rev = ? WHERE number = ?")
 				.run(after.title, after.body, after.type, after.state, after.parent ?? null, after.assignee ?? null, JSON.stringify(after.labels), JSON.stringify(after.fields), after.human ? 1 : 0, JSON.stringify(after.waitsOn ?? []), after.repo ?? null, after.rank, this.now(), rev, number);
 				this.hold(number);
+			// Moved to another state or given to someone by hand, it is no longer what was handed out: it can be taken again.
+			if (after.state !== before.state || after.assignee !== before.assignee) this.db.prepare("UPDATE issues SET taken = NULL WHERE number = ?").run(number);
 			for (const [what, was, now] of changes) this.record(rev, number, who, what, was, now);
 			return this.must(number);
 		});
@@ -565,15 +578,19 @@ export class Tracker {
 			const repo = repoOf(issue, by);
 			return repo === undefined || filter.repo === undefined || repo.toLowerCase() === filter.repo.toLowerCase();
 		};
+		// What was handed out already is somebody's, whatever state the scheme leaves it in: under a scheme
+		// with no rule for starting, an issue stays where it was, and would be handed to every session that asks.
+		const handedOut = new Set((this.db.prepare("SELECT number FROM issues WHERE taken IS NOT NULL").all() as Array<{ number: number }>).map((row) => row.number));
 		const open = all.filter(
 			(issue) =>
-				takeable(scheme, issue.state) && !issue.human && (issue.assignee === undefined || issue.assignee === who) && !unfinishedBelow.has(issue.number) &&
+				takeable(scheme, issue.state) && !handedOut.has(issue.number) && !issue.human && (issue.assignee === undefined || issue.assignee === who) && !unfinishedBelow.has(issue.number) &&
 				(filter.under === undefined || below(issue)) && (filter.type === undefined || issue.type === filter.type) && (filter.label === undefined || issue.labels.includes(filter.label)) && mine(issue),
 		);
 		const ready = open.find((issue) => waitingOn(scheme, issue, by).length === 0);
 		if (!ready) return { waiting: open.length };
 		const start = scheme.rules.onStart;
 		const taken = this.updateIssue(who, ready.number, { assignee: who, ...(start && scheme.states.some((state) => state.name === start) ? { state: start } : {}) });
+		this.db.prepare("UPDATE issues SET taken = ? WHERE number = ?").run(this.now(), ready.number);
 		// An agent with no host says it is still there by speaking of the issue; one that goes quiet loses it.
 		if (!filter.lease || !this.note.as) return { issue: taken, waiting: 0 };
 		return { issue: this.change((rev) => {
@@ -608,7 +625,7 @@ export class Tracker {
 			const target = scheme.rules.onReport;
 			const state = target && scheme.states.some((entry) => entry.name === target) ? target : issue.state;
 			return this.change((rev) => {
-				this.db.prepare("UPDATE issues SET result = ?, state = ?, agent = NULL, lease = NULL, updated_at = ?, rev = ? WHERE number = ?").run(JSON.stringify(kept), state, this.now(), rev, number);
+				this.db.prepare("UPDATE issues SET result = ?, state = ?, agent = NULL, lease = NULL, taken = NULL, updated_at = ?, rev = ? WHERE number = ?").run(JSON.stringify(kept), state, this.now(), rev, number);
 				this.record(rev, number, who, "result", undefined, summary.split("\n")[0]?.slice(0, 200));
 				if (state !== issue.state) this.record(rev, number, who, "state", issue.state, state);
 				return this.must(number);
@@ -627,7 +644,7 @@ export class Tracker {
 			const state = take && scheme.states.some((entry) => entry.name === take) ? take : firstState(scheme);
 			return this.change((rev) => {
 				const at = this.now();
-				this.db.prepare("UPDATE issues SET state = ?, assignee = NULL, agent = NULL, lease = NULL, updated_at = ?, rev = ? WHERE number = ?").run(state, at, rev, number);
+				this.db.prepare("UPDATE issues SET state = ?, assignee = NULL, agent = NULL, lease = NULL, taken = NULL, updated_at = ?, rev = ? WHERE number = ?").run(state, at, rev, number);
 				this.db.prepare("INSERT INTO comments (issue, author, body, at) VALUES (?, ?, ?, ?)").run(number, who, `${this.note.as ?? who} gave this back: ${reason}`, at);
 				this.record(rev, number, who, "gave back", issue.state, state);
 				return this.must(number);
@@ -643,7 +660,7 @@ export class Tracker {
 			try {
 				out.push(this.drop(row.assignee ?? row.author, row.number, "it went quiet", { as: row.agent ?? "an agent" }));
 			} catch {
-				this.db.prepare("UPDATE issues SET lease = NULL, agent = NULL WHERE number = ?").run(row.number);
+				this.db.prepare("UPDATE issues SET lease = NULL, agent = NULL, taken = NULL WHERE number = ?").run(row.number);
 			}
 		}
 		return out;
