@@ -6,7 +6,9 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCertificate, formatAddress, joinServer, loadOrCreateCertificate, parseAddress, pinOf, WorkClient, WorkServer } from "../src/index.ts";
+import { getEventListeners } from "node:events";
+import { DatabaseSync } from "node:sqlite";
+import { createCertificate, formatAddress, joinServer, loadOrCreateCertificate, parseAddress, pinOf, Tracker, WorkClient, WorkServer } from "../src/index.ts";
 
 let server: WorkServer;
 let address: string;
@@ -210,6 +212,32 @@ describe("the scheme", () => {
 		expect(await refused(yan.next({ under: 99 }))).toBe("There is no issue #99.");
 	});
 
+	it("never gives two sessions the same issue, whatever the scheme says about starting", () => {
+		// No rule for starting, a rule that names no state, and one that leaves the issue where sessions take from.
+		for (const rules of [{}, { onReport: "review" }, { onStart: "started" }, { take: "todo", onStart: "todo" }]) {
+			const tracker = new Tracker(":memory:");
+			tracker.join(tracker.code, "yan");
+			tracker.setScheme("yan", { ...DEFAULT_SCHEME, rules });
+			tracker.create("yan", { title: "one", type: "bug" });
+			tracker.create("yan", { title: "two", type: "bug" });
+			const taken = ["session a", "session b", "session c"].map((as) => tracker.next("yan", {}, { as }).issue?.title);
+			expect(taken, JSON.stringify(rules)).toEqual(["one", "two", undefined]);
+			// Given back, it can be taken again; so can one a person moves or gives to someone by hand.
+			tracker.drop("yan", 1, "not mine after all", { as: "session a" });
+			expect(tracker.next("yan", {}, { as: "session c" }).issue?.title).toBe("one");
+			tracker.update("yan", 2, { assignee: null });
+			expect(tracker.next("yan", {}, { as: "session a" }).issue?.title).toBe("two");
+			expect(tracker.next("yan", {}, { as: "session b" }).issue).toBeUndefined();
+			tracker.close();
+		}
+	});
+
+	it("refuses a scheme whose parts are not what they should be, with the reason", async () => {
+		const yan = await member("yan");
+		expect(await refused(yan.setScheme({ ...DEFAULT_SCHEME, fields: [{ name: "size", type: "number", choices: 5 }] } as unknown as Scheme))).toBe('Field "size": "choices" is a list of names.');
+		expect(yan.state().scheme).toEqual(DEFAULT_SCHEME);
+	});
+
 	it("keeps a backlog for people to release, when the scheme names the state sessions take from", async () => {
 		const yan = await member("yan");
 		await yan.setScheme({ ...DEFAULT_SCHEME, states: [{ name: "backlog", kind: "open" }, ...DEFAULT_SCHEME.states], rules: { ...DEFAULT_SCHEME.rules, take: "todo" } });
@@ -278,6 +306,18 @@ describe("hosts that hand sessions to each other", () => {
 		await until(() => late.length > 0, "the fresh one to arrive");
 		expect(late).toEqual([{ fresh: true }]);
 	});
+
+	it("do not leave behind what was sent to a host that never came for it", async () => {
+		const yan = await member("yan");
+		await member("sam");
+		const kept = (): number => (server as unknown as { signals: Map<string, unknown> }).signals.size;
+		for (let i = 0; i < 20; i++) await yan.signal("sam", `scope-${i}`, { n: i });
+		expect(kept()).toBe(20);
+		expect(await refused(yan.signal("sam", "s".repeat(400), {}))).toBe("Say who it is for, and what they are working on.");
+		// sam's hosts are away. After a minute nothing of it is kept.
+		clock += 61_000;
+		await until(() => kept() === 0, "what was sent to be forgotten");
+	});
 });
 
 describe("what people have running", () => {
@@ -293,6 +333,22 @@ describe("what people have running", () => {
 		clock += 1_000;
 		await until(() => sam.state().sessions.length === 0, "yan's session to be forgotten");
 		await until(() => sam.state().people.find((person) => person.name === "yan")?.online === false, "yan to be shown as away");
+	});
+
+	it("is refused, with the reason, when it is not a list of sessions", async () => {
+		const yan = await member("yan");
+		for (const sessions of [[null], ["n1"], [[]]]) expect(await refused(yan.publish("laptop:shop", "shop", sessions as never))).toBe("Each session is an object: its id, name, role and state.");
+		expect(yan.state().sessions).toEqual([]);
+	});
+
+	it("leaves nothing behind for each try while its server cannot be reached", async () => {
+		const away = new WorkClient({ url: "http://127.0.0.1:9", name: "yan", token: "t" }, { retryMs: 5 });
+		clients.push(away);
+		away.start();
+		away.listen("scope", () => {});
+		await new Promise((resolve) => setTimeout(resolve, 400)); // dozens of tries
+		const stopping = (away as unknown as { stopping: AbortController }).stopping.signal;
+		expect(getEventListeners(stopping, "abort").length).toBeLessThan(8);
 	});
 
 	it("survives the server going away: the copy stays and is marked as stale, then catches up", async () => {
@@ -316,6 +372,31 @@ describe("what people have running", () => {
 });
 
 describe("what is kept", () => {
+	it("is brought up to date when it was made by an earlier version, a whole step at a time", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-lattice-server-"));
+		try {
+			const file = join(dir, "work.db");
+			const first = new Tracker(file);
+			first.join(first.code, "yan");
+			first.create("yan", { title: "kept", type: "bug" });
+			first.close();
+			// As the version before issues were marked as handed out left it.
+			const db = new DatabaseSync(file);
+			const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+			db.exec(`ALTER TABLE issues DROP COLUMN taken; PRAGMA user_version = ${version - 1}`);
+			db.close();
+			const again = new Tracker(file);
+			expect(again.next("yan", {}, { as: "a" }).issue?.title).toBe("kept");
+			expect(again.next("yan", {}, { as: "b" }).issue).toBeUndefined();
+			again.close();
+			const after = new DatabaseSync(file);
+			expect((after.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(version);
+			after.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("is one file: a server started on it again has everything", async () => {
 		const { mkdtempSync, rmSync } = await import("node:fs");
 		const { tmpdir } = await import("node:os");

@@ -86,6 +86,8 @@ const BODY_MAX = 1024 * 1024;
 const SESSIONS_MAX = 500;
 const SIGNALS_MAX = 200;
 const SIGNAL_TTL_MS = 60_000;
+/** What someone is working on is a short name; each one a signal names is a queue kept here. */
+const SCOPE_MAX = 300;
 
 interface Waiter {
 	done: () => void;
@@ -223,6 +225,12 @@ export class WorkServer {
 				changed = true;
 			}
 		}
+		// What was sent to someone who never came for it is not kept past its time.
+		for (const [slot, queue] of this.signals) {
+			const fresh = queue.filter((signal) => signal.at >= this.now() - SIGNAL_TTL_MS);
+			if (fresh.length === 0) this.signals.delete(slot);
+			else if (fresh.length !== queue.length) this.signals.set(slot, fresh);
+		}
 		const online = new Set([...this.seen].filter(([, at]) => at >= cutoff).map(([name]) => name));
 		if (online.size !== this.online.size || [...online].some((name) => !this.online.has(name))) changed = true;
 		this.online = online;
@@ -259,6 +267,7 @@ export class WorkServer {
 	private putSessions(who: string, body: Record<string, unknown>): void {
 		const host = typeof body.host === "string" && body.host.length <= 100 ? body.host : undefined;
 		if (!host || !Array.isArray(body.sessions) || body.sessions.length > SESSIONS_MAX) throw new WorkError(400, "Say which host this is and the sessions it runs.");
+		if (!body.sessions.every((entry) => typeof entry === "object" && entry !== null && !Array.isArray(entry))) throw new WorkError(400, "Each session is an object: its id, name, role and state.");
 		const repo = typeof body.repo === "string" ? body.repo.slice(0, 200) : "";
 		const text = (value: unknown, max: number): string => (typeof value === "string" ? value.slice(0, max) : "");
 		const states = ["working", "asking", "waiting", "idle", "failed"];
@@ -358,7 +367,7 @@ export class WorkServer {
 					return send(200, this.tracker.team());
 				case "POST /signals": {
 					const to = typeof body.to === "string" ? this.tracker.members().find((name) => name === body.to) : undefined;
-					if (!to || typeof body.scope !== "string") throw new WorkError(400, "Say who it is for, and what they are working on.");
+					if (!to || typeof body.scope !== "string" || body.scope.length > SCOPE_MAX) throw new WorkError(400, "Say who it is for, and what they are working on.");
 					const slot = `${to}\n${body.scope}`;
 					const queue = (this.signals.get(slot) ?? []).filter((signal) => signal.at >= this.now() - SIGNAL_TTL_MS).slice(-SIGNALS_MAX + 1);
 					queue.push({ from: who, body: body.body, at: this.now() });

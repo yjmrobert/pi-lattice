@@ -358,6 +358,7 @@ export function schemeProblems(value: unknown): string[] {
 		fieldNames.push(field.name);
 		if (!FIELD_TYPES.includes(field.type as string)) out.push(`Field "${field.name}" needs a type: ${FIELD_TYPES.join(", ")}.`);
 		if (field.type === "choice" && !(strings(field.choices) && field.choices.length > 0)) out.push(`Field "${field.name}" is a choice and needs its choices.`);
+		else if (field.choices !== undefined && !strings(field.choices)) out.push(`Field "${field.name}": "choices" is a list of names.`);
 		if (field.on !== undefined && !strings(field.on)) out.push(`Field "${field.name}": "on" is a list of types.`);
 		for (const type of strings(field.on) ? field.on : []) if (!typeNames.includes(type)) out.push(`Field "${field.name}" is on "${type}", which is not a type.`);
 	}

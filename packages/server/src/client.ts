@@ -116,8 +116,15 @@ async function askPinned(url: URL, pin: string, method: string, headers: Record<
 	});
 }
 
-async function call<T>(target: { url: string; pin?: string }, method: string, path: string, token: string | undefined, body?: unknown, signal?: AbortSignal): Promise<T> {
+async function call<T>(target: { url: string; pin?: string }, method: string, path: string, token: string | undefined, body?: unknown, stopping?: AbortSignal): Promise<T> {
 	const { url, pin } = target;
+	// A request is given a signal of its own that follows the caller's, which lives as long as the
+	// client: whatever a request leaves listening is then on a signal that goes when the request does.
+	const own = stopping ? new AbortController() : undefined;
+	const signal = own?.signal;
+	const follow = (): void => own?.abort(stopping?.reason);
+	if (stopping?.aborted) follow();
+	else stopping?.addEventListener("abort", follow, { once: true });
 	const headers: Record<string, string> = { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { "content-type": "application/json" } : {}) };
 	const sent = body !== undefined ? JSON.stringify(body) : undefined;
 	let answer: Answer;
@@ -140,6 +147,8 @@ async function call<T>(target: { url: string; pin?: string }, method: string, pa
 			throw new Error(`What answers at ${url} is not the server this address was given for, so nothing was sent to it. If the server was set up again, ask whoever runs it for its address again.`);
 		}
 		throw new Error(`The server at ${url} cannot be reached.`);
+	} finally {
+		stopping?.removeEventListener("abort", follow);
 	}
 	let value: unknown;
 	try {
@@ -160,6 +169,20 @@ export async function joinServer(address: string, name: string): Promise<ServerA
 
 /** How many of the last things done to the work a host keeps. */
 const RECENT_MAX = 300;
+
+/** Wait before trying again, or until stopped. It leaves nothing listening on the signal when it is over. */
+function pause(ms: number, stopping: AbortSignal): Promise<void> {
+	return new Promise<void>((resolve) => {
+		if (stopping.aborted) return resolve();
+		const done = (): void => {
+			clearTimeout(timer);
+			stopping.removeEventListener("abort", done);
+			resolve();
+		};
+		const timer = setTimeout(done, ms);
+		stopping.addEventListener("abort", done);
+	});
+}
 
 export class WorkClient {
 	readonly account: ServerAccount;
@@ -253,13 +276,7 @@ export class WorkClient {
 						this.emit();
 					}
 					first = true;
-					await new Promise<void>((resolve) => {
-						const timer = setTimeout(resolve, this.options.retryMs ?? 5000);
-						stopping.signal.addEventListener("abort", () => {
-							clearTimeout(timer);
-							resolve();
-						});
-					});
+					await pause(this.options.retryMs ?? 5000, stopping.signal);
 				}
 			}
 		})();
@@ -373,13 +390,7 @@ export class WorkClient {
 					for (const signal of signals) handler(signal.from, signal.body);
 				} catch {
 					if (stopping.aborted) return;
-					await new Promise<void>((resolve) => {
-						const timer = setTimeout(resolve, this.options.retryMs ?? 5000);
-						stopping.addEventListener("abort", () => {
-							clearTimeout(timer);
-							resolve();
-						});
-					});
+					await pause(this.options.retryMs ?? 5000, stopping);
 				}
 			}
 		})();
